@@ -4078,6 +4078,232 @@ class TelegramAdapter(BasePlatformAdapter):
                     logger.error("[%s] slash-confirm callback failed: %s", self.name, exc, exc_info=True)
             return
 
+        # --- Task approval callbacks (task:choice:id) ---
+        if data.startswith("task:"):
+            parts = data.split(":", 2)
+            if len(parts) == 3:
+                choice = parts[1]  # approve, cancel
+                task_id = parts[2]
+
+                caller_id = str(getattr(query.from_user, "id", ""))
+                if not self._is_callback_user_authorized(
+                    caller_id,
+                    chat_id=query_chat_id,
+                    chat_type=str(query_chat_type) if query_chat_type is not None else None,
+                    thread_id=str(query_thread_id) if query_thread_id is not None else None,
+                    user_name=query_user_name,
+                ):
+                    await query.answer(text="⛔ You are not authorized to approve tasks.")
+                    return
+
+                try:
+                    import sys
+                    import os
+                    _SCRIPTS = os.path.expanduser("~/.hermes/scripts")
+                    if _SCRIPTS not in sys.path:
+                        sys.path.insert(0, _SCRIPTS)
+                    import coordinator as C
+                    conn = C.connect()
+                    try:
+                        # Find full task ID from the 8-char prefix
+                        row = conn.execute("SELECT id, status FROM tasks WHERE id LIKE ? LIMIT 2", (task_id + "%",)).fetchall()
+                        if len(row) == 1:
+                            full = row[0]["id"]
+                        else:
+                            full = task_id
+                        
+                        if choice == "approve":
+                            ok = C.approve(conn, full)
+                            label = "✅ Approved task"
+                            action_desc = "released to execution now"
+                        elif choice == "cancel":
+                            C._set(conn, full, status="cancelled")
+                            C.add_event(conn, full, "cancelled", "by Telegram button")
+                            ok = True
+                            label = "❌ Cancelled task"
+                            action_desc = "cancelled and archived"
+                        else:
+                            ok = False
+                    finally:
+                        conn.close()
+                except Exception as exc:
+                    logger.error("[%s] task callback database operation failed: %s", self.name, exc, exc_info=True)
+                    ok = False
+
+                if ok:
+                    user_display = getattr(query.from_user, "first_name", "User")
+                    await query.answer(text=label)
+                    try:
+                        await query.edit_message_text(
+                            text=self.format_message(f"{label} `{task_id}` by {user_display} — {action_desc}."),
+                            parse_mode=ParseMode.MARKDOWN_V2,
+                            reply_markup=None,
+                        )
+                    except Exception:
+                        pass
+                else:
+            return
+
+        # --- Prompt approval callbacks (prompt:choice:var_name:hash) ---
+        if data.startswith("prompt:"):
+            parts = data.split(":", 3)
+            if len(parts) == 4:
+                choice = parts[1]  # approve, cancel
+                prompt_var = parts[2]
+                hash_prefix = parts[3]
+
+                caller_id = str(getattr(query.from_user, "id", ""))
+                if not self._is_callback_user_authorized(
+                    caller_id,
+                    chat_id=query_chat_id,
+                    chat_type=str(query_chat_type) if query_chat_type is not None else None,
+                    thread_id=str(query_thread_id) if query_thread_id is not None else None,
+                    user_name=query_user_name,
+                ):
+                    await query.answer(text="⛔ You are not authorized to approve prompt updates.")
+                    return
+
+                try:
+                    import sys
+                    import os
+                    import importlib.util
+                    _SCRIPTS = os.path.expanduser("~/.hermes/scripts")
+                    spec = importlib.util.spec_from_file_location("rsi_orchestrator", os.path.join(_SCRIPTS, "rsi-orchestrator.py"))
+                    RSI = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(RSI)
+                    
+                    if choice == "approve":
+                        ok = RSI.apply_pending_prompt(prompt_var, hash_prefix)
+                        label = "✅ Approved prompt update"
+                        action_desc = "written to prompts.json and activated"
+                    elif choice == "cancel":
+                        RSI.discard_pending_prompt(prompt_var, hash_prefix)
+                        ok = True
+                        label = "❌ Cancelled prompt update"
+                        action_desc = "discarded"
+                    else:
+                        ok = False
+                except Exception as exc:
+                    logger.error("[%s] prompt callback operation failed: %s", self.name, exc, exc_info=True)
+                    ok = False
+
+                if ok:
+                    user_display = getattr(query.from_user, "first_name", "User")
+                    await query.answer(text=label)
+                    try:
+                        await query.edit_message_text(
+                            text=self.format_message(f"{label} `{prompt_var}` by {user_display} — {action_desc}."),
+                            parse_mode=ParseMode.MARKDOWN_V2,
+                            reply_markup=None,
+                        )
+                    except Exception:
+                        pass
+                else:
+                    await query.answer(text="⚠️ Prompt update operation failed or already processed.")
+            return
+
+        # --- Estate control panel callbacks (estate:action) ---
+        if data.startswith("estate:"):
+            action = data.split(":", 1)[1]
+            caller_id = str(getattr(query.from_user, "id", ""))
+            if not self._is_callback_user_authorized(
+                caller_id,
+                chat_id=query_chat_id,
+                chat_type=str(query_chat_type) if query_chat_type is not None else None,
+                thread_id=str(query_thread_id) if query_thread_id is not None else None,
+                user_name=query_user_name,
+            ):
+                await query.answer(text="⛔ You are not authorized.")
+                return
+
+            try:
+                import sys
+                import os
+                _SCRIPTS = os.path.expanduser("~/.hermes/scripts")
+                if _SCRIPTS not in sys.path:
+                    sys.path.insert(0, _SCRIPTS)
+                import coordinator as C
+                
+                if action == "list_active":
+                    conn = C.connect()
+                    try:
+                        active = C.list_active(conn)
+                        if not active:
+                            msg = "🗂️ No active tasks in flight."
+                        else:
+                            lines = ["🗂️ *Active Tasks in Flight:*"]
+                            for t in active:
+                                lines.append(f"• `{t['id'][:8]}` [{t['status']}] {t['title'][:40]}...")
+                            msg = "\n".join(lines)
+                    finally:
+                        conn.close()
+                    await query.answer(text="Active tasks list fetched")
+                    await self._send_message_with_thread_fallback(
+                        chat_id=str(query.message.chat_id),
+                        text=self.format_message(msg),
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+
+                elif action == "view_logs":
+                    log_path = os.path.expanduser("~/.hermes/logs/coordinator.log")
+                    if os.path.exists(log_path):
+                        with open(log_path, "r", encoding="utf-8") as f:
+                            lines = f.readlines()[-20:]
+                        log_text = "".join(lines)
+                        msg = f"🪵 *Coordinator Logs (Last 20 lines):*\n```text\n{log_text[-3500:]}\n```"
+                    else:
+                        msg = "⚠️ Logs file not found."
+                    await query.answer(text="Logs fetched")
+                    await self._send_message_with_thread_fallback(
+                        chat_id=str(query.message.chat_id),
+                        text=self.format_message(msg),
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+
+                elif action == "system_fuel":
+                    conn = C.connect()
+                    try:
+                        metrics = C.autonomy_ratio(conn)
+                        used = C.tasks_today(conn)
+                        msg = (
+                            "⛽ *System Fuel & Health Status*\n\n"
+                            f"• *Daily Budget:* `{used}/{C.DAILY_TASK_BUDGET}` tasks used\n"
+                            f"• *Autonomy Yield:* `{int(metrics.get('autonomy_ratio', 0) * 100)}%`\n"
+                            f"• *Total cost (7d):* `${metrics.get('total_cost', 0.0):.4f}`\n"
+                            f"• *Input tokens:* `{metrics.get('tokens_input', 0)}` tokens\n"
+                            f"• *Output tokens:* `{metrics.get('tokens_output', 0)}` tokens\n"
+                            f"• *Avg latency:* `{metrics.get('avg_duration_seconds', 0.0)}` seconds"
+                        )
+                    finally:
+                        conn.close()
+                    await query.answer(text="Fuel status fetched")
+                    await self._send_message_with_thread_fallback(
+                        chat_id=str(query.message.chat_id),
+                        text=self.format_message(msg),
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+
+                elif action == "run_chores":
+                    import subprocess
+                    proc = subprocess.run(
+                        [sys.executable, os.path.join(_SCRIPTS, "watchdog.py")],
+                        capture_output=True,
+                        text=True,
+                        timeout=30
+                    )
+                    out = proc.stdout.strip() if proc.returncode == 0 else proc.stderr.strip()
+                    msg = f"⚙️ *Chores (Watchdog Health Run Output):*\n```text\n{out[:3500]}\n```"
+                    await query.answer(text="Chores executed")
+                    await self._send_message_with_thread_fallback(
+                        chat_id=str(query.message.chat_id),
+                        text=self.format_message(msg),
+                        parse_mode=ParseMode.MARKDOWN_V2
+                    )
+            except Exception as exc:
+                logger.error("[%s] estate callback query failed: %s", self.name, exc, exc_info=True)
+                await query.answer(text="⚠️ Action failed.")
+            return
+
         # --- Clarify callbacks (cl:clarify_id:idx | cl:clarify_id:other) ---
         if data.startswith("cl:"):
             parts = data.split(":", 2)
@@ -5927,6 +6153,43 @@ class TelegramAdapter(BasePlatformAdapter):
         if not self._should_process_message(msg, is_command=True):
             return
         await self._ensure_forum_commands(msg)
+
+        # Check for control panel command
+        cmd_text = msg.text.strip().split()[0].lower()
+        if cmd_text in ("/panel", "/control"):
+            try:
+                import sys
+                import os
+                _SCRIPTS = os.path.expanduser("~/.hermes/scripts")
+                if _SCRIPTS not in sys.path:
+                    sys.path.insert(0, _SCRIPTS)
+                import coordinator as C
+                conn = C.connect()
+                try:
+                    text_msg = C.get_control_panel_message(conn)
+                finally:
+                    conn.close()
+
+                keyboard = InlineKeyboardMarkup([
+                    [
+                        InlineKeyboardButton("📋 Active Tasks", callback_data="estate:list_active"),
+                        InlineKeyboardButton("🪵 View Logs", callback_data="estate:view_logs")
+                    ],
+                    [
+                        InlineKeyboardButton("⛽ System Fuel", callback_data="estate:system_fuel"),
+                        InlineKeyboardButton("⚙️ Run Chores", callback_data="estate:run_chores")
+                    ]
+                ])
+
+                await self._send_message_with_thread_fallback(
+                    chat_id=str(msg.chat_id),
+                    text=self.format_message(text_msg),
+                    reply_markup=keyboard,
+                    parse_mode=ParseMode.MARKDOWN_V2
+                )
+            except Exception as e:
+                logger.error("[%s] command /panel failed: %s", self.name, e, exc_info=True)
+            return
 
         event = self._build_message_event(msg, MessageType.COMMAND, update_id=update.update_id)
         event.text = self._clean_bot_trigger_text(event.text)
