@@ -4142,7 +4142,8 @@ class TelegramAdapter(BasePlatformAdapter):
                     except Exception:
                         pass
                 else:
-            return
+                    await query.answer(text="⚠️ Action failed or no longer applicable.")
+                return
 
         # --- Prompt approval callbacks (prompt:choice:var_name:hash) ---
         if data.startswith("prompt:"):
