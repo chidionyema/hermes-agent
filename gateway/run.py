@@ -5722,6 +5722,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         _finalize_failures: dict[str, int] = {}  # session_id -> consecutive failure count
         _MAX_FINALIZE_RETRIES = 3
         while self._running:
+            # Liveness heartbeat: prove the EVENT LOOP is actually turning (not just the process
+            # alive). estate_watchdog reads this file; a stale heartbeat with a live pid = wedged
+            # gateway → it alerts (never auto-kills the lifeline on a soft signal). Fully guarded:
+            # a heartbeat write must never perturb the watcher.
+            try:
+                import os as _os, time as _time
+                with open(_os.path.expanduser("~/.hermes/gateway.heartbeat"), "w") as _hb:
+                    _hb.write(str(int(_time.time())))
+            except Exception:
+                pass
             try:
                 self.session_store._ensure_loaded()
                 # Collect expired sessions first, then log a single summary.
