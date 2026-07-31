@@ -98,6 +98,23 @@ def _load_coordinator() -> Any:
             raise RuntimeError(_COORD_ERROR) from exc2
 
 
+def _knob_landing(key: str, fallback):
+    """Where to land after a knob is set: its own Tune group, else the panel's read view.
+
+    Any failure here falls back rather than propagates — a knob that was successfully written
+    must not render an error card just because the follow-up panel could not be built.
+    """
+    try:
+        from gateway.operator_shell.cockpit import group_for_key, render_tune_group
+
+        group = group_for_key(key)
+        if group:
+            return render_tune_group(group)
+    except Exception:
+        logger.warning("knob landing fell back to the read panel for %s", key, exc_info=True)
+    return fallback()
+
+
 def _proof(action: str, status: str, summary: str, **kwargs) -> str:
     from gateway.operator_shell.proof import Proof, new_request_id
 
@@ -652,7 +669,9 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
                     request_id=rid,
                     evidence=evidence,
                 )
-                text, buttons = pd_render_params()
+                # Same as the Signal Engine knobs: land in the group, so the next change is
+                # one tap rather than three.
+                text, buttons = _knob_landing(key, pd_render_params)
                 return _finish(
                     PanelView(
                         text=receipt + "\n\n" + text,
@@ -784,7 +803,12 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
                 request_id=rid,
                 evidence=evidence,
             )
-            text, buttons = se_render_params()
+            # Land back in the group the knob came from, not on the read panel. Tuning is
+            # rarely a single change — leverage AND max_positions AND stop_loss before a rail
+            # move — and returning to `se_params` cost 3 taps to reach the very next knob
+            # (group link -> knob -> confirm). From the group it is 1. Falls back to the read
+            # panel if the key is not in any group, so an un-grouped knob still renders.
+            text, buttons = _knob_landing(key, se_render_params)
             return _finish(
                 PanelView(
                     text=receipt + "\n\n" + text,
@@ -1170,16 +1194,21 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
     if action == "inspect" and arg:
         conn = C.connect()
         try:
-            rows = list(C.decisions_view(conn)) + list(C.backlog_view(conn))
-            match = next((r for r in rows if str(r["id"]).startswith(arg)), None)
+            # dict(), not the raw row: these are sqlite3.Row, which has no .get() — and the
+            # two views do not even select the same columns (backlog_view omits risk_class
+            # and source), so subscripting would KeyError on half the matches. Every tap on
+            # 👁 Inspect raised until this line.
+            rows = [dict(r) for r in
+                    list(C.decisions_view(conn)) + list(C.backlog_view(conn))]
+            match = next((r for r in rows if str(r.get("id", "")).startswith(arg)), None)
             if not match:
                 text = f"No task `{arg}`"
             else:
                 text = (
-                    f"👁 `{match['id'][:12]}`\n"
-                    f"*{match.get('status')}* · {match.get('risk_class', '?')}\n"
-                    f"{match.get('title')}\n"
-                    f"source: `{match.get('source', '')}`"
+                    f"👁 `{str(match.get('id', ''))[:12]}`\n"
+                    f"*{match.get('status', '?')}* · {match.get('risk_class') or '?'}\n"
+                    f"{match.get('title', '')}\n"
+                    f"source: `{match.get('source') or '?'}`"
                 )
         finally:
             conn.close()

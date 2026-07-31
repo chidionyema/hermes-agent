@@ -34,6 +34,11 @@ ButtonRow = List[Tuple[str, str]]
 
 # ── Tune ────────────────────────────────────────────────────────────────────
 # (label, estate action, one-line "what this does to me")
+# How many recently-changed knobs get promoted onto the Tune index. Two rows of values is the
+# most that fits above the group grid on a phone; a third pushes the groups off the screen,
+# which trades a depth win for a scroll.
+_RECENT_KNOBS = 2
+
 _TUNE_GROUPS: List[Tuple[str, str, str]] = [
     ("⚡ Execution", "tune:exec", "which rail — sim, testnet, or real capital"),
     ("🎚 Sizing", "tune:sizing", "how big each position is allowed to get"),
@@ -189,6 +194,30 @@ def _se_params() -> Dict[str, object]:
         return {}
 
 
+def knob_by_key(key: str) -> Optional[Tuple[str, str, List[Tuple[str, str]]]]:
+    """Find a knob by its config key. Returns (group, display_label, buttons).
+
+    The key is what the callback carries (`estate:se_set:leverage:2` -> `leverage`), while
+    `_KNOBS` is indexed by display label (`caps.leverage`). Matching on the callback rather
+    than on the label is deliberate: the label is presentation and may be reworded, the key
+    is the contract with `_SAFE_PARAMS`.
+    """
+    if not key:
+        return None
+    needles = (f":se_set:{key}:", f":pd_set:{key}:")
+    for group, (_title, _blurb, entries) in _KNOBS.items():
+        for label, buttons in entries:
+            if buttons and any(n in buttons[0][1] for n in needles):
+                return group, label, list(buttons)
+    return None
+
+
+def group_for_key(key: str) -> Optional[str]:
+    """Which Tune group owns a knob — so a set can land back where it was made."""
+    found = knob_by_key(key)
+    return found[0] if found else None
+
+
 def _cron_label() -> str:
     """Where cron briefs land, as the delivery module itself reports it.
 
@@ -230,8 +259,14 @@ def _current(label: str, se: Dict[str, object], pd: Dict[str, object]) -> str:
 
 
 def render_tune() -> Tuple[str, List[ButtonRow]]:
-    """Index of knob groups. Two taps to any of the 29 values, down from three."""
+    """Index of knob groups, plus the knobs this operator actually uses.
+
+    Grouping fixed the 28-button screen but left every knob three taps away. The recently
+    changed ones are promoted here, so the knobs that carry real traffic are two — measured
+    from the activity log, not guessed.
+    """
     se = _se_params()
+    pd = _pd_params()  # a promoted prospector knob prints its current value like any other
     armed = False
     try:
         from gateway.operator_shell.signal_engine import is_armed
@@ -246,6 +281,31 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
     else:
         lines.append("🧪 *Paper* — nothing real moves at the current rail.")
     lines.append("")
+
+    # Recently-changed knobs, promoted to this screen. Grouping fixed the 28-button screen but
+    # left EVERY knob three taps away (Tune -> group -> value); this puts the ones you actually
+    # use at two, without bringing the density back. Driven by the activity log rather than by
+    # a guess about which knobs matter — a knob nobody has touched stays in its group.
+    rows: List[ButtonRow] = []
+    recent: List[Tuple[str, List[Tuple[str, str]]]] = []
+    try:
+        from gateway.operator_shell.activity import recent_knob_keys
+
+        for key in recent_knob_keys(limit=_RECENT_KNOBS):
+            found = knob_by_key(key)
+            if found:
+                _group, label, buttons = found
+                recent.append((label, buttons))
+    except Exception:
+        recent = []
+
+    if recent:
+        lines.append("*Recently changed*")
+        for label, _buttons in recent:
+            lines.append(f"• `{label}` = *{_current(label, se, pd)}*")
+        lines.append("")
+        rows.extend(list(b) for _label, b in recent)
+
     for label, _action, what in _TUNE_GROUPS:
         lines.append(f"*{label}* — {what}")
     # Where the cron briefs land is configuration too — it survives a restart, so it belongs
@@ -254,7 +314,7 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
     lines.append(f"*🗓 Cron delivery* — where briefs land · now `{_cron_label()}`")
     lines += ["", "_Rail changes still require the two-screen ARM confirmation._"]
 
-    rows: List[ButtonRow] = [
+    rows += [
         [(_TUNE_GROUPS[0][0], f"estate:{_TUNE_GROUPS[0][1]}"),
          (_TUNE_GROUPS[1][0], f"estate:{_TUNE_GROUPS[1][1]}")],
         [(_TUNE_GROUPS[2][0], f"estate:{_TUNE_GROUPS[2][1]}"),

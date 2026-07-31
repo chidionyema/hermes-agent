@@ -138,6 +138,32 @@ def read_days(days: int = 7) -> List[Dict[str, Any]]:
     return out
 
 
+def recent_knob_keys(limit: int = 2, days: int = 30) -> List[str]:
+    """Knobs the operator actually changed, most recent first, de-duplicated.
+
+    This is what makes the Tune index adaptive instead of alphabetical. A knob you have
+    touched is overwhelmingly the knob you will touch again — leverage before a rail change,
+    daily_cap when the burn moves — while most of the 29 are set once and never revisited.
+    Promoting the recent ones to the index puts them at two taps without recreating the
+    28-button screen that grouping was introduced to kill.
+
+    Only *successful* sets count. A failed set is not evidence of intent to keep using it,
+    and promoting a knob because it keeps erroring would be exactly backwards.
+    """
+    keys: List[str] = []
+    for row in reversed(read_days(days)):
+        if str(row.get("action") or "") not in ("se_set_confirm", "pd_set_confirm"):
+            continue
+        if _failed(row):
+            continue
+        key = str(row.get("arg") or "").split(":")[0].strip()
+        if key and key not in keys:
+            keys.append(key)
+        if len(keys) >= limit:
+            break
+    return keys
+
+
 def _label(row: Dict[str, Any]) -> str:
     act = str(row.get("action") or "?")
     arg = str(row.get("arg") or "")

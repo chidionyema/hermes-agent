@@ -244,7 +244,10 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
         else ("🟢 Arm", "estate:arm_learning")
     )
     buttons: List[ButtonRow] = []
-    if primary:
+    # When disarmed the CTA *is* arming, which the standing toggle below already offers —
+    # two buttons, one callback. The text still names it ("→ 🟢 Arm learning"); the button
+    # appears once.
+    if primary and primary[1] != arm_btn[1]:
         buttons.append([primary])
     buttons += [
         [arm_btn],

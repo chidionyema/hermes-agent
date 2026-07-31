@@ -141,3 +141,173 @@ def test_error_text_is_bounded(tmp_path, monkeypatch):
     activity.record("boom", "rid-y", status="error", error="x" * 5000)
     row = json.loads(sorted(tmp_path.glob("*.jsonl"))[0].read_text().splitlines()[0])
     assert len(row["error"]) <= 300
+
+
+# ── Knob depth ──────────────────────────────────────────────────────────────
+# Grouping fixed the 28-button screen but left every knob 3 taps away. Two changes cut that:
+# the index promotes knobs you have actually used, and a set lands back in its group.
+
+from gateway.operator_shell.cockpit import group_for_key, knob_by_key, render_tune
+from gateway.operator_shell.estate import _knob_landing
+
+ALL_KEYS = [
+    "exec_mode", "ramp_stage", "live_feed",           # exec
+    "vol_target", "leverage", "per_instrument",       # sizing
+    "stop_loss", "max_positions", "killswitch",       # safety
+    "llm_cap", "daily_cap",                           # spend
+    "interval", "concurrency", "batch_size",          # prospector
+]
+
+
+@pytest.mark.parametrize("key", ALL_KEYS)
+def test_every_knob_key_resolves_to_a_group(key):
+    """The reverse index matches on the CALLBACK, not the display label: the label is
+    presentation and gets reworded, the key is the contract with _SAFE_PARAMS."""
+    found = knob_by_key(key)
+    assert found is not None, f"{key} is settable but belongs to no Tune group"
+    group, label, buttons = found
+    assert group and label and buttons
+    assert all(f":{key}:" in cb for _l, cb in buttons)
+
+
+def test_unknown_key_has_no_group_and_falls_back():
+    assert group_for_key("not_a_real_knob") is None
+    assert group_for_key("") is None
+    sentinel = ("READ PANEL", [])
+    assert _knob_landing("not_a_real_knob", lambda: sentinel) == sentinel
+
+
+@pytest.mark.parametrize("key,expected_group", [("leverage", "sizing"), ("daily_cap", "spend")])
+def test_a_set_lands_in_its_group_not_the_read_panel(key, expected_group):
+    """Landing on the read panel cost 3 taps to reach the very next knob (group link ->
+    value -> confirm). From the group it is 1."""
+    text, buttons = _knob_landing(key, lambda: ("READ PANEL", []))
+    assert "READ PANEL" not in text
+    siblings = [cb for row in buttons for _l, cb in row
+                if ":se_set:" in cb or ":pd_set:" in cb]
+    assert len(siblings) >= 2, f"{key} landed somewhere with no sibling values: {siblings}"
+    assert group_for_key(key) == expected_group
+
+
+def test_recent_knobs_ignore_failed_sets(tmp_path, monkeypatch):
+    """A knob that keeps erroring is not a knob to promote — that would be backwards."""
+    monkeypatch.setattr(activity, "_dir", lambda: tmp_path)
+
+    class OK:
+        proof_receipt = "✅ *DONE* — set"
+        toast = "set"
+        ok = True
+        paused = False
+
+    activity.record("se_set_confirm:leverage:2", "k1", view=OK(), ms=1.0)
+    activity.record("pd_set_confirm:daily_cap:30", "k2", view=OK(), ms=1.0)
+    activity.record("se_set_confirm:stop_loss:0.05", "k3", status="error", error="boom")
+    # A read is not a change.
+    activity.record("tune:sizing", "k4", view=OK(), ms=1.0)
+
+    keys = activity.recent_knob_keys(limit=5)
+    assert keys == ["daily_cap", "leverage"], keys
+    assert "stop_loss" not in keys
+    assert activity.recent_knob_keys(limit=1) == ["daily_cap"]
+
+
+def test_recent_knobs_dedupe_to_most_recent(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "_dir", lambda: tmp_path)
+    for i in range(4):
+        activity.record(f"se_set_confirm:leverage:{i}", f"d{i}", ms=1.0)
+    activity.record("se_set_confirm:vol_target:0.05", "d9", ms=1.0)
+    assert activity.recent_knob_keys(limit=5) == ["vol_target", "leverage"]
+
+
+def test_tune_index_promotes_recent_knobs_without_duplicating(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "_dir", lambda: tmp_path)
+
+    _text, cold = render_tune()
+    cold_n = sum(len(r) for r in cold)
+
+    activity.record("se_set_confirm:leverage:2", "p1", ms=1.0)
+    text, warm = render_tune()
+
+    assert "Recently changed" in text
+    promoted = [cb for row in warm for _l, cb in row if ":se_set:leverage:" in cb]
+    assert len(promoted) == 3, "the promoted knob should offer all its values inline"
+    assert not _dupes(warm), _dupes(warm)
+    assert sum(len(r) for r in warm) > cold_n
+    # The groups must still be there — promotion is additive, never a replacement.
+    for group_cb in ("estate:tune:exec", "estate:tune:sizing", "estate:tune:safety",
+                     "estate:tune:spend", "estate:tune:prospector"):
+        assert any(cb == group_cb for row in warm for _l, cb in row), group_cb
+
+
+def test_tune_index_is_unchanged_with_no_history(tmp_path, monkeypatch):
+    """A fresh cockpit must not grow a stray empty section."""
+    monkeypatch.setattr(activity, "_dir", lambda: tmp_path)
+    text, rows = render_tune()
+    assert "Recently changed" not in text
+    assert not _dupes(rows)
+
+
+# ── Panels found broken by the whole-graph sweep ─────────────────────────────
+
+import sqlite3
+import types
+
+
+def _fake_coordinator():
+    """A coordinator whose views return real sqlite3.Row objects with DIFFERENT columns —
+    which is what the live one does, and what broke 👁 Inspect."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE tasks (id TEXT, title TEXT, status TEXT, "
+                 "risk_class TEXT, kind TEXT, source TEXT)")
+    conn.execute("INSERT INTO tasks VALUES "
+                 "('7ec45b68deadbeef','Escalated thing','escalated','high','ops','telegram')")
+    conn.execute("INSERT INTO tasks VALUES "
+                 "('c1d2a4dd00000000','Running thing','running',NULL,'ops',NULL)")
+    conn.commit()
+
+    mod = types.SimpleNamespace()
+    mod.connect = lambda: conn
+    # decisions_view selects six columns; backlog_view selects four. The panel merged both.
+    mod.decisions_view = lambda c: c.execute(
+        "SELECT id,title,status,risk_class,kind,source FROM tasks "
+        "WHERE status='escalated'").fetchall()
+    mod.backlog_view = lambda c: c.execute(
+        "SELECT id,title,status,kind FROM tasks WHERE status='running'").fetchall()
+    return mod
+
+
+@pytest.mark.parametrize("prefix,expect", [("7ec45b68", "high"), ("c1d2a4dd", "?")])
+def test_inspect_renders_rows_from_either_view(monkeypatch, prefix, expect):
+    """sqlite3.Row has no .get() and backlog_view omits risk_class/source, so every tap on
+    👁 Inspect raised AttributeError. Found by the live sweep, not by any unit test."""
+    from gateway.operator_shell import estate as E
+
+    monkeypatch.setattr(E, "_load_coordinator", _fake_coordinator)
+    view = E.handle_estate_action(f"inspect:{prefix}", f"t-inspect-{prefix}")
+    assert prefix in view.text
+    assert expect in view.text
+    assert "Traceback" not in view.text
+
+
+def test_inspect_missing_task_is_a_message_not_a_crash(monkeypatch):
+    from gateway.operator_shell import estate as E
+
+    monkeypatch.setattr(E, "_load_coordinator", _fake_coordinator)
+    view = E.handle_estate_action("inspect:ffffffff", "t-inspect-none")
+    assert "No task" in view.text
+
+
+@pytest.mark.parametrize("armed", [True, False])
+def test_rsi_panel_offers_the_arm_toggle_once(monkeypatch, armed):
+    """Disarmed, the suggested next action IS arming — which the standing toggle already
+    carries. The CTA line keeps naming it; the button must not appear twice."""
+    from gateway.operator_shell import rsi_panel as R
+
+    monkeypatch.setattr(R, "learning_armed", lambda: armed)
+    text, rows = R.render_rsi_panel()
+    assert not _dupes(rows), f"rsi(armed={armed}) duplicates: {_dupes(rows)}"
+    toggle = "estate:disarm_learning" if armed else "estate:arm_learning"
+    assert _callbacks(rows).count(toggle) == 1
+    if not armed:
+        assert "Arm learning" in text
