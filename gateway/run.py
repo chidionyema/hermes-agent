@@ -4300,6 +4300,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if self._restart_requested and restart_source is not None:
             logger.debug("Skipping home-channel shutdown notifications for in-chat restart")
             return
+        if getattr(self, "_planned_stop", False):
+            logger.debug("Skipping home-channel shutdown notifications for planned stop/kickstart")
+            return
 
         # Snapshot adapters up front: adapter.send() can hit a fatal error
         # path that pops the adapter from self.adapters (see _handle_fatal
@@ -5109,6 +5112,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.warning(
                 "plugin discovery failed at gateway startup", exc_info=True,
             )
+
+        # Dual-path P0 notify (Telegram + optional ntfy) for coordinator escalations.
+        try:
+            from gateway.operator_shell.notify_fanout import patch_coordinator_notifier
+            patch_coordinator_notifier()
+        except Exception:
+            logger.debug("operator_shell notify fanout patch skipped", exc_info=True)
 
         # Register declarative shell hooks from cli-config.yaml.  Gateway
         # has no TTY, so consent has to come from one of the three opt-in
@@ -7297,6 +7307,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     return await self._handle_update_command(event)
                 if _cmd_def_inner.name == "version":
                     return await self._handle_version_command(event)
+                # Operator shell — safe mid-run (no agent interrupt).
+                if _cmd_def_inner.name == "panel":
+                    return await self._handle_panel_command(event)
+                if _cmd_def_inner.name == "inbox":
+                    return await self._handle_inbox_command(event)
+                if _cmd_def_inner.name == "fleet":
+                    return await self._handle_fleet_command(event)
+                if _cmd_def_inner.name == "revert":
+                    return await self._handle_revert_command(event)
+                if _cmd_def_inner.name == "cron":
+                    return await self._handle_cron_command(event)
+                if _cmd_def_inner.name == "busy":
+                    return await self._handle_busy_command(event)
+                if _cmd_def_inner.name == "notify":
+                    return await self._handle_notify_command(event)
 
             # Catch-all: any other recognized slash command reached the
             # running-agent guard. Reject gracefully rather than falling
@@ -7665,6 +7690,27 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         if canonical == "sethome":
             return await self._handle_set_home_command(event)
+
+        if canonical == "panel":
+            return await self._handle_panel_command(event)
+
+        if canonical == "inbox":
+            return await self._handle_inbox_command(event)
+
+        if canonical == "fleet":
+            return await self._handle_fleet_command(event)
+
+        if canonical == "revert":
+            return await self._handle_revert_command(event)
+
+        if canonical == "cron":
+            return await self._handle_cron_command(event)
+
+        if canonical == "busy":
+            return await self._handle_busy_command(event)
+
+        if canonical == "notify":
+            return await self._handle_notify_command(event)
 
         if canonical == "compress":
             return await self._handle_compress_command(event)
@@ -8103,6 +8149,54 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                                 logger.debug(
                                     "Transcript echo failed (non-fatal): %s", _echo_exc,
                                 )
+                    # Voice → executive brief / natural ops (CEO cockpit)
+                    try:
+                        from gateway.operator_shell.natural_ops import match_natural_op
+                        from gateway.operator_shell.voice_brief import (
+                            wants_executive_brief,
+                            render_executive_brief,
+                        )
+                        from gateway.operator_shell.estate import (
+                            handle_estate_action,
+                            PanelView as _PV,
+                        )
+                        from gateway.config import Platform as _OpPlatform
+
+                        _tx0 = (_successful_transcripts[0] or "").strip()
+                        if source.platform == _OpPlatform.TELEGRAM and _tx0:
+                            _nop = match_natural_op(_tx0)
+                            if _nop is not None:
+                                _action = (
+                                    _nop.action
+                                    if not _nop.args
+                                    else f"{_nop.action}:{_nop.args}"
+                                )
+                                _view = await asyncio.to_thread(
+                                    handle_estate_action, _action
+                                )
+                                if _echo_adapter and hasattr(
+                                    _echo_adapter, "send_operator_panel"
+                                ):
+                                    await _echo_adapter.send_operator_panel(
+                                        event, _view
+                                    )
+                                return
+                            if wants_executive_brief(_tx0, from_voice=True):
+                                _brief, _btns = await asyncio.to_thread(
+                                    render_executive_brief
+                                )
+                                _view = _PV(
+                                    text=_brief, buttons=_btns, pin_edit=False
+                                )
+                                if _echo_adapter and hasattr(
+                                    _echo_adapter, "send_operator_panel"
+                                ):
+                                    await _echo_adapter.send_operator_panel(
+                                        event, _view
+                                    )
+                                return
+                    except Exception as _vb_exc:
+                        logger.debug("voice brief intercept skipped: %s", _vb_exc)
                 _stt_fail_markers = (
                     "No STT provider",
                     "STT is disabled",
@@ -8309,6 +8403,55 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _platform_name, source.user_name or source.user_id or "unknown",
             source.chat_id or "unknown", _msg_preview, _reply_id, _reply_txt,
         )
+
+        # ---- Operator shell: CEO natural ops + voice executive brief ----
+        # Structured actions only — never freeform guessing. Fail open to agent.
+        try:
+            from gateway.operator_shell.natural_ops import match_natural_op
+            from gateway.operator_shell.voice_brief import (
+                wants_executive_brief,
+                render_executive_brief,
+            )
+            from gateway.operator_shell.estate import handle_estate_action
+            from gateway.config import Platform as _OpPlatform
+
+            _raw_text = (event.text or "").strip()
+            _from_voice = bool(getattr(event, "audio_paths", None) or getattr(event, "was_voice", False))
+            # Heuristic: transcript echo path sets media; also detect 🎙️-prefixed
+            if _raw_text.startswith("🎙️"):
+                _from_voice = True
+                _raw_text = _raw_text.lstrip("🎙️").strip().strip('"')
+
+            if source.platform == _OpPlatform.TELEGRAM and _raw_text:
+                _nop = match_natural_op(_raw_text)
+                if _nop is not None:
+                    _action = _nop.action if not _nop.args else f"{_nop.action}:{_nop.args}"
+                    _view = await asyncio.to_thread(handle_estate_action, _action)
+                    _adapter = self.adapters.get(source.platform)
+                    if _adapter and hasattr(_adapter, "send_operator_panel"):
+                        await _adapter.send_operator_panel(event, _view)
+                    elif _adapter:
+                        _meta = self._thread_metadata_for_source(
+                            source, self._reply_anchor_for_event(event)
+                        )
+                        await _adapter.send(source.chat_id, _view.text, metadata=_meta)
+                    return
+                if wants_executive_brief(_raw_text, from_voice=_from_voice):
+                    _brief, _btns = await asyncio.to_thread(render_executive_brief)
+                    from gateway.operator_shell.estate import PanelView as _PV
+
+                    _view = _PV(text=_brief, buttons=_btns, pin_edit=False)
+                    _adapter = self.adapters.get(source.platform)
+                    if _adapter and hasattr(_adapter, "send_operator_panel"):
+                        await _adapter.send_operator_panel(event, _view)
+                    elif _adapter:
+                        _meta = self._thread_metadata_for_source(
+                            source, self._reply_anchor_for_event(event)
+                        )
+                        await _adapter.send(source.chat_id, _brief, metadata=_meta)
+                    return
+        except Exception as _op_exc:
+            logger.debug("operator shell intercept skipped: %s", _op_exc)
 
         # Get or create session
         # Topic-mode DMs: rewrite a stale/foreign thread_id to the user's
@@ -16785,11 +16928,14 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
                 "Received %s as a planned --replace takeover — exiting cleanly",
                 _shutdown_ctx["signal"] if _shutdown_ctx else "SIGTERM",
             )
+            runner._planned_stop = True  # mute home spam on intentional replace
         elif planned_stop:
             logger.info(
                 "Received %s as a planned gateway stop — exiting cleanly",
                 _shutdown_ctx["signal"] if _shutdown_ctx else "SIGTERM/SIGINT",
             )
+            # Intentional kickstart / hermes gateway stop — no home notify spam.
+            runner._planned_stop = True
         else:
             _signal_initiated_shutdown = True
             # Mirror onto the runner so _stop_impl can suppress the

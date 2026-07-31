@@ -114,6 +114,12 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("profile", "Show active profile name and home directory", "Info"),
     CommandDef("sethome", "Set this chat as the home channel", "Session",
                gateway_only=True, aliases=("set-home",)),
+    CommandDef("panel", "Pinned mission card — estate cockpit", "Session",
+               gateway_only=True, aliases=("control", "mission")),
+    CommandDef("inbox", "Decisions waiting on you (approvals / blocked)", "Session",
+               gateway_only=True, aliases=("decisions",)),
+    CommandDef("fleet", "Project tiles: prospector / signal / TIE / haworks", "Session",
+               gateway_only=True, aliases=("portfolio",)),
     CommandDef("resume", "Resume a previously-named session", "Session",
                args_hint="[name]"),
 
@@ -157,8 +163,13 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("voice", "Toggle voice mode", "Configuration",
                args_hint="[on|off|tts|status]", subcommands=("on", "off", "tts", "status")),
     CommandDef("busy", "Control what Enter does while Hermes is working", "Configuration",
-               cli_only=True, args_hint="[queue|steer|interrupt|status]",
+               args_hint="[queue|steer|interrupt|status]",
                subcommands=("queue", "steer", "interrupt", "status")),
+    CommandDef("notify", "Telegram delivery / progress mute (off|new|all|status)", "Configuration",
+               gateway_only=True, args_hint="[off|new|all|status|important]",
+               subcommands=("off", "new", "all", "status", "important")),
+    CommandDef("revert", "Undo last operator action (pause/resume/cron)", "Session",
+               gateway_only=True, aliases=("opundo",), args_hint="[token]"),
 
     # Tools & Skills
     CommandDef("tools", "Manage tools: /tools [list|disable|enable] [name...]", "Tools & Skills",
@@ -176,8 +187,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                subcommands=("pending", "approve", "reject", "approval")),
     CommandDef("bundles", "List skill bundles (aliases /<name> for multiple skills)",
                "Tools & Skills"),
-    CommandDef("cron", "Manage scheduled tasks", "Tools & Skills",
-               cli_only=True, args_hint="[subcommand]",
+    CommandDef("cron", "Manage scheduled tasks (list/pause/resume/run from Telegram)", "Tools & Skills",
+               args_hint="[list|pause|resume|run|remove]",
                subcommands=("list", "add", "create", "edit", "pause", "resume", "run", "remove")),
     CommandDef("suggestions", "Review suggested automations (accept/dismiss)",
                "Tools & Skills", aliases=("suggest",), args_hint="[accept|dismiss N | catalog]",
@@ -351,13 +362,20 @@ ACTIVE_SESSION_BYPASS_COMMANDS: frozenset[str] = frozenset(
         "agents",
         "approve",
         "background",
+        "busy",
         "commands",
+        "cron",
         "deny",
+        "fleet",
         "help",
+        "inbox",
         "new",
+        "notify",
+        "panel",
         "profile",
         "queue",
         "restart",
+        "revert",
         "status",
         "steer",
         "stop",
@@ -526,30 +544,32 @@ def telegram_bot_commands() -> list[tuple[str, str]]:
 
 
 _TELEGRAM_MENU_PRIORITY = (
-    # Most-typed everyday commands first.
+    # Operator shell Tier-0 (world-class Telegram cockpit) — first.
     "help",
     "new",
     "stop",
     "status",
-    "resume",
-    "sessions",
-    "model",
-    # Maintenance / diagnostics — the ones that prompted this priority list.
-    "debug",
-    "restart",
-    "update",
-    "verbose",
-    "commands",
-    # Mid-turn session control.
-    "approve",
-    "deny",
+    "panel",
+    "cron",
     "queue",
+    "approve",
+    "sethome",
+    "model",
+    "commands",
+    "restart",
+    # Remaining operational built-ins if menu_profile=default/full.
+    "deny",
     "steer",
     "background",
-    # Lower-priority but still useful operational built-ins.
+    "resume",
+    "sessions",
+    "verbose",
+    "notify",
+    "busy",
+    "debug",
+    "update",
     "reasoning",
     "usage",
-    "platforms",
     "platform",
     "profile",
     "whoami",
@@ -559,6 +579,9 @@ _TELEGRAM_MENU_PRIORITY = (
 Telegram only displays a small BotCommand menu in practice.  The full Hermes
 registry is still dispatchable when typed manually, but operational commands
 need to survive the visible menu cap ahead of lower-priority built-ins.
+
+When ``operator_shell.menu_profile: operator``, only the first 12 entries
+are registered (see ``gateway.operator_shell.menu``).
 """
 
 
@@ -798,11 +821,30 @@ def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str
     Skills disabled for the ``"telegram"`` platform (via ``hermes skills
     config``) are excluded from the menu entirely.
 
+    When ``operator_shell.menu_profile: operator``, only the Tier-0 operator
+    shell (≤12 commands) is registered — no skill overflow clutter.
+
     Returns:
         (menu_commands, hidden_count) where hidden_count is the number of
         commands omitted due to the cap.
     """
     core_commands = _prioritize_telegram_menu_commands(list(telegram_bot_commands()))
+    try:
+        from gateway.operator_shell.menu import (
+            filter_operator_menu,
+            resolve_telegram_menu_profile,
+        )
+
+        profile = resolve_telegram_menu_profile()
+    except Exception:
+        profile = "default"
+
+    if profile == "operator":
+        operator_commands = filter_operator_menu(core_commands)
+        # Full registry still typed-dispatchable; menu shows Tier-0 only.
+        hidden = max(0, len(core_commands) - len(operator_commands))
+        return operator_commands[: max(1, min(max_commands, 12))], hidden
+
     reserved_names = {n for n, _ in core_commands}
     all_commands = list(core_commands)
     hidden_core_count = max(0, len(all_commands) - max_commands)

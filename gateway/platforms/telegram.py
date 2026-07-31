@@ -8,6 +8,7 @@ Uses python-telegram-bot library for:
 """
 
 import asyncio
+import subprocess
 import dataclasses
 import inspect
 import json
@@ -4204,6 +4205,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return
 
         # --- Estate control panel callbacks (estate:action) ---
+        # Logic lives in gateway.operator_shell (no sys.path hacks here).
         if data.startswith("estate:"):
             action = data.split(":", 1)[1]
             caller_id = str(getattr(query.from_user, "id", ""))
@@ -4218,88 +4220,63 @@ class TelegramAdapter(BasePlatformAdapter):
                 return
 
             try:
-                import sys
-                import os
-                _SCRIPTS = os.path.expanduser("~/.hermes/scripts")
-                if _SCRIPTS not in sys.path:
-                    sys.path.insert(0, _SCRIPTS)
-                import coordinator as C
-                
-                if action == "list_active":
-                    conn = C.connect()
-                    try:
-                        active = C.list_active(conn)
-                        if not active:
-                            msg = "🗂️ No active tasks in flight."
-                        else:
-                            lines = ["🗂️ *Active Tasks in Flight:*"]
-                            for t in active:
-                                lines.append(f"• `{t['id'][:8]}` [{t['status']}] {t['title'][:40]}...")
-                            msg = "\n".join(lines)
-                    finally:
-                        conn.close()
-                    await query.answer(text="Active tasks list fetched")
-                    await self._send_message_with_thread_fallback(
-                        chat_id=str(query.message.chat_id),
-                        text=self.format_message(msg),
-                        parse_mode=ParseMode.MARKDOWN_V2
-                    )
+                from gateway.operator_shell.estate import handle_estate_action
+                from gateway.operator_shell.proof import save_mission_card
 
-                elif action == "view_logs":
-                    log_path = os.path.expanduser("~/.hermes/logs/coordinator.log")
-                    if os.path.exists(log_path):
-                        with open(log_path, "r", encoding="utf-8") as f:
-                            lines = f.readlines()[-20:]
-                        log_text = "".join(lines)
-                        msg = f"🪵 *Coordinator Logs (Last 20 lines):*\n```text\n{log_text[-3500:]}\n```"
-                    else:
-                        msg = "⚠️ Logs file not found."
-                    await query.answer(text="Logs fetched")
-                    await self._send_message_with_thread_fallback(
-                        chat_id=str(query.message.chat_id),
-                        text=self.format_message(msg),
-                        parse_mode=ParseMode.MARKDOWN_V2
-                    )
+                # Telegram callback query id is unique per tap — idempotency key.
+                rid = str(getattr(query, "id", "") or "")
+                view = await asyncio.to_thread(handle_estate_action, action, rid)
+                if view.toast:
+                    await query.answer(text=view.toast[:200])
+                else:
+                    await query.answer()
 
-                elif action == "system_fuel":
-                    conn = C.connect()
-                    try:
-                        metrics = C.autonomy_ratio(conn)
-                        used = C.tasks_today(conn)
-                        msg = (
-                            "⛽ *System Fuel & Health Status*\n\n"
-                            f"• *Daily Budget:* `{used}/{C.DAILY_TASK_BUDGET}` tasks used\n"
-                            f"• *Autonomy Yield:* `{int(metrics.get('autonomy_ratio', 0) * 100)}%`\n"
-                            f"• *Total cost (7d):* `${metrics.get('total_cost', 0.0):.4f}`\n"
-                            f"• *Input tokens:* `{metrics.get('tokens_input', 0)}` tokens\n"
-                            f"• *Output tokens:* `{metrics.get('tokens_output', 0)}` tokens\n"
-                            f"• *Avg latency:* `{metrics.get('avg_duration_seconds', 0.0)}` seconds"
+                # Side effects that need the adapter / gateway runner
+                if getattr(view, "needs_cron_topic_setup", False):
+                    view = await self._operator_setup_cron_topic(view, query)
+                if getattr(view, "needs_stop_agent", False):
+                    view = await self._operator_stop_agents(view)
+                if getattr(view, "prospector_candidates", None):
+                    view = await self._operator_queue_prospector(view)
+
+                markup = self._panel_keyboard_from_view(view)
+                try:
+                    edited = await query.edit_message_text(
+                        text=self.format_message(view.text),
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=markup,
+                    )
+                    if getattr(view, "pin_edit", False) and edited is not None:
+                        mid = getattr(edited, "message_id", None) or getattr(
+                            query.message, "message_id", None
                         )
-                    finally:
-                        conn.close()
-                    await query.answer(text="Fuel status fetched")
-                    await self._send_message_with_thread_fallback(
-                        chat_id=str(query.message.chat_id),
-                        text=self.format_message(msg),
-                        parse_mode=ParseMode.MARKDOWN_V2
-                    )
-
-                elif action == "run_chores":
-                    import subprocess
-                    proc = subprocess.run(
-                        [sys.executable, os.path.join(_SCRIPTS, "watchdog.py")],
-                        capture_output=True,
-                        text=True,
-                        timeout=30
-                    )
-                    out = proc.stdout.strip() if proc.returncode == 0 else proc.stderr.strip()
-                    msg = f"⚙️ *Chores (Watchdog Health Run Output):*\n```text\n{out[:3500]}\n```"
-                    await query.answer(text="Chores executed")
-                    await self._send_message_with_thread_fallback(
-                        chat_id=str(query.message.chat_id),
-                        text=self.format_message(msg),
-                        parse_mode=ParseMode.MARKDOWN_V2
-                    )
+                        if mid:
+                            save_mission_card(
+                                str(query.message.chat_id),
+                                str(mid),
+                                str(query_thread_id) if query_thread_id else None,
+                            )
+                            try:
+                                await self._bot.pin_chat_message(
+                                    chat_id=query.message.chat_id,
+                                    message_id=int(mid),
+                                    disable_notification=True,
+                                )
+                            except Exception:
+                                pass
+                except Exception:
+                    try:
+                        sent = await self._send_message_with_thread_fallback(
+                            chat_id=str(query.message.chat_id),
+                            text=self.format_message(view.text),
+                            parse_mode=ParseMode.MARKDOWN_V2,
+                            reply_markup=markup,
+                        )
+                        mid = getattr(sent, "message_id", None)
+                        if mid and getattr(view, "pin_edit", False):
+                            save_mission_card(str(query.message.chat_id), str(mid))
+                    except Exception:
+                        pass
             except Exception as exc:
                 logger.error("[%s] estate callback query failed: %s", self.name, exc, exc_info=True)
                 await query.answer(text="⚠️ Action failed.")
@@ -6146,6 +6123,192 @@ class TelegramAdapter(BasePlatformAdapter):
         event = self._apply_telegram_group_observe_attribution(event)
         self._enqueue_text_event(event)
 
+    def _panel_keyboard_from_view(self, view) -> "InlineKeyboardMarkup":
+        """Build InlineKeyboardMarkup from an operator_shell PanelView."""
+        rows = []
+        for row in getattr(view, "buttons", None) or []:
+            rows.append(
+                [
+                    InlineKeyboardButton(label, callback_data=callback)
+                    for label, callback in row
+                ]
+            )
+        return InlineKeyboardMarkup(rows) if rows else None
+
+    async def _operator_setup_cron_topic(self, view, query):
+        """Create Cron DM topic and wire TELEGRAM_CRON_THREAD_ID."""
+        from hermes_cli.config import save_env_value
+        from gateway.operator_shell.proof import Proof, new_request_id
+
+        chat_id = str(query.message.chat_id)
+        try:
+            thread_id = await self.ensure_dm_topic(chat_id, "Cron", force_create=True)
+            if not thread_id:
+                # Fallback: try create_handoff_thread
+                thread_id = await self.create_handoff_thread(chat_id, "Cron")
+            if thread_id:
+                save_env_value("TELEGRAM_CRON_THREAD_ID", str(thread_id))
+                os.environ["TELEGRAM_CRON_THREAD_ID"] = str(thread_id)
+                receipt = Proof(
+                    action="setup_cron_topic",
+                    status="done",
+                    summary=f"Cron topic ready · thread `{thread_id}`",
+                    request_id=new_request_id(),
+                    evidence=[f"TELEGRAM_CRON_THREAD_ID={thread_id}"],
+                ).render()
+                # Re-render mission card with topic set
+                from gateway.operator_shell.estate import render_panel_view
+
+                fresh = render_panel_view()
+                fresh.text = receipt + "\n\n" + fresh.text
+                fresh.toast = "Cron topic ✓"
+                return fresh
+            receipt = Proof(
+                action="setup_cron_topic",
+                status="failed",
+                summary=(
+                    "Cron topic needs Topics ON (Telegram won't fake a thread).\n\n"
+                    "*One-tap founder step:*\n"
+                    "1. Open this Otto DM\n"
+                    "2. Tap Otto's name → *Topics* → enable\n"
+                    "3. Tap 🗓 Cron again\n\n"
+                    "Until then cron stays in the main chat (still works)."
+                ),
+                request_id=new_request_id(),
+                evidence=["createForumTopic: chat is not a forum"],
+            ).render()
+            # Keep actionable buttons — don't leave a dead-end receipt
+            view.text = receipt
+            view.buttons = [
+                [("🗓 Try Cron again", "estate:setup_cron_topic")],
+                [("🎛 Mission", "estate:refresh"), ("⛽ Fuel", "estate:system_fuel")],
+            ]
+            view.ok = False
+            view.toast = "Enable Topics first"
+            return view
+        except Exception as exc:
+            logger.error("cron topic setup failed: %s", exc, exc_info=True)
+            err = str(exc)
+            tip = ""
+            if "not a forum" in err.lower() or "400" in err:
+                tip = (
+                    "\n\n*Fix:* Otto DM → tap bot name → enable *Topics* → tap 🗓 again. "
+                    "No thread_id invented."
+                )
+            view.text = f"⚠️ Cron topic setup failed: {exc}{tip}\n\n" + (view.text or "")
+            view.buttons = [
+                [("🗓 Retry", "estate:setup_cron_topic"), ("🎛 Mission", "estate:refresh")]
+            ]
+            view.ok = False
+            return view
+
+    async def _operator_stop_agents(self, view):
+        """Best-effort: interrupt all running gateway sessions."""
+        try:
+            runner = getattr(self, "_gateway_runner", None) or getattr(self, "runner", None)
+            # Adapters don't always hold runner; use process-global if set
+            if runner is None:
+                import gateway.run as gr
+
+                runner = getattr(gr, "_ACTIVE_GATEWAY_RUNNER", None)
+            stopped = 0
+            if runner is not None and hasattr(runner, "_running_agents"):
+                keys = list(getattr(runner, "_running_agents", {}).keys())
+                for key in keys:
+                    try:
+                        await runner._interrupt_and_clear_session(
+                            key,
+                            None,
+                            interrupt_reason="operator_panel_stop",
+                            invalidation_reason="operator_stop_agent",
+                        )
+                        stopped += 1
+                    except Exception:
+                        pass
+            from gateway.operator_shell.proof import Proof, new_request_id
+
+            receipt = Proof(
+                action="stop_agent",
+                status="done",
+                summary=f"Stopped {stopped} active agent session(s)",
+                request_id=new_request_id(),
+                evidence=[f"sessions={stopped}"],
+            ).render()
+            view.text = receipt + "\n\n" + (view.text or "")
+            view.toast = f"Stopped {stopped}"
+        except Exception as exc:
+            view.text = f"⚠️ Stop failed: {exc}\n\n" + (view.text or "")
+        return view
+
+    async def _operator_queue_prospector(self, view):
+        """Queue a background prospector generate run via hermes background path."""
+        n = int(getattr(view, "prospector_candidates", None) or 20)
+        workdir = os.path.expanduser("~/Documents/code/prospector")
+        cmd = (
+            f"cd {workdir} && "
+            f"export $(grep -v '^#' .env 2>/dev/null | sed 's/ //g' | xargs) 2>/dev/null; "
+            f"PYTHONPATH=. .venv/bin/python -m prospector.run generate --candidates {n}"
+        )
+        try:
+            # Fire-and-forget local shell; proof already queued in view
+            subprocess.Popen(
+                ["bash", "-lc", cmd],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            view.toast = f"Prospector ×{n} launched"
+        except Exception as exc:
+            view.text = f"⚠️ Prospector launch failed: {exc}\n\n" + (view.text or "")
+            view.ok = False
+        return view
+
+    async def send_operator_panel(self, event, view) -> None:
+        """Deliver /panel — edit pinned mission card in place when possible."""
+        from gateway.operator_shell.proof import load_mission_card, save_mission_card
+
+        chat_id = str(event.source.chat_id) if event and event.source else None
+        if not chat_id:
+            raise ValueError("send_operator_panel: missing chat_id")
+        text = self.format_message(view.text)
+        markup = self._panel_keyboard_from_view(view)
+        card = load_mission_card()
+        if (
+            card.get("chat_id") == chat_id
+            and card.get("message_id")
+            and self._bot
+            and getattr(view, "pin_edit", True)
+        ):
+            try:
+                await self._bot.edit_message_text(
+                    chat_id=int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
+                    message_id=int(card["message_id"]),
+                    text=text,
+                    parse_mode=ParseMode.MARKDOWN_V2,
+                    reply_markup=markup,
+                )
+                return
+            except Exception:
+                pass
+        sent = await self._send_message_with_thread_fallback(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=markup,
+            parse_mode=ParseMode.MARKDOWN_V2,
+        )
+        mid = getattr(sent, "message_id", None)
+        if mid:
+            thread_id = getattr(event.source, "thread_id", None) if event.source else None
+            save_mission_card(chat_id, str(mid), str(thread_id) if thread_id else None)
+            try:
+                await self._bot.pin_chat_message(
+                    chat_id=int(chat_id) if str(chat_id).lstrip("-").isdigit() else chat_id,
+                    message_id=int(mid),
+                    disable_notification=True,
+                )
+            except Exception:
+                pass
+
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming command messages."""
         msg = self._effective_update_message(update)
@@ -6155,43 +6318,7 @@ class TelegramAdapter(BasePlatformAdapter):
             return
         await self._ensure_forum_commands(msg)
 
-        # Check for control panel command
-        cmd_text = msg.text.strip().split()[0].lower()
-        if cmd_text in ("/panel", "/control"):
-            try:
-                import sys
-                import os
-                _SCRIPTS = os.path.expanduser("~/.hermes/scripts")
-                if _SCRIPTS not in sys.path:
-                    sys.path.insert(0, _SCRIPTS)
-                import coordinator as C
-                conn = C.connect()
-                try:
-                    text_msg = C.get_control_panel_message(conn)
-                finally:
-                    conn.close()
-
-                keyboard = InlineKeyboardMarkup([
-                    [
-                        InlineKeyboardButton("📋 Active Tasks", callback_data="estate:list_active"),
-                        InlineKeyboardButton("🪵 View Logs", callback_data="estate:view_logs")
-                    ],
-                    [
-                        InlineKeyboardButton("⛽ System Fuel", callback_data="estate:system_fuel"),
-                        InlineKeyboardButton("⚙️ Run Chores", callback_data="estate:run_chores")
-                    ]
-                ])
-
-                await self._send_message_with_thread_fallback(
-                    chat_id=str(msg.chat_id),
-                    text=self.format_message(text_msg),
-                    reply_markup=keyboard,
-                    parse_mode=ParseMode.MARKDOWN_V2
-                )
-            except Exception as e:
-                logger.error("[%s] command /panel failed: %s", self.name, e, exc_info=True)
-            return
-
+        # /panel is first-class via COMMAND_REGISTRY — do not special-case here.
         event = self._build_message_event(msg, MessageType.COMMAND, update_id=update.update_id)
         event.text = self._clean_bot_trigger_text(event.text)
         await self._cache_replied_media(msg, event)

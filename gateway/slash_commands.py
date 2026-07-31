@@ -1860,7 +1860,29 @@ class GatewaySlashCommandsMixin:
                 thread_id=str(thread_id) if thread_id else None,
             )
 
-        return t("gateway.set_home.success", name=chat_name, chat_id=chat_id)
+        base = t("gateway.set_home.success", name=chat_name, chat_id=chat_id)
+        # Delivery hygiene: if this is Telegram and we have a topic, also wire cron.
+        if source.platform == Platform.TELEGRAM and thread_id:
+            try:
+                from hermes_cli.config import save_env_value
+                import os
+
+                save_env_value("TELEGRAM_CRON_THREAD_ID", str(thread_id))
+                os.environ["TELEGRAM_CRON_THREAD_ID"] = str(thread_id)
+                base = (
+                    f"{base}\n\n"
+                    f"✓ Cron deliveries → this topic (`TELEGRAM_CRON_THREAD_ID={thread_id}`).\n"
+                    "Factory output stays replyable here."
+                )
+            except Exception as exc:
+                logger.warning("Failed to set TELEGRAM_CRON_THREAD_ID: %s", exc)
+        elif source.platform == Platform.TELEGRAM and not thread_id:
+            base = (
+                f"{base}\n\n"
+                "_Tip: run `/sethome` inside a Telegram topic named Cron so job "
+                "output doesn't land in an unrepliable lobby._"
+            )
+        return base
 
     async def _handle_voice_command(self, event: MessageEvent) -> str:
         """Handle /voice [on|off|tts|channel|leave|status] command."""
@@ -3824,3 +3846,188 @@ class GatewaySlashCommandsMixin:
 
         self._schedule_update_notification_watch()
         return t("gateway.update.starting")
+
+    # ------------------------------------------------------------------
+    # Operator shell — /panel, /cron, /busy, /notify
+    # ------------------------------------------------------------------
+
+    async def _handle_panel_command(self, event: MessageEvent) -> Optional[str]:
+        """Handle /panel — pinned mission card."""
+        from gateway.operator_shell.estate import render_panel_view
+        from gateway.operator_shell.notify_fanout import patch_coordinator_notifier
+
+        patch_coordinator_notifier()
+        view = await asyncio.to_thread(render_panel_view)
+        adapter = self.adapters.get(event.source.platform) if event.source else None
+        send_panel = getattr(adapter, "send_operator_panel", None) if adapter else None
+        if callable(send_panel):
+            try:
+                await send_panel(event, view)
+                return ""  # already delivered with keyboard
+            except Exception as exc:
+                logger.error("send_operator_panel failed: %s", exc, exc_info=True)
+                return view.text + f"\n\n_(buttons unavailable: {exc})_"
+        return view.text
+
+    async def _send_operator_view(self, event: MessageEvent, text: str, buttons) -> Optional[str]:
+        """Send text+buttons via telegram panel helper, else plain text."""
+        from gateway.operator_shell.estate import PanelView
+
+        view = PanelView(text=text, buttons=buttons or [])
+        adapter = self.adapters.get(event.source.platform) if event.source else None
+        send_panel = getattr(adapter, "send_operator_panel", None) if adapter else None
+        if callable(send_panel):
+            try:
+                await send_panel(event, view)
+                return ""
+            except Exception as exc:
+                logger.error("operator view send failed: %s", exc, exc_info=True)
+                return text
+        return text
+
+    async def _handle_inbox_command(self, event: MessageEvent) -> Optional[str]:
+        from gateway.operator_shell.inbox import render_inbox
+
+        text, buttons = await asyncio.to_thread(render_inbox)
+        return await self._send_operator_view(event, text, buttons)
+
+    async def _handle_fleet_command(self, event: MessageEvent) -> Optional[str]:
+        from gateway.operator_shell.fleet import render_fleet
+
+        text, buttons = await asyncio.to_thread(render_fleet)
+        return await self._send_operator_view(event, text, buttons)
+
+    async def _handle_revert_command(self, event: MessageEvent) -> Optional[str]:
+        from gateway.operator_shell.estate import handle_estate_action
+
+        args = (event.get_command_args() or "").strip()
+        action = f"undo:{args}" if args else "undo"
+        view = await asyncio.to_thread(handle_estate_action, action)
+        return await self._send_operator_view(event, view.text, view.buttons)
+
+    async def _handle_cron_command(self, event: MessageEvent) -> str:
+        """Handle /cron — list/pause/resume/run/remove from Telegram."""
+        from gateway.operator_shell.cron_ops import format_cron_command
+        from gateway.operator_shell.delivery import cron_topic_advisory
+
+        raw = (event.get_command_args() if hasattr(event, "get_command_args") else "") or ""
+        if not raw and event.text:
+            # Fallback: strip leading /cron
+            parts = event.text.strip().split(maxsplit=1)
+            raw = parts[1] if len(parts) > 1 else ""
+        text = await asyncio.to_thread(format_cron_command, raw)
+        advisory = cron_topic_advisory()
+        if advisory and (not raw or raw.strip().lower() in {"", "list"}):
+            text = text + advisory
+        return text
+
+    async def _handle_busy_command(self, event: MessageEvent) -> str:
+        """Handle /busy — queue|steer|interrupt (persists display.busy_input_mode)."""
+        from gateway.run import _hermes_home, _load_gateway_config
+
+        raw = (event.get_command_args() if hasattr(event, "get_command_args") else "") or ""
+        if not raw and event.text:
+            parts = event.text.strip().split(maxsplit=1)
+            raw = parts[1] if len(parts) > 1 else ""
+        arg = raw.strip().lower() or "status"
+
+        current = getattr(self, "_busy_input_mode", None) or "interrupt"
+        try:
+            cfg = _load_gateway_config() or {}
+            current = str(
+                cfg_get(cfg, "display", "busy_input_mode", default=current) or current
+            ).strip().lower()
+        except Exception:
+            pass
+
+        if arg in {"", "status"}:
+            behavior = {
+                "queue": "follow-ups queue for the next turn (does not cancel work)",
+                "steer": "follow-ups inject after the next tool call",
+                "interrupt": "follow-ups cancel the current run",
+            }.get(current, current)
+            return (
+                f"*Busy input mode:* `{current}`\n"
+                f"{behavior}\n\n"
+                "Usage: `/busy queue` | `/busy steer` | `/busy interrupt`"
+            )
+
+        if arg not in {"queue", "steer", "interrupt"}:
+            return f"Unknown mode `{arg}`.\nUsage: `/busy [queue|steer|interrupt|status]`"
+
+        config_path = _hermes_home() / "config.yaml"
+        try:
+            user_config = _load_gateway_config() or {}
+            display = user_config.setdefault("display", {})
+            if not isinstance(display, dict):
+                display = {}
+                user_config["display"] = display
+            display["busy_input_mode"] = arg
+            atomic_yaml_write(config_path, user_config)
+            self._busy_input_mode = arg
+            os.environ["HERMES_GATEWAY_BUSY_INPUT_MODE"] = arg
+        except Exception as exc:
+            logger.warning("Failed to persist busy_input_mode: %s", exc)
+            self._busy_input_mode = arg
+            return f"Busy mode set to `{arg}` for this process only (config save failed: {exc})"
+
+        return (
+            f"✓ Busy input mode → `{arg}` (saved)\n"
+            + {
+                "queue": "Telegram follow-ups will queue instead of killing work.",
+                "steer": "Telegram follow-ups will steer after the next tool call.",
+                "interrupt": "Telegram follow-ups will interrupt the current run.",
+            }[arg]
+        )
+
+    async def _handle_notify_command(self, event: MessageEvent) -> str:
+        """Handle /notify — set Telegram tool_progress / delivery mute level."""
+        from gateway.run import _hermes_home, _load_gateway_config
+        from gateway.display_config import resolve_display_setting
+
+        raw = (event.get_command_args() if hasattr(event, "get_command_args") else "") or ""
+        if not raw and event.text:
+            parts = event.text.strip().split(maxsplit=1)
+            raw = parts[1] if len(parts) > 1 else ""
+        arg = raw.strip().lower() or "status"
+
+        # Map operator-friendly aliases
+        alias = {"important": "off", "mute": "off", "quiet": "new", "loud": "all"}
+        arg = alias.get(arg, arg)
+
+        user_config = {}
+        try:
+            user_config = _load_gateway_config() or {}
+        except Exception:
+            pass
+        current = resolve_display_setting(user_config, "telegram", "tool_progress", "off")
+
+        if arg == "status":
+            return (
+                f"*Telegram progress:* `{current}`\n"
+                "Usage: `/notify off` | `/notify new` | `/notify all` | `/notify status`\n"
+                "_Escalations always notify. Progress uses silent edit._"
+            )
+
+        if arg not in {"off", "new", "all", "verbose"}:
+            return f"Unknown level `{arg}`.\nUsage: `/notify [off|new|all|status]`"
+
+        config_path = _hermes_home() / "config.yaml"
+        try:
+            if "display" not in user_config or not isinstance(user_config.get("display"), dict):
+                user_config["display"] = {}
+            display = user_config["display"]
+            if "platforms" not in display or not isinstance(display.get("platforms"), dict):
+                display["platforms"] = {}
+            if "telegram" not in display["platforms"] or not isinstance(
+                display["platforms"].get("telegram"), dict
+            ):
+                display["platforms"]["telegram"] = {}
+            display["platforms"]["telegram"]["tool_progress"] = arg
+            # Enable /verbose cycling as well
+            display["tool_progress_command"] = True
+            atomic_yaml_write(config_path, user_config)
+        except Exception as exc:
+            return f"⚠️ Failed to save notify level: {exc}"
+
+        return f"✓ Telegram tool progress → `{arg}` (saved). Escalations still notify."

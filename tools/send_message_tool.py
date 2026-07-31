@@ -184,6 +184,9 @@ def send_message_tool(args, **kw):
     if action == "unreact":
         return _handle_react(args, remove=True)
 
+    if action == "edit":
+        return _handle_edit(args)
+
     return _handle_send(args)
 
 
@@ -286,6 +289,64 @@ def _handle_react(args, remove=False):
     if isinstance(result, dict):
         return json.dumps(result)
     return json.dumps({"success": bool(result)})
+
+
+def _handle_edit(args):
+    """Edit an existing message in place (Telegram only).
+
+    Mirrors _handle_send's target/chat resolution but routes to
+    ``editMessageText`` via the standalone bot-token path (no running gateway
+    required). Used by the coordinator's progress streaming so one task maps to
+    one live-updating message instead of a burst of separate pings.
+    """
+    target = args.get("target", "")
+    message = args.get("message", "")
+    message_id = (args.get("message_id") or "").strip()
+    if not target or not message or not message_id:
+        return tool_error("'target', 'message', and 'message_id' are required when action='edit'")
+
+    parts = target.split(":", 1)
+    platform_name = parts[0].strip().lower()
+    target_ref = parts[1].strip() if len(parts) > 1 else None
+    if platform_name != "telegram":
+        return tool_error(f"action='edit' is only supported for telegram (got '{platform_name}')")
+
+    chat_id = None
+    if target_ref:
+        chat_id, _thread_id, _ = _parse_target_ref(platform_name, target_ref)
+        chat_id = chat_id or target_ref
+
+    try:
+        from gateway.config import Platform, load_gateway_config
+        platform = Platform(platform_name)
+        config = load_gateway_config()
+    except Exception as e:
+        return tool_error(f"Failed to load gateway config: {e}")
+
+    if not chat_id:
+        try:
+            home = config.get_home_channel(platform)
+            chat_id = home.chat_id if home else None
+        except Exception:
+            chat_id = None
+        if not chat_id:
+            return tool_error(
+                f"No chat specified and no home channel set for {platform_name}. "
+                f"Use '{platform_name}:chat_id'."
+            )
+
+    pconfig = config.platforms.get(platform)
+    if not pconfig or not getattr(pconfig, "token", None):
+        return tool_error(f"No token configured for {platform_name}.")
+
+    try:
+        from model_tools import _run_async
+        result = _run_async(_edit_telegram(pconfig.token, chat_id, message_id, message))
+    except Exception as e:
+        return json.dumps(_error(f"Edit failed: {e}"))
+    if isinstance(result, dict) and "error" in result:
+        result["error"] = _sanitize_error_text(result["error"])
+    return json.dumps(result)
 
 
 def _handle_send(args):
@@ -775,8 +836,22 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
     if platform == Platform.TELEGRAM:
         last_result = None
         disable_link_previews = bool(getattr(pconfig, "extra", {}) and pconfig.extra.get("disable_link_previews"))
+        # Best-effort multi-chunk delivery: a long message (e.g. the estate
+        # audit) splits into many parts.  If a single mid-stream chunk fails
+        # (typically Telegram flood-control 429 during a rapid burst), we must
+        # NOT abort the remaining chunks — that silently truncates the message
+        # ("the full inventory isn't showing").  Instead, keep going and report
+        # which parts failed.  We still fast-fail on the FIRST chunk, since a
+        # chunk-1 failure usually means a systemic problem (bad token/chat_id).
+        # A small inter-chunk pause keeps the burst under Telegram's per-chat
+        # flood threshold so 429s don't happen in the first place.
+        failed_parts = []
+        total = len(chunks)
         for i, chunk in enumerate(chunks):
-            is_last = (i == len(chunks) - 1)
+            is_last = (i == total - 1)
+            if i > 0:
+                # Pace the burst; Telegram allows ~1 msg/sec sustained per chat.
+                await asyncio.sleep(0.7)
             result = await _send_telegram(
                 pconfig.token,
                 chat_id,
@@ -787,8 +862,22 @@ async def _send_to_platform(platform, pconfig, chat_id, message, thread_id=None,
                 force_document=force_document,
             )
             if isinstance(result, dict) and result.get("error"):
-                return result
+                if i == 0:
+                    return result
+                logger.error(
+                    "Telegram chunk %d/%d failed, continuing with remaining parts: %s",
+                    i + 1, total, result.get("error"),
+                )
+                failed_parts.append(i + 1)
+                continue
             last_result = result
+        if failed_parts and isinstance(last_result, dict):
+            last_result = dict(last_result)
+            warns = list(last_result.get("warnings") or [])
+            warns.append(
+                f"{len(failed_parts)}/{total} chunks failed to send (parts {failed_parts})"
+            )
+            last_result["warnings"] = warns
         return last_result
 
     # --- Discord: chunked delivery via the registry's standalone_sender_fn.
@@ -1179,6 +1268,80 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
         return {"error": "python-telegram-bot not installed. Run: pip install python-telegram-bot"}
     except Exception as e:
         return _error(f"Telegram send failed: {e}")
+
+
+async def _edit_telegram(token, chat_id, message_id, message):
+    """Edit a Telegram message in place via Bot API ``editMessageText``.
+
+    Mirrors _send_telegram's markdown→MarkdownV2 / HTML detection and proxy
+    handling. Text-only (no media — Telegram cannot edit text into media).
+    Treats 'message is not modified' as success (new text == current text).
+    """
+    try:
+        from telegram import Bot
+        from telegram.constants import ParseMode
+
+        _has_html = bool(re.search(r'<[a-zA-Z/][^>]*>', message))
+        if _has_html:
+            formatted = message
+            send_parse_mode = ParseMode.HTML
+        else:
+            try:
+                from gateway.platforms.telegram import TelegramAdapter
+                _adapter = TelegramAdapter.__new__(TelegramAdapter)
+                formatted = _adapter.format_message(message)
+            except Exception:
+                formatted = message
+            send_parse_mode = ParseMode.MARKDOWN_V2
+
+        try:
+            from gateway.platforms.base import resolve_proxy_url
+            _tg_proxy = resolve_proxy_url("TELEGRAM_PROXY", target_hosts=["api.telegram.org"])
+        except Exception:
+            _tg_proxy = None
+        if _tg_proxy:
+            try:
+                from telegram.request import HTTPXRequest
+                bot = Bot(token=token, request=HTTPXRequest(proxy=_tg_proxy),
+                          get_updates_request=HTTPXRequest(proxy=_tg_proxy))
+            except Exception:
+                bot = Bot(token=token)
+        else:
+            bot = Bot(token=token)
+
+        try:
+            msg = await bot.edit_message_text(
+                chat_id=int(chat_id), message_id=int(message_id),
+                text=formatted, parse_mode=send_parse_mode,
+            )
+        except Exception as md_error:
+            err = str(md_error).lower()
+            if "not modified" in err:
+                return {"success": True, "platform": "telegram",
+                        "chat_id": str(chat_id), "message_id": str(message_id),
+                        "note": "unchanged"}
+            if "parse" in err or "markdown" in err or "html" in err:
+                if not _has_html:
+                    try:
+                        from gateway.platforms.telegram import _strip_mdv2
+                        plain = _strip_mdv2(formatted)
+                    except Exception:
+                        plain = message
+                else:
+                    plain = message
+                msg = await bot.edit_message_text(
+                    chat_id=int(chat_id), message_id=int(message_id),
+                    text=plain, parse_mode=None,
+                )
+            else:
+                raise
+        return {"success": True, "platform": "telegram",
+                "chat_id": str(chat_id),
+                "message_id": str(getattr(msg, "message_id", message_id))}
+    except ImportError:
+        return {"error": "python-telegram-bot not installed. Run: pip install python-telegram-bot"}
+    except Exception as e:
+        return _error(f"Telegram edit failed: {e}")
 
 
 async def _send_slack(token, chat_id, message, thread_ts=None):

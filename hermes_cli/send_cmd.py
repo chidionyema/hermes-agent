@@ -342,11 +342,20 @@ def cmd_send(args: argparse.Namespace) -> None:
     # Signal/SMS/WhatsApp; live-adapter path for plugin platforms).
     #
     # It expects the standard tool-call dict and returns a JSON string.
-    tool_args = {
-        "action": "send",
-        "target": target,
-        "message": message,
-    }
+    edit_id = getattr(args, "edit_message_id", None)
+    if edit_id:
+        tool_args = {
+            "action": "edit",
+            "target": target,
+            "message": message,
+            "message_id": str(edit_id),
+        }
+    else:
+        tool_args = {
+            "action": "send",
+            "target": target,
+            "message": message,
+        }
 
     result = send_message_tool(tool_args)
     exit_code = _emit_result(
@@ -454,6 +463,17 @@ def register_send_subparser(subparsers) -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Emit raw JSON result instead of human-readable output.",
+    )
+
+    parser.add_argument(
+        "--edit-message-id",
+        metavar="ID",
+        dest="edit_message_id",
+        default=None,
+        help=(
+            "Edit an existing message in place (Telegram only) instead of "
+            "sending a new one. Use with --json to capture the message_id."
+        ),
     )
 
     parser.set_defaults(func=cmd_send)
