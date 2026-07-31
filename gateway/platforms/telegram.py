@@ -22,6 +22,77 @@ from typing import Dict, List, Optional, Set, Any
 
 logger = logging.getLogger(__name__)
 
+# Telegram callback_data has a hard 64-byte limit. When a builder accidentally produces a
+# longer one (a future knob name, a longer unit alias, a deeper prefix), the API call
+# fails silently in production — the operator sees a button that does nothing when tapped.
+# Catch it at panel-build time and log a hard error instead. UTF-8 byte length, not char
+# count — Telegram measures the wire format.
+TELEGRAM_CALLBACK_MAX_BYTES = 64
+
+
+def _safe_callback_data(cb: str) -> str:
+    """Return ``cb`` if it fits Telegram's 64-byte callback cap, else log and truncate.
+
+    Truncation is a last resort: a clipped callback almost certainly breaks the dispatch.
+    The error log is what makes the breakage visible. ``safe_callback_data`` MUST never
+    raise — it is called from inside the panel renderer and a single bad button must not
+    take the whole card down.
+    """
+    try:
+        encoded = (cb or "").encode("utf-8")
+    except Exception:
+        return ""
+    if len(encoded) <= TELEGRAM_CALLBACK_MAX_BYTES:
+        return cb or ""
+    logger.error(
+        "telegram: callback_data over 64 bytes (%d): %r — TRUNCATED, button will likely fail",
+        len(encoded), cb,
+    )
+    # Truncate to a safe byte boundary; mid-codepoint is rejected by Telegram too.
+    out = encoded[: TELEGRAM_CALLBACK_MAX_BYTES]
+    while out and (out[-1] & 0xC0) == 0x80:  # mid-multibyte
+        out = out[:-1]
+    return out.decode("utf-8", errors="replace")
+
+
+def _retry_after_seconds(exc: Exception) -> Optional[float]:
+    """How long Telegram said to wait, or None when it said nothing.
+
+    Two shapes reach us and both are on disk in the logs. ``telegram.error.RetryAfter``
+    carries a numeric ``retry_after``; but the same condition also arrives as a plain
+    exception whose text is "Flood control exceeded. Retry in 140 seconds" — for example
+    when it is re-raised through a wrapper, or re-parsed from a SendResult error string
+    such as ``flood_control:140.0``.
+
+    None must NOT be read as "retry now". It means we have no number and the caller
+    should fall back to its own backoff.
+    """
+    raw = getattr(exc, "retry_after", None)
+    if raw is None and isinstance(exc, str):
+        raw = None
+    if raw is not None:
+        try:
+            secs = float(getattr(raw, "total_seconds", lambda: raw)())
+        except (TypeError, ValueError):
+            try:
+                secs = float(raw)
+            except (TypeError, ValueError):
+                secs = None
+        if secs is not None and secs > 0:
+            return secs
+    text = exc if isinstance(exc, str) else str(exc)
+    m = re.search(r"retry(?:\s+after|\s+in)?[^0-9]{0,12}([0-9]+(?:\.[0-9]+)?)", text, re.I)
+    if not m:
+        m = re.search(r"flood_control:([0-9]+(?:\.[0-9]+)?)", text, re.I)
+    if m:
+        try:
+            secs = float(m.group(1))
+            return secs if secs > 0 else None
+        except ValueError:
+            return None
+    return None
+
+
 try:
     from telegram import Update, Bot, Message, InlineKeyboardButton, InlineKeyboardMarkup
     try:
@@ -2554,7 +2625,12 @@ class TelegramAdapter(BasePlatformAdapter):
                         else:
                             raise
                     except Exception as send_err:
-                        retry_after = getattr(send_err, "retry_after", None)
+                        # `retry_after` on the exception is the common shape, but the same
+                        # condition also arrives as text ("Flood control exceeded. Retry in
+                        # 140 seconds") when it comes back through a wrapper — and the
+                        # `"retry after"` substring test below never matched that wording,
+                        # so those fell through to `raise` with no wait at all.
+                        retry_after = _retry_after_seconds(send_err)
                         if retry_after is not None or "retry after" in str(send_err).lower():
                             if _send_attempt < 2:
                                 wait = float(retry_after) if retry_after is not None else 1.0
@@ -2751,7 +2827,15 @@ class TelegramAdapter(BasePlatformAdapter):
                     self.name, wait,
                 )
                 if wait > 5.0:
-                    return SendResult(success=False, error=f"flood_control:{wait}")
+                    # Hand the number up, don't just encode it in a string nobody
+                    # parses. The consumer's own backoff tops out at 10s, so a 140s
+                    # penalty used to be answered with a retry every 10s — 14 more
+                    # rejections, each one extending the lockout.
+                    return SendResult(
+                        success=False,
+                        error=f"flood_control:{wait}",
+                        retry_after=float(wait),
+                    )
                 await asyncio.sleep(wait)
                 try:
                     await self._bot.edit_message_text(
@@ -2872,11 +2956,19 @@ class TelegramAdapter(BasePlatformAdapter):
                 # send continuations.
                 pass
             else:
+                # Flood control reaches this branch too — 12 of the 56 rejections on
+                # 2026-07-31 were logged from exactly here. The non-overflow edit path
+                # above reads `retry_after`; this one used to discard it, so the
+                # longest answers (the ones most likely to trip the limit) were the
+                # ones whose backoff was blindest.
+                _ra = _retry_after_seconds(e)
                 logger.error(
-                    "[%s] Overflow split: first-chunk edit failed: %s",
-                    self.name, e, exc_info=True,
+                    "[%s] Overflow split: first-chunk edit failed: %s%s",
+                    self.name, e,
+                    f" (telegram says wait {_ra:.0f}s)" if _ra else "",
+                    exc_info=True,
                 )
-                return SendResult(success=False, error=str(e))
+                return SendResult(success=False, error=str(e), retry_after=_ra)
 
         # Step 2 — send each remaining chunk as a continuation message,
         # threaded as a reply to the previous so the user sees them as a
@@ -2886,6 +2978,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # fallback, mirroring send().
         continuation_ids: list[str] = []
         delivered_chunks = [first_chunk]
+        cont_retry_after: Optional[float] = None
         prev_id = message_id
         thread_id = self._metadata_thread_id(metadata)
         for chunk in chunks[1:]:
@@ -2948,9 +3041,11 @@ class TelegramAdapter(BasePlatformAdapter):
                     if use_markdown:
                         # try plain text on next loop iteration
                         continue
+                    cont_retry_after = _retry_after_seconds(send_err)
                     logger.warning(
-                        "[%s] Overflow continuation send failed: %s",
+                        "[%s] Overflow continuation send failed: %s%s",
                         self.name, send_err,
+                        f" (telegram says wait {cont_retry_after:.0f}s)" if cont_retry_after else "",
                     )
                     sent_msg = None
                     break
@@ -2974,6 +3069,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     message_id=prev_id,
                     error="overflow_continuation_failed",
                     retryable=True,
+                    retry_after=cont_retry_after,
                     raw_response={
                         "partial_overflow": True,
                         "delivered_chunks": 1 + len(continuation_ids),
@@ -4223,13 +4319,48 @@ class TelegramAdapter(BasePlatformAdapter):
                 from gateway.operator_shell.estate import handle_estate_action
                 from gateway.operator_shell.proof import save_mission_card
 
-                # Telegram callback query id is unique per tap — idempotency key.
+                # Answer the callback query IMMEDIATELY — Telegram only gives ~15s before
+                # the query id expires. Slow handlers (store status probes Stripe, builds
+                # hits GitHub) can take 60s+. Without this ack, the edit_message_text below
+                # fails with "Query is too old" and the button tap appears to do nothing.
                 rid = str(getattr(query, "id", "") or "")
+                # answer() itself throws "Query is too old" when the loop was busy for >15s
+                # before this handler ran. That is not a reason to abandon the tap: the work
+                # below is still worth doing, and the card edit does not depend on the query
+                # id. Swallowing it here is what keeps a congested moment from turning into a
+                # dead button. 36 such failures were logged on 2026-07-31, spread across the
+                # whole day rather than clustered on restarts.
+                answered = False
+                try:
+                    await query.answer(text="…")
+                    answered = True
+                except Exception:
+                    pass
+
+                # Edit the message body with a "Loading…" indicator so the operator
+                # sees immediate feedback in the card itself, not only the toast bubble.
+                # Best-effort: the message might be too old to edit by now, or the chat
+                # might be a private DM with a deleted message. Failure here is silent.
+                #
+                # The KEYBOARD IS KEPT. Dropping it (reply_markup=None) is what turned a slow
+                # or failing action into a bricked cockpit: this is the pinned single-window
+                # card, so a "⏳ Loading…" with no buttons leaves the operator with no way
+                # out and nothing to tap — "most of the panel features dont work, just says
+                # loading and nothing happens" (founder, 2026-07-31). Leaving the old buttons
+                # up costs a re-tap of a stale action at worst; removing them costs the whole
+                # cockpit until someone remembers to type /panel.
+                loading_text = "⏳ *Loading…*"
+                previous_markup = getattr(query.message, "reply_markup", None)
+                try:
+                    await query.edit_message_text(
+                        text=self.format_message(loading_text),
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=previous_markup,
+                    )
+                except Exception:
+                    pass
+
                 view = await asyncio.to_thread(handle_estate_action, action, rid)
-                if view.toast:
-                    await query.answer(text=view.toast[:200])
-                else:
-                    await query.answer()
 
                 # Side effects that need the adapter / gateway runner
                 if getattr(view, "needs_cron_topic_setup", False):
@@ -4279,7 +4410,39 @@ class TelegramAdapter(BasePlatformAdapter):
                         pass
             except Exception as exc:
                 logger.error("[%s] estate callback query failed: %s", self.name, exc, exc_info=True)
-                await query.answer(text="⚠️ Action failed.")
+                # Two things must happen here, and neither did before.
+                #
+                # 1. Do not re-answer. The query was already answered above, so this second
+                #    call raises "Query is too old ... or query id is invalid" — FROM INSIDE
+                #    the handler that exists to contain failures. That exception propagated,
+                #    which is precisely why the card was left showing "⏳ Loading…": the
+                #    recovery path was itself the thing that crashed.
+                # 2. Put the card back. The operator is staring at a Loading spinner that
+                #    will never resolve; a toast bubble they may not even see is not a
+                #    recovery. Rewriting the card with the error AND a working spine is the
+                #    difference between "that action failed" and "the cockpit is gone".
+                if not answered:
+                    try:
+                        await query.answer(text="⚠️ Action failed.")
+                    except Exception:
+                        pass
+                try:
+                    from gateway.operator_shell.panel_chrome import nav
+
+                    await query.edit_message_text(
+                        text=self.format_message(
+                            f"⚠️ *Action failed* — `{action}`\n\n"
+                            f"`{str(exc)[:200]}`\n\n"
+                            "_The estate is unchanged. Pick a panel below._"
+                        ),
+                        parse_mode=ParseMode.MARKDOWN_V2,
+                        reply_markup=InlineKeyboardMarkup(
+                            [[InlineKeyboardButton(l, callback_data=_safe_callback_data(c))
+                              for l, c in nav()]]
+                        ),
+                    )
+                except Exception:
+                    logger.exception("[%s] estate callback: could not restore the card", self.name)
             return
 
         # --- Clarify callbacks (cl:clarify_id:idx | cl:clarify_id:other) ---
@@ -6129,7 +6292,7 @@ class TelegramAdapter(BasePlatformAdapter):
         for row in getattr(view, "buttons", None) or []:
             rows.append(
                 [
-                    InlineKeyboardButton(label, callback_data=callback)
+                    InlineKeyboardButton(label, callback_data=_safe_callback_data(callback))
                     for label, callback in row
                 ]
             )
