@@ -14,6 +14,8 @@ from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from gateway.operator_shell.panel_chrome import nav
+
 ButtonRow = List[Tuple[str, str]]
 
 _FENCE_RE = re.compile(
@@ -175,7 +177,7 @@ def start_code_run(body: str, created_by: str = "telegram") -> Tuple[str, str, L
                     (f"✅ APPROVE {tid[:8]}", f"estate:approve:{tid[:8]}"),
                     (f"👁 Status", f"estate:task:{tid[:8]}"),
                 ],
-                [("📥 Inbox", "estate:inbox"), ("🎛 Mission", "estate:refresh")],
+                nav(),
             ]
             C.progress_notify(conn, C.get_task(conn, tid), ack)
             return ack, tid, buttons
@@ -197,7 +199,9 @@ def start_code_run(body: str, created_by: str = "telegram") -> Tuple[str, str, L
                 (f"👁 {tid[:8]}", f"estate:task:{tid[:8]}"),
                 (f"🛑 Cancel", f"estate:cancel:{tid[:8]}"),
             ],
-            [("⏸ Pause", f"estate:pause_task:{tid[:8]}"), ("🎛 Mission", "estate:refresh")],
+            # Pause halts a running remote task — not beside a navigation button.
+            [("⏸ Pause", f"estate:pause_task:{tid[:8]}")],
+            nav(),
         ]
         return ack, tid, buttons
     finally:
@@ -240,7 +244,7 @@ def render_task_card(ref: str) -> Tuple[str, List[ButtonRow]]:
         if not rows:
             return (
                 f"No task matching `{ref}`",
-                [[("🎛 Mission", "estate:refresh"), ("📥 Inbox", "estate:inbox")]],
+                [nav()],
             )
         t = rows[0]
         tid = t["id"]
@@ -306,9 +310,7 @@ def render_task_card(ref: str) -> Tuple[str, List[ButtonRow]]:
                     (f"🛑 Cancel", f"estate:cancel:{tid[:8]}"),
                 ]
             )
-        buttons.append(
-            [("🔄 Refresh", f"estate:task:{tid[:8]}"), ("🎛 Mission", "estate:refresh")]
-        )
+        buttons.append(nav(f"task:{tid[:8]}"))
         return text, buttons
     finally:
         conn.close()
@@ -322,11 +324,11 @@ def cancel_task(ref: str) -> Tuple[str, List[ButtonRow]]:
             "SELECT * FROM tasks WHERE id LIKE ? LIMIT 1", (f"{ref}%",)
         ).fetchall()
         if not rows:
-            return f"No task `{ref}`", [[("🎛 Mission", "estate:refresh")]]
+            return f"No task `{ref}`", [nav()]
         t = rows[0]
         tid = t["id"]
         if t["status"] == "done":
-            return f"`{tid[:8]}` already done", [[("🎛 Mission", "estate:refresh")]]
+            return f"`{tid[:8]}` already done", [nav()]
         C.add_event(conn, tid, "cancelled", "founder cancel via Telegram")
         C._set(conn, tid, status="done", completed_at=time.time(),
                result=(t["result"] or "") + "\n[cancelled by founder]")
@@ -337,7 +339,7 @@ def cancel_task(ref: str) -> Tuple[str, List[ButtonRow]]:
             pass
         msg = f"🛑 Cancelled `{tid[:8]}` — {t['title'][:50]}"
         C.progress_notify(conn, C.get_task(conn, tid) or t, msg)
-        return msg, [[("🎛 Mission", "estate:refresh"), ("📥 Inbox", "estate:inbox")]]
+        return msg, [nav()]
     finally:
         conn.close()
 
@@ -351,7 +353,7 @@ def pause_task(ref: str) -> Tuple[str, List[ButtonRow]]:
             "SELECT * FROM tasks WHERE id LIKE ? LIMIT 1", (f"{ref}%",)
         ).fetchall()
         if not rows:
-            return f"No task `{ref}`", [[("🎛 Mission", "estate:refresh")]]
+            return f"No task `{ref}`", [nav()]
         t = rows[0]
         tid = t["id"]
         if t["status"] not in ("open", "diagnosed", "executing", "verifying"):
@@ -382,7 +384,7 @@ def steer_prompt_card(ref: str) -> Tuple[str, List[ButtonRow]]:
         f"Example: `Otto steer {ref} only touch tests, no prod code`",
         [
             [(f"👁 Status", f"estate:task:{ref}")],
-            [("🎛 Mission", "estate:refresh")],
+            nav(),
         ],
     )
 
@@ -395,7 +397,7 @@ def steer_task(ref: str, instruction: str) -> Tuple[str, List[ButtonRow]]:
             "SELECT * FROM tasks WHERE id LIKE ? LIMIT 1", (f"{ref}%",)
         ).fetchall()
         if not rows:
-            return f"No task `{ref}`", [[("🎛 Mission", "estate:refresh")]]
+            return f"No task `{ref}`", [nav()]
         t = rows[0]
         tid = t["id"]
         body = (t["body"] or "") + f"\n\nSTEER ({time.strftime('%H:%M')}): {instruction.strip()}"

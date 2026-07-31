@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from gateway.operator_shell.panel_chrome import nav
 
 logger = logging.getLogger(__name__)
 
@@ -74,18 +77,48 @@ def _git_short(repo: Path) -> str:
         return "unverified"
 
 
-def _status_report(key: str) -> str:
+_BLOCKER_WORD = re.compile(r"\b(blocker|blocked|next step|next up)\b", re.I)
+# Headings whose body IS a status statement, best first. These reports are graphify
+# ARCHITECTURE analyses, not status reports — most carry no status section at all, and the
+# old code's "first line of the file" rule is what turned that absence into a fake blocker.
+_STATUS_HEADINGS = (
+    (re.compile(r"^#{1,4}\s*Suggested next objective", re.I), "next"),
+    (re.compile(r"^#{1,4}\s*Status read", re.I), "status"),
+)
+
+
+def _status_report(key: str) -> Tuple[str, str]:
+    """Return (label, line) — or ("", "") when the report says nothing about status.
+
+    The label travels with the text on purpose. The panel used to print everything under
+    "blocker:", so a report with no blockers still showed one:
+
+        blocker: ---
+        blocker: - **Analysis Source File**: [graphify-out/.graphify_ana
+        blocker: This status report is generated from the structural…
+
+    None of those is a blocker. A field that is wrong whenever it is non-empty is worse than
+    a field that is absent, because it is still read.
+    """
     path = _hermes_home() / "reports" / f"project-status-{key}.md"
     if not path.is_file():
-        return ""
+        return "", ""
     try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for line in text.splitlines():
-            if line.strip().startswith("-") or "blocker" in line.lower():
-                return line.strip()[:60]
-        return text.strip().splitlines()[0][:60] if text.strip() else ""
+        from gateway.operator_shell.panel_chrome import first_meaningful_line
+
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for pattern, label in _STATUS_HEADINGS:
+            for i, line in enumerate(lines):
+                if pattern.match(line.strip()):
+                    body = first_meaningful_line("\n".join(lines[i + 1 : i + 8]))
+                    if body:
+                        return label, body
+        for line in lines:
+            if _BLOCKER_WORD.search(line) and line.strip(" -*#_"):
+                return "blocker", first_meaningful_line(line)
+        return "", ""
     except Exception:
-        return ""
+        return "", ""
 
 
 def _inflight(key: str) -> int:
@@ -116,12 +149,22 @@ def render_fleet() -> Tuple[str, List[ButtonRow]]:
         h = health.get(key) or health.get(repo.name.lower() if repo.parts else "") or {}
         state = h.get("state") or git
         inflight = _inflight(key)
-        blocker = _status_report(key) or ("—" if state in ("clean", "pass") else str(state))
-        emoji = "🟢" if state in ("clean", "pass", "ok") and inflight == 0 else (
-            "🟡" if inflight else "🔴" if "dirty" in str(state) or state == "fail" else "⚪"
-        )
+        note_label, note = _status_report(key)
+        # 🔴 is reserved for something that is actually broken. An uncommitted working tree is
+        # the normal state of a repo several agents are editing — every project showed red on
+        # dirty() alone, so red carried no information at all. Same failure as a probe that is
+        # permanently red: it stops being read.
+        if state == "fail":
+            emoji = "🔴"
+        elif inflight:
+            emoji = "🟡"
+        elif state in ("clean", "pass", "ok"):
+            emoji = "🟢"
+        else:
+            emoji = "⚪"
         lines.append(f"{emoji} *{label}* · {state} · inflight {inflight}")
-        lines.append(f"   next/blocker: {blocker[:55]}")
+        if note:
+            lines.append(f"   {note_label}: {note}")
         lines.append("")
 
     buttons: List[ButtonRow] = [
@@ -138,9 +181,9 @@ def render_fleet() -> Tuple[str, List[ButtonRow]]:
             ("⚙️ Estate daemons", "estate:daemons"),
         ],
         [
-            ("📥 Inbox", "estate:inbox"),
-            ("🎛 Mission", "estate:refresh"),
+            ("🛒 Store", "estate:st_status"),
         ],
+        nav("fleet"),
     ]
     # Prefixed glance for daemon health. Signal Engine goes first: it is the money
     # rail, and it is the one that spent 37 days dead without anyone seeing it.
@@ -164,5 +207,11 @@ def render_fleet() -> Tuple[str, List[ButtonRow]]:
     if glances:
         for offset, line in enumerate(glances):
             lines.insert(1 + offset, line)
-        lines.insert(1 + len(glances), "")
-    return "\n".join(lines).rstrip(), buttons
+    # Collapse runs of blank lines. The glance block and the header each contribute their own
+    # separator, so the panel opened with a double gap on every render.
+    out: List[str] = []
+    for line in lines:
+        if not line and (not out or not out[-1]):
+            continue
+        out.append(line)
+    return "\n".join(out).rstrip(), buttons

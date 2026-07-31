@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+from gateway.operator_shell.panel_chrome import nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -320,14 +321,11 @@ def render_host_panel() -> Tuple[str, List[ButtonRow]]:
         lines.append("")
         lines.append("Reasons: " + " · ".join(p["reasons"]))
 
+    # Keep-awake starts a real background process, so it gets a row to itself rather than
+    # sitting beside a navigation button a thumb is aiming for.
     buttons: List[ButtonRow] = [
-        [
-            ("▶️ Start keep-awake", "estate:host_keepawake_start"),
-            ("🔄 Refresh", "estate:host"),
-        ],
-        [
-            ("⚙️ Daemons", "estate:daemons"),
-            ("🎛 Mission", "estate:refresh"),
-        ],
+        [("▶️ Start keep-awake", "estate:host_keepawake_start")],
+        [("⚙️ Daemons", "estate:daemons")],
+        nav("host"),
     ]
     return "\n".join(lines), buttons

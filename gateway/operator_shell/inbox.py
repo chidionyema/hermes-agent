@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import List, Tuple
 
+from gateway.operator_shell.panel_chrome import nav
+
 logger = logging.getLogger(__name__)
 
 ButtonRow = List[Tuple[str, str]]
@@ -50,11 +52,8 @@ def render_inbox() -> Tuple[str, List[ButtonRow]]:
         return (
             "📥 *Inbox* — clear\n\nNothing needs you.",
             [
-                [
-                    ("🎛 Mission", "estate:refresh"),
-                    ("🧠 RSI", "estate:rsi"),
-                    ("🚀 Fleet", "estate:fleet"),
-                ]
+                [("🧠 RSI", "estate:rsi"), ("🚀 Fleet", "estate:fleet")],
+                nav("inbox"),
             ],
         )
 
@@ -102,11 +101,6 @@ def render_inbox() -> Tuple[str, List[ButtonRow]]:
         lines.append("_Usually Claude quota — see mission card blocker._")
         lines.append("")
 
-    buttons.append(
-        [
-            ("🎛 Mission", "estate:refresh"),
-            ("🧠 RSI", "estate:rsi"),
-            ("🚀 Fleet", "estate:fleet"),
-        ]
-    )
+    buttons.append([("🧠 RSI", "estate:rsi"), ("🚀 Fleet", "estate:fleet")])
+    buttons.append(nav("inbox"))
     return "\n".join(lines).strip(), buttons

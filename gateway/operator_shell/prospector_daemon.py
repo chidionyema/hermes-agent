@@ -20,6 +20,8 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from gateway.operator_shell.panel_chrome import nav
+
 ButtonRow = List[Tuple[str, str]]
 
 REPO = Path.home() / "Documents" / "code" / "prospector"
@@ -479,8 +481,9 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
             ("💵 cap $20", "estate:pd_set:daily_cap:20"),
             ("💵 cap $40", "estate:pd_set:daily_cap:40"),
         ],
-        [pause_btn, ("🔄 Refresh", "estate:pd_params")],
+        [pause_btn],
         [("⚙️ Daemon", "estate:prospector_daemon"), ("🗓 Cron", "estate:pd_cron")],
+        nav("pd_params"),
     ]
     return "\n".join(lines), buttons
 
@@ -604,12 +607,9 @@ def render_cron() -> Tuple[str, List[ButtonRow]]:
                 ]
             )
     buttons.append(
-        [
-            ("🔄 Refresh", "estate:pd_cron"),
-            ("⚙️ Daemon", "estate:prospector_daemon"),
-            ("⚙️ Params", "estate:pd_params"),
-        ]
+        [("⚙️ Daemon", "estate:prospector_daemon"), ("⚙️ Params", "estate:pd_params")]
     )
+    buttons.append(nav("pd_cron"))
     return "\n".join(lines), buttons
 
 
@@ -639,7 +639,7 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
         return (
             "⚙️ *Prospector daemon*\n\n"
             "⚫ repo missing at `~/Documents/code/prospector` — not wired.",
-            [[("🎛 Mission", "estate:refresh"), ("🚀 Fleet", "estate:fleet")]],
+            [[("🚀 Fleet", "estate:fleet")], nav()],
         )
 
     now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -661,7 +661,7 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
     if not any_installed:
         lines.append("_No plists — founder must install from deploy/_")
         return "\n".join(lines), [
-            [("🚀 Fleet", "estate:fleet"), ("🎛 Mission", "estate:refresh")]
+            [("🚀 Fleet", "estate:fleet")], nav()
         ]
 
     lines.extend(_params_lines())
@@ -715,11 +715,11 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
             ("🗓 Cron", "estate:pd_cron"),
             ("📜 Logs", "estate:pd_logs:scheduler"),
         ],
-        [
-            ("▶️ Run watch", "estate:pd_run_now:watchdog"),
-            ("🔄 Refresh", "estate:prospector_daemon"),
-            ("🚀 Fleet", "estate:fleet"),
-        ],
+        # Run watch kicks off a real watchdog run. It sat between Refresh and Fleet, so the
+        # two buttons most likely to be tapped without looking bracketed a live action.
+        [("▶️ Run watch", "estate:pd_run_now:watchdog")],
+        [("🚀 Fleet", "estate:fleet")],
+        nav("prospector_daemon"),
     ]
     if cta:
         buttons.insert(0, [cta])
@@ -744,10 +744,8 @@ def render_logs(unit_arg: str = "scheduler") -> Tuple[str, List[ButtonRow]]:
             lines.append(_tail_lines((path,), n=8))
         lines.append("")
     buttons: List[ButtonRow] = [
-        [
-            ("⚙️ Daemon", "estate:prospector_daemon"),
-            ("🔄 Refresh logs", f"estate:pd_logs:{short}"),
-        ]
+        [("⚙️ Daemon", "estate:prospector_daemon")],
+        nav(f"pd_logs:{short}"),
     ]
     return "\n".join(lines).rstrip(), buttons
 

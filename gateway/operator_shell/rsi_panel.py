@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+from gateway.operator_shell.panel_chrome import nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -238,11 +239,8 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
     )
     buttons: List[ButtonRow] = [
         [primary],
-        [arm_btn, ("🔄 Refresh", "estate:rsi")],
-        [
-            ("📥 Inbox", "estate:inbox"),
-            ("🎛 Mission", "estate:refresh"),
-            ("⛽ Fuel", "estate:system_fuel"),
-        ],
+        [arm_btn],
+        [("⛽ Fuel", "estate:system_fuel")],
+        nav("rsi"),
     ]
     return text, buttons

@@ -37,6 +37,8 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from gateway.operator_shell.panel_chrome import nav
+
 ButtonRow = List[Tuple[str, str]]
 
 REPO = Path.home() / "Documents" / "code" / "signalengine"
@@ -618,7 +620,7 @@ def render_signal_engine() -> Tuple[str, List[ButtonRow]]:
         return (
             "💹 *Signal Engine*\n\n"
             "⚫ repo missing at `~/Documents/code/signalengine` — not wired.",
-            [[("🎛 Mission", "estate:refresh"), ("🚀 Fleet", "estate:fleet")]],
+            [[("🚀 Fleet", "estate:fleet")], nav()],
         )
 
     h = health()
@@ -657,12 +659,9 @@ def render_signal_engine() -> Tuple[str, List[ButtonRow]]:
         ]
     )
     buttons.append(
-        [
-            ("🔄 Refresh", "estate:signal_engine"),
-            ("⚙️ Prospector", "estate:prospector_daemon"),
-            ("🚀 Fleet", "estate:fleet"),
-        ]
+        [("⚙️ Prospector", "estate:prospector_daemon"), ("🚀 Fleet", "estate:fleet")]
     )
+    buttons.append(nav("signal_engine"))
     return "\n".join(lines).rstrip(), buttons
 
 
@@ -728,12 +727,13 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
             ("stop 10%", "estate:se_set:stop_loss:0.10"),
             ("llm $1", "estate:se_set:llm_cap:1"),
         ],
+        # feed on/off switches a LIVE market feed — no navigation button beside it.
         [
             ("📡 feed on", "estate:se_set:live_feed:true"),
             ("📴 feed off", "estate:se_set:live_feed:false"),
-            ("🔄 Refresh", "estate:se_params"),
         ],
         [("💹 Daemon", "estate:signal_engine"), ("📜 Logs", "estate:se_logs")],
+        nav("se_params"),
     ]
     return "\n".join(lines), buttons
 
@@ -846,8 +846,9 @@ def render_logs() -> Tuple[str, List[ButtonRow]]:
             lines.append(_tail_lines((path,), n=8))
         lines.append("")
     return "\n".join(lines).rstrip(), [
-        [("💹 Daemon", "estate:signal_engine"), ("🔄 Refresh", "estate:se_logs")],
-        [("💰 Knobs", "estate:se_params"), ("🚀 Fleet", "estate:fleet")],
+        [("💹 Daemon", "estate:signal_engine"), ("💰 Knobs", "estate:se_params")],
+        [("🚀 Fleet", "estate:fleet")],
+        nav("se_logs"),
     ]
 
 

@@ -14,6 +14,8 @@ from typing import Any, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from gateway.operator_shell.panel_chrome import nav
+
 ButtonRow = List[Tuple[str, str]]
 
 
@@ -252,11 +254,8 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         except Exception:
             text = "🚀 *Missions*\n\nBoard unavailable — try `/missions` or tap Fleet."
         buttons = [
-            [
-                ("🎛 Mission", "estate:refresh"),
-                ("📥 Inbox", "estate:inbox"),
-                ("🚀 Fleet", "estate:fleet"),
-            ]
+            [("🚀 Fleet", "estate:fleet")],
+            nav("missions"),
         ]
         return _finish(
             PanelView(
@@ -990,7 +989,8 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         view.buttons = [
             [("✅ Keep cron in this chat", "estate:cron_use_main_dm")],
             [("🔄 Try create topic anyway", "estate:setup_cron_topic_force")],
-            [("🚀 Missions", "estate:missions"), ("🎛 Mission", "estate:refresh")],
+            [("🚀 Missions", "estate:missions")],
+            nav(),
         ]
         return _finish(view)
 
@@ -1077,7 +1077,7 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         return _finish(
             PanelView(
                 text=text,
-                buttons=[[("📥 Inbox", "estate:inbox"), ("🎛 Mission", "estate:refresh")]],
+                buttons=[nav()],
                 toast="Detail",
             )
         )
@@ -1155,7 +1155,7 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
                 "Set `NTFY_TOPIC=your-private-topic` in ~/.hermes/.env "
                 "(+ `OPERATOR_SHELL_ALWAYS_NTFY=1` to always fan out).\n"
             )
-        buttons = [[("🎛 Mission", "estate:refresh")]]
+        buttons = [nav()]
         if not ok:
             buttons.insert(0, [("🔓 Override budget", "estate:budget_override")])
         return _finish(
@@ -1182,7 +1182,7 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         return _finish(
             PanelView(
                 text=msg,
-                buttons=[[("🎛 Mission", "estate:refresh")]],
+                buttons=[nav()],
                 toast="Active",
             )
         )
@@ -1198,7 +1198,7 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         return _finish(
             PanelView(
                 text=msg,
-                buttons=[[("🎛 Mission", "estate:refresh")]],
+                buttons=[nav()],
                 toast="Logs",
             )
         )
@@ -1209,7 +1209,7 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         return _finish(
             PanelView(
                 text=format_cron_command("list"),
-                buttons=[[("🎛 Mission", "estate:refresh")]],
+                buttons=[nav()],
                 toast="Cron",
             )
         )

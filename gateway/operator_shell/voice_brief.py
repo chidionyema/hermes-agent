@@ -7,6 +7,7 @@ import re
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+from gateway.operator_shell.panel_chrome import nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -61,11 +62,8 @@ def render_executive_brief() -> Tuple[str, List[ButtonRow]]:
         )
     # Brief buttons: keep mission row0 + RSI shortcut
     brief_buttons: List[ButtonRow] = [
-        buttons[0] if buttons else [("🎛 Mission", "estate:refresh")],
-        [
-            ("🧠 RSI", "estate:rsi"),
-            ("📥 Inbox", "estate:inbox"),
-            ("🎛 Mission", "estate:refresh"),
-        ],
+        buttons[0] if buttons else [("🚀 Fleet", "estate:fleet")],
+        [("🧠 RSI", "estate:rsi")],
+        nav(),
     ]
     return "\n".join(lines), brief_buttons

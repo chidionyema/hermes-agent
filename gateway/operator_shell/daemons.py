@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+from gateway.operator_shell.panel_chrome import nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -371,10 +372,7 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
             ("⚙️ Prospect daemons", "estate:prospector_daemon"),
             ("💹 Signal Engine", "estate:signal_engine"),
         ],
-        [
-            ("🔄 Refresh", "estate:daemons"),
-            ("🎛 Mission", "estate:refresh"),
-        ],
+        nav("daemons"),
     ]
     # TIE if installed
     if (_plist_dir() / "com.tie.ai-review.plist").is_file():

@@ -12,6 +12,8 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from gateway.operator_shell.panel_chrome import clip, nav
+
 ButtonRow = List[Tuple[str, str]]
 
 
@@ -113,7 +115,7 @@ def _verdict(conn, C) -> Tuple[str, str]:
         return "🟢 CLEAR", "go"
     except Exception as exc:
         logger.warning("verdict failed: %s", exc)
-        return "🔴 UNKNOWN", str(exc)[:60]
+        return "🔴 UNKNOWN", clip(str(exc))
 
 
 def _burn_today(conn, C) -> str:
@@ -137,7 +139,7 @@ def _top_blocker(conn, C) -> str:
             if fences:
                 return (
                     f"APPROVE [{(fences['risk_class'] or '').upper()}] "
-                    f"`{fences['id'][:8]}` {fences['title'][:32]}"
+                    f"`{fences['id'][:8]}` {clip(fences['title'], 32)}"
                 )
         except Exception:
             pass
@@ -147,14 +149,14 @@ def _top_blocker(conn, C) -> str:
             tag = "APPROVE" if d["status"] == "awaiting_approval" else "BLOCKED"
             risk = (d["risk_class"] or "").upper()
             risk_bit = f" [{risk}]" if risk in ("MONEY", "IDENTITY") else ""
-            return f"{tag}{risk_bit} `{d['id'][:8]}` {d['title'][:36]}"
+            return f"{tag}{risk_bit} `{d['id'][:8]}` {clip(d['title'], 36)}"
         # Blocked product missions (often quota) — surface on card
         try:
             import flight
 
             for m in flight.list_missions(conn):
                 if m["status"] == "blocked":
-                    return f"MISSION `{m['id'][:8]}` {m['name'][:28]} blocked (quota?)"
+                    return f"MISSION `{m['id'][:8]}` {clip(m['name'], 28)} blocked (quota?)"
         except Exception:
             pass
         claude_ok, agy_ok, cb_detail = _cb_bits(C)
@@ -183,7 +185,12 @@ def _product_line(conn, C) -> str:
             if not cur:
                 continue
             st = m["status"].upper()
-            return f"🚀 `{m['name'][:18]}` {st} · M{cur['seq']+1}: {cur['title'][:28]}"
+            # clip(), not [:28] — the raw slice cut mid-word with no marker, so a clipped
+            # milestone ("M4: Land the acceptance test as") read as a complete sentence.
+            return (
+                f"🚀 `{clip(m['name'], 18)}` {st} · "
+                f"M{cur['seq']+1}: {clip(cur['title'], 28)}"
+            )
     except Exception:
         pass
     return ""
@@ -322,22 +329,23 @@ def mission_buttons(paused: bool, primary: Tuple[str, str]) -> List[ButtonRow]:
             [
                 ("🧠 RSI", "estate:rsi"),
                 ("🏗 CI", "estate:builds"),
-                ("📥 Inbox", "estate:inbox"),
-            ],
-            [
-                pause_or_resume,
                 ("🚀 Fleet", "estate:fleet"),
-                ("⚙️ Daemons", "estate:daemons"),
             ],
             [
-                ("🔄 Refresh", "estate:refresh"),
-                ("⛽ Fuel", "estate:system_fuel"),
+                ("⚙️ Daemons", "estate:daemons"),
+                ("🛒 Store", "estate:st_status"),
                 (
                     ("🗓 Cron ✓", "estate:setup_cron_topic")
                     if cron_ok
                     else ("🚀 Missions", "estate:missions")
                 ),
             ],
+            # Pause/Resume halts (or restarts) ALL estate spend. It used to sit between Fleet
+            # and Daemons — two of the most-tapped buttons on the card. Its own row.
+            [pause_or_resume, ("⛽ Fuel", "estate:system_fuel")],
+            # The root screen carries the same bottom row as every sub-panel, so the three
+            # navigation positions mean the same thing on literally every screen.
+            nav("refresh"),
         ]
     )
     return rows

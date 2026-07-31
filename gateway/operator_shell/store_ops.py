@@ -30,6 +30,8 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
+from gateway.operator_shell.panel_chrome import nav
+
 ButtonRow = List[Tuple[str, str]]
 
 REPO = Path.home() / "Documents" / "code" / "prospector"
@@ -41,7 +43,8 @@ _TIMEOUT = {"status": 240, "health": 300, "reconcile": 240, "money": 900}
 
 _BUTTONS: List[ButtonRow] = [
     [("🔄 Store status", "estate:st_status"), ("🩺 Health", "estate:st_health")],
-    [("🧾 Reconcile", "estate:st_reconcile"), ("📋 Panel", "estate:refresh")],
+    [("🧾 Reconcile", "estate:st_reconcile"), ("💰 Money paths", "estate:st_money")],
+    nav("st_status"),
 ]
 
 

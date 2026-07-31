@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+from gateway.operator_shell.panel_chrome import nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -233,12 +234,11 @@ def render_builds() -> Tuple[str, List[ButtonRow]]:
         lines.append("→ *CI clear — refresh anytime*")
         primary = ("🔄 Refresh CI", "estate:builds")
 
+    # `primary` is the recommended next tap and is also printed in the text above. Both of its
+    # non-auth values are `estate:builds`, which the nav row's Refresh already is, so keeping it
+    # here would put the same destination on screen twice.
     buttons: List[ButtonRow] = [
-        [primary],
-        [
-            ("🚀 Fleet", "estate:fleet"),
-            ("🎛 Mission", "estate:refresh"),
-            ("📥 Inbox", "estate:inbox"),
-        ],
+        [("🚀 Fleet", "estate:fleet")],
+        nav("builds"),
     ]
     return "\n".join(lines), buttons
