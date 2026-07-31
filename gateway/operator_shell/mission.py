@@ -341,10 +341,26 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
 # The surfaces that are always worth one tap, whatever is happening. This is deliberately a
 # fixed grid and not state-driven: the concern rows above it already change with the estate,
 # and if the stable part moved too there would be no position on the card a thumb could learn.
+#
+# Each ROW is one domain, so the position is learnable as well as fixed. The previous order
+# put Fleet (work), Store (money) and Inbox (decisions) side by side in row one and split
+# Daemons from RSI across two rows — nine self-describing tiles, but in an order that taught
+# nothing, so finding one still meant reading all nine.
+#
+#   row 1  money and output — what the estate is FOR
+#   row 2  work in flight   — what it is DOING
+#   row 3  the machine      — what it RUNS ON
+#
+# No legend line above this grid, unlike Run. Run needed one because its buttons are verbs
+# whose scope is ambiguous — it ships two buttons both labelled "♻️ Restart". Every tile here
+# is a unique noun that names its own destination, so a legend would add three lines of text
+# and no information, and this card is the one screen where lines are genuinely scarce:
+# `_MAX_CONCERNS` exists precisely because a fourth full-width row pushes this grid off the
+# first screen on a phone.
 _SURFACES: List[ButtonRow] = [
-    [("🚀 Fleet", "estate:fleet"), ("🛒 Store", "estate:st_status"), ("📥 Inbox", "estate:inbox")],
-    [("⚙️ Daemons", "estate:daemons"), ("📋 Missions", "estate:missions"), ("🏗 CI", "estate:builds")],
-    [("🧠 RSI", "estate:rsi"), ("🗓 Cron", "estate:pd_cron"), ("📸 Changed", "estate:diff")],
+    [("🛒 Store", "estate:st_status"), ("🗓 Cron", "estate:pd_cron"), ("📥 Inbox", "estate:inbox")],
+    [("🚀 Fleet", "estate:fleet"), ("📋 Missions", "estate:missions"), ("🏗 CI", "estate:builds")],
+    [("⚙️ Daemons", "estate:daemons"), ("🧠 RSI", "estate:rsi"), ("📸 Changed", "estate:diff")],
 ]
 
 _MAX_CONCERNS = 3
@@ -469,7 +485,10 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
     except Exception:
         se_line = ""
 
+    from datetime import datetime, timezone
+    edit_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     lines = [
+        f"_{edit_iso} · auto-refresh · say `now` to force_",
         f"*{verdict}* — {detail}",
         host_line,
         f"💰 `{burn}`  ·  📈 {prod}",
