@@ -21,6 +21,7 @@ daily files so a read never has to parse history it does not need.
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from collections import Counter
@@ -33,6 +34,58 @@ from typing import Any, Dict, List, Optional, Tuple
 _STATUS_RE = re.compile(r"\*([A-Z_]+)\*")
 
 _RETENTION_DAYS = 90
+
+# Which process wrote a row. Without this the log cannot be used as evidence: on the day it
+# shipped, 489 rows accumulated and **only 56 were real operator taps** — the rest were BFS
+# reachability probes and test sweeps calling `handle_estate_action` directly, which is the
+# same funnel a real tap goes through and therefore indistinguishable after the fact. A
+# frequency-ranked layout built on that file would have been ranking its own instrumentation.
+#
+# Attribution is mechanical, not cooperative: a real tap is dispatched inside the gateway
+# process, and every probe and test runs in its own interpreter. Nothing has to remember to
+# declare itself.
+_GW_PID_TTL = 30.0
+_gw_pid_cache: Tuple[float, Optional[int]] = (0.0, None)
+
+
+def _gateway_pid() -> Optional[int]:
+    """PID of the live gateway, or None when it cannot be determined.
+
+    None is a real answer and is recorded as such. Under pytest HERMES_HOME is a per-test
+    tempdir with no pidfile, so attribution is genuinely unknown there — and a row that
+    cannot be attributed must not be silently counted as either real or synthetic.
+    """
+    global _gw_pid_cache
+    now = time.monotonic()
+    stamp, cached = _gw_pid_cache
+    if now - stamp < _GW_PID_TTL:
+        return cached
+    pid: Optional[int] = None
+    try:
+        from hermes_constants import get_hermes_home
+
+        home = Path(get_hermes_home())
+    except Exception:
+        home = Path.home() / ".hermes"
+    try:
+        raw = (home / "gateway.pid").read_text(encoding="utf-8").strip()
+        # The pidfile is JSON ({"pid": ..., "kind": ...}), but tolerate a bare integer:
+        # this must never raise on the hot path of every tap.
+        pid = int(json.loads(raw)["pid"]) if raw.startswith("{") else int(raw)
+    except Exception:
+        pid = None
+    _gw_pid_cache = (now, pid)
+    return pid
+
+
+def is_live(row: Dict[str, Any]) -> bool:
+    """Did a human tap produce this row?
+
+    Unknown counts as live. The alternative — treating unattributable rows as synthetic —
+    would silently discard every row written before this field existed, and would empty the
+    Tune promotion list on any estate whose pidfile is missing.
+    """
+    return bool(row.get("live", True))
 
 
 def _dir() -> Path:
@@ -75,6 +128,12 @@ def record(
             "status": status,
             "ms": round(ms, 1),
         }
+        # Attribution. `live` is omitted entirely when the gateway PID is unknown, so the
+        # absence of the key means "cannot say", never "not real" — see `is_live`.
+        row["pid"] = os.getpid()
+        gw = _gateway_pid()
+        if gw is not None:
+            row["live"] = os.getpid() == gw
         if error:
             # Bound it: a traceback repr can be kilobytes and this file is read on a phone.
             row["error"] = error[:300]
@@ -149,12 +208,16 @@ def recent_knob_keys(limit: int = 2, days: int = 30) -> List[str]:
 
     Only *successful* sets count. A failed set is not evidence of intent to keep using it,
     and promoting a knob because it keeps erroring would be exactly backwards.
+
+    Only *human* sets count, for the same reason. A reachability probe walks every knob value
+    on the estate — it set 41 of them on the day this shipped — so without the `live` filter
+    the promotion list would be ranking whichever knob the last sweep happened to touch last.
     """
     keys: List[str] = []
     for row in reversed(read_days(days)):
         if str(row.get("action") or "") not in ("se_set_confirm", "pd_set_confirm"):
             continue
-        if _failed(row):
+        if _failed(row) or not is_live(row):
             continue
         key = str(row.get("arg") or "").split(":")[0].strip()
         if key and key not in keys:
@@ -174,9 +237,16 @@ def _failed(row: Dict[str, Any]) -> bool:
     return str(row.get("status")) in ("failed", "error") or str(row.get("outcome")) == "failed"
 
 
-def rollup(days: int = 7) -> Dict[str, Any]:
-    """Usage and failure shape over the window — the part that drives improvement."""
-    rows = read_days(days)
+def rollup(days: int = 7, live_only: bool = True) -> Dict[str, Any]:
+    """Usage and failure shape over the window — the part that drives improvement.
+
+    `live_only` by default: the panel answers "what did *I* do and what broke", and a probe
+    sweep would otherwise dominate every ranking on it. `synthetic` is reported alongside the
+    total so a suppressed sweep is visible rather than silently dropped — a panel that hides
+    how much it filtered is how you end up trusting a number you should not.
+    """
+    everything = read_days(days)
+    rows = [r for r in everything if is_live(r)] if live_only else everything
     used: Counter = Counter()
     failed: Counter = Counter()
     slow: List[Tuple[float, str]] = []
@@ -192,6 +262,7 @@ def rollup(days: int = 7) -> Dict[str, Any]:
     return {
         "days": days,
         "total": len(rows),
+        "synthetic": len(everything) - len(rows),
         "distinct": len(used),
         "top": used.most_common(8),
         "failures": failed.most_common(6),
