@@ -201,6 +201,40 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         view.proof_receipt = _proof("refresh", "done", "Mission card refreshed", request_id=rid)
         return _finish(view)
 
+    # ---- The spine: Now / Run / Tune ----
+    # "Now" is the mission card (handled above as refresh). These two are its siblings: Run
+    # holds the verbs, Tune holds the 29 knobs. Both are pure reads until a button is tapped,
+    # so neither is idempotency-sensitive — but they still go through _finish so a repeated
+    # request_id replays instead of re-probing launchctl.
+    if action == "run":
+        from gateway.operator_shell.cockpit import render_run
+
+        text, buttons = render_run()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Run",
+                proof_receipt=_proof("run", "done", "Action panel", request_id=rid),
+            )
+        )
+
+    if action == "tune":
+        from gateway.operator_shell.cockpit import render_tune, render_tune_group
+
+        # estate:tune → index; estate:tune:sizing → that group.
+        text, buttons = render_tune_group(arg) if arg else render_tune()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Tune",
+                proof_receipt=_proof(
+                    "tune", "done", f"Knobs {arg or 'index'}", request_id=rid
+                ),
+            )
+        )
+
     if action == "inbox":
         from gateway.operator_shell.inbox import render_inbox
 
@@ -312,6 +346,39 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
                 buttons=buttons,
                 toast="⚪ OFF",
                 proof_receipt=receipt,
+            )
+        )
+
+    if action in ("status", "status_summary"):
+        from gateway.operator_shell.status_summary import render_status_summary
+
+        text, buttons = render_status_summary()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Status",
+                proof_receipt=_proof("status", "done", "Estate status summary", request_id=rid),
+            )
+        )
+
+    if action in ("diff", "estate_diff"):
+        import subprocess
+
+        diff_out = subprocess.run(
+            ["python3", str(Path.home() / ".hermes/scripts/estate-diff.py")],
+            capture_output=True, text=True, timeout=30,
+        )
+        text = diff_out.stdout.strip() or "✅ *No changes* since last check"
+        if diff_out.returncode != 0:
+            text = f"⚠️ Diff probe failed:\n{diff_out.stderr[-400:]}"
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=[[("📊 Status", "estate:status")], nav("diff")],
+                toast="Estate diff",
+                proof_receipt=_proof("diff", "done" if diff_out.returncode == 0 else "failed",
+                                    "Estate diff", request_id=rid),
             )
         )
 

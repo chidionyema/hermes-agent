@@ -31,23 +31,34 @@ from typing import List, Optional, Tuple
 
 ButtonRow = List[Tuple[str, str]]
 
-_MISSION = ("🎛 Mission", "estate:refresh")
-_INBOX = ("📥 Inbox", "estate:inbox")
+_NOW = ("⚡️ Now", "estate:refresh")
+_RUN = ("🎛 Run", "estate:run")
+_TUNE = ("⚙️ Tune", "estate:tune")
 
 
 def nav(self_action: Optional[str] = None) -> ButtonRow:
-    """The one navigation row. Always last, always this order.
+    """The one navigation row — the cockpit's spine. Always last, always this order.
 
-    `self_action` is the estate action that re-renders the CURRENT panel, so Refresh means
-    "this screen again" everywhere rather than "jump to the mission card" on some panels and
-    "this screen" on others. Omit it only on panels with nothing to refresh.
+    Three positions, and the split between them is the whole information architecture:
+
+        ⚡️ Now   what is true and what needs me   (read + the fix for what is broken)
+        🎛 Run   the ~10 verbs I actually perform  (start, stop, restart, run now, bounce)
+        ⚙️ Tune  the 29 knobs that configure it    (leverage, caps, batch size, cadence)
+
+    Before this split the three were interleaved on every screen. `se_params` is the proof:
+    28 buttons, mixing `🔴 LIVE` (arms real capital) with `📜 Logs` (a read) — and it was
+    *still* incomplete, with 6 of the 29 allowlisted values having no button at all. Density
+    and coverage were failing at the same time, which is what a wrong container looks like.
+
+    `self_action` re-renders the CURRENT panel. It is the bare glyph, not "🔄 Refresh", so
+    four buttons fit one phone row without wrapping.
     """
-    row: ButtonRow = [_MISSION, _INBOX]
+    row: ButtonRow = [_NOW, _RUN, _TUNE]
     if self_action:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").
         act = self_action.removeprefix("estate:")
-        row.append(("🔄 Refresh", f"estate:{act}"))
+        row.append(("🔄", f"estate:{act}"))
     return row
 
 

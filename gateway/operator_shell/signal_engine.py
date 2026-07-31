@@ -691,47 +691,17 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
         "",
         "_Rail changes require a second ARM screen. All changes restart the daemon._",
     ]
+    # This screen used to carry all 23 setter buttons itself — the densest in the cockpit —
+    # and was STILL incomplete: `per_instrument` (all 3 values), `stop_loss: 0` and
+    # `llm_cap` 2 and 5 were allowlisted in _SAFE_PARAMS but had no button, so 6 of the 29
+    # allowlisted values could not be reached from the phone at all.
+    #
+    # The setters now live in Tune, grouped by consequence, where all 29 fit without any
+    # group exceeding 9 buttons. This screen keeps its job — showing what the values ARE —
+    # and hands off to the group that changes them. One place per knob, not two.
     buttons: List[ButtonRow] = [
-        [
-            ("🧪 sim", "estate:se_set:exec_mode:internal_sim"),
-            ("🧫 testnet", "estate:se_set:exec_mode:testnet"),
-            ("🔴 LIVE", "estate:se_set:exec_mode:live"),
-        ],
-        [
-            ("📄 paper", "estate:se_set:ramp_stage:paper_forward"),
-            ("🪙 tiny_real", "estate:se_set:ramp_stage:tiny_real"),
-            ("📈 scaled", "estate:se_set:ramp_stage:scaled"),
-        ],
-        [
-            ("vol 5%", "estate:se_set:vol_target:0.05"),
-            ("vol 10%", "estate:se_set:vol_target:0.10"),
-            ("vol 20%", "estate:se_set:vol_target:0.20"),
-        ],
-        [
-            ("lev 1x", "estate:se_set:leverage:1"),
-            ("lev 2x", "estate:se_set:leverage:2"),
-            ("lev 3x", "estate:se_set:leverage:3"),
-        ],
-        [
-            ("kill 5%", "estate:se_set:killswitch:0.05"),
-            ("kill 10%", "estate:se_set:killswitch:0.10"),
-            ("kill 15%", "estate:se_set:killswitch:0.15"),
-        ],
-        [
-            ("pos 3", "estate:se_set:max_positions:3"),
-            ("pos 5", "estate:se_set:max_positions:5"),
-            ("pos 10", "estate:se_set:max_positions:10"),
-        ],
-        [
-            ("stop 5%", "estate:se_set:stop_loss:0.05"),
-            ("stop 10%", "estate:se_set:stop_loss:0.10"),
-            ("llm $1", "estate:se_set:llm_cap:1"),
-        ],
-        # feed on/off switches a LIVE market feed — no navigation button beside it.
-        [
-            ("📡 feed on", "estate:se_set:live_feed:true"),
-            ("📴 feed off", "estate:se_set:live_feed:false"),
-        ],
+        [("⚡ Execution", "estate:tune:exec"), ("🎚 Sizing", "estate:tune:sizing")],
+        [("🛡 Safety", "estate:tune:safety"), ("💵 Spend", "estate:tune:spend")],
         [("💹 Daemon", "estate:signal_engine"), ("📜 Logs", "estate:se_logs")],
         nav("se_params"),
     ]

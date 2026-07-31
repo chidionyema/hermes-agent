@@ -460,27 +460,14 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
         if p.get("paused")
         else ("⏸ Arm PAUSE", "estate:pd_pause")
     )
+    # Setters moved to Tune, same as the Signal Engine knobs — one place per knob. This screen
+    # keeps the read (which is what it is good at) and hands off the writes. The daily cap is
+    # in Tune's Spend group beside the LLM cap, because a spend ceiling is a spend ceiling
+    # whichever daemon is burning it, and they are almost always adjusted together.
     buttons: List[ButtonRow] = [
-        [
-            ("⏱ 1h", "estate:pd_set:interval:3600"),
-            ("⏱ 2h", "estate:pd_set:interval:7200"),
-            ("⏱ 4h", "estate:pd_set:interval:14400"),
-        ],
-        [
-            ("⚡ conc 2", "estate:pd_set:concurrency:2"),
-            ("⚡ conc 4", "estate:pd_set:concurrency:4"),
-            ("⚡ conc 8", "estate:pd_set:concurrency:8"),
-        ],
-        [
-            ("📦 batch 3", "estate:pd_set:batch_size:3"),
-            ("📦 batch 5", "estate:pd_set:batch_size:5"),
-            ("📦 batch 10", "estate:pd_set:batch_size:10"),
-        ],
-        [
-            ("💵 cap $10", "estate:pd_set:daily_cap:10"),
-            ("💵 cap $20", "estate:pd_set:daily_cap:20"),
-            ("💵 cap $40", "estate:pd_set:daily_cap:40"),
-        ],
+        [("📦 Throughput", "estate:tune:prospector"), ("💵 Spend", "estate:tune:spend")],
+        # PAUSE is the automated liability backstop from CLAUDE.md, not a preference. It stays
+        # on this screen as well as on Run — the same reasoning as estate pause on the home card.
         [pause_btn],
         [("⚙️ Daemon", "estate:prospector_daemon"), ("🗓 Cron", "estate:pd_cron")],
         nav("pd_params"),
@@ -704,25 +691,43 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
             cta = ("🗓 Cron outcomes", "estate:pd_cron")
             break
 
-    buttons: List[ButtonRow] = [
-        [
+    # Context-aware buttons: adapt based on daemon state + last tick
+    sched_st = launchctl_state("com.prospector.scheduler")
+    sched_running = sched_st.get("running")
+    
+    # Check for zero_yield alert in recent ticks
+    has_zero_yield = False
+    ticks = _last_ticks(3)
+    for t in ticks:
+        res = t.get("result") or {}
+        if t.get("allowed") and not t.get("error") and res.get("passes", 0) == 0 and res.get("dossiers", 0) > 0:
+            has_zero_yield = True
+            break
+
+    control_row: ButtonRow = []
+    if not sched_running:
+        control_row = [("▶️ Start", "estate:pd_start:scheduler")]
+    else:
+        control_row = [
             ("♻️ Restart", "estate:pd_restart:scheduler"),
             ("⏹ Stop", "estate:pd_stop:scheduler"),
-            ("▶️ Start", "estate:pd_start:scheduler"),
-        ],
-        [
-            ("⚙️ Params", "estate:pd_params"),
-            ("🗓 Cron", "estate:pd_cron"),
-            ("📜 Logs", "estate:pd_logs:scheduler"),
-        ],
-        # Run watch kicks off a real watchdog run. It sat between Refresh and Fleet, so the
-        # two buttons most likely to be tapped without looking bracketed a live action.
-        [("▶️ Run watch", "estate:pd_run_now:watchdog")],
-        [("🚀 Fleet", "estate:fleet")],
-        nav("prospector_daemon"),
-    ]
+        ]
+
+    buttons: List[ButtonRow] = []
     if cta:
-        buttons.insert(0, [cta])
+        buttons.append([cta])
+    if has_zero_yield:
+        buttons.append([("🧪 Golden set", "estate:pd_logs:scheduler"), ("⚙️ Params", "estate:pd_params")])
+    if control_row:
+        buttons.append(control_row)
+    buttons.append([
+        ("⚙️ Params", "estate:pd_params"),
+        ("🗓 Cron", "estate:pd_cron"),
+        ("📜 Logs", "estate:pd_logs:scheduler"),
+    ])
+    buttons.append([("▶️ Run watch", "estate:pd_run_now:watchdog")])
+    buttons.append([("📊 Status", "estate:status"), ("🚀 Fleet", "estate:fleet")])
+    buttons.append(nav("prospector_daemon"))
     return "\n".join(lines).rstrip(), buttons
 
 

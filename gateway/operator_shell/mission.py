@@ -208,10 +208,30 @@ def _product_autonomy(conn, C) -> str:
         return "n/a"
 
 
-def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
-    """Exactly one primary CTA — real next estate action, not decoration."""
+def _concerns(conn, C, verdict: str) -> List[Tuple[str, str]]:
+    """Everything that currently wants the operator, most severe first.
+
+    This ladder used to live inside `_primary_cta`, which walked all ten rungs, returned the
+    FIRST hit, and threw the rest away — then a fixed nine-button menu was stapled underneath
+    regardless of what was wrong. So the cockpit already knew that the money fence, the dead
+    coordinator and the blocked missions were all outstanding; it just showed you one of them
+    and a menu.
+
+    Returning the whole ladder is what makes the home card severity-driven: each live concern
+    prints its own line and carries its own button, so the fix for anything wrong is one tap
+    from home instead of a navigation problem. `_primary_cta` is now `_concerns()[0]`.
+    """
+    out: List[Tuple[str, str]] = []
+
+    def add(label: str, action: str) -> None:
+        # De-duplicate by action: two rungs can legitimately point at the same panel
+        # (BUDGET → Fuel and dual-CB → Fuel), and the same button twice reads as a bug.
+        if not any(a == action for _l, a in out):
+            out.append((label, action))
+
     if C.estate_paused():
-        return ("▶️ Resume spend", "estate:resume")
+        # Exclusive on purpose: nothing is burning, so nothing else is urgent yet.
+        return [("▶️ Resume spend", "estate:resume")]
     # Daemon / gateway down → restart path (not Prospector)
     try:
         gateway_ok = (
@@ -226,9 +246,9 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
                 C._launchctl_running("ai.hermes.coordinator") is True
             )
         if not (daemon_ok or daemon_proc):
-            return ("♻️ Restart coord", "estate:restart")
+            add("♻️ Restart coord", "estate:restart")
         if not gateway_ok:
-            return ("⚙️ Daemons", "estate:daemons")
+            add("⚙️ Daemons", "estate:daemons")
     except Exception:
         pass
 
@@ -246,15 +266,16 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
                 fence[1] if len(fence) > 1 else ""
             )
             if src == "code:telegram":
-                return (f"💰 Code fence {str(fid)[:8]}", f"estate:task:{str(fid)[:8]}")
-            return ("💰 Approve fence", "estate:inbox")
+                add(f"💰 Code fence {str(fid)[:8]}", f"estate:task:{str(fid)[:8]}")
+            else:
+                add("💰 Approve fence", "estate:inbox")
     except Exception:
         pass
 
     # Dual CB → fuel/honesty, not fake ship
     claude_ok, agy_ok, _ = _cb_bits(C)
     if not claude_ok and not agy_ok:
-        return ("⛽ Fuel / CB", "estate:system_fuel")
+        add("⛽ Fuel / CB", "estate:system_fuel")
 
     # In-flight coding run
     code = _inflight_code(conn)
@@ -264,21 +285,22 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
             "executing": "💻 Code run",
             "verifying": "🔎 Code verify",
         }.get(st, "💻 Code run")
-        return (f"{label} {tid[:8]}", f"estate:task:{tid[:8]}")
+        add(f"{label} {tid[:8]}", f"estate:task:{tid[:8]}")
 
     try:
         dec = [d for d in C.decisions_view(conn) if C._is_operator_facing(d)]
         if dec:
-            return ("📥 Decide", "estate:inbox")
+            add(f"📥 Decide ({len(dec)})", "estate:inbox")
     except Exception:
         pass
-    if _blocked_missions(conn):
-        return ("🚀 Open missions", "estate:missions")
+    blocked = _blocked_missions(conn)
+    if blocked:
+        add(f"🚀 {blocked} blocked", "estate:missions")
 
     if "BUDGET" in verdict:
-        return ("⛽ Fuel", "estate:system_fuel")
+        add("⛽ Fuel", "estate:system_fuel")
     if "DEGRADED" in verdict or "CB" in verdict:
-        return ("⚙️ Daemons", "estate:daemons")
+        add("⚙️ Daemons", "estate:daemons")
 
     # RSI live fire → surface before busywork
     try:
@@ -302,15 +324,45 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
                 and hash_m > idle_ts
             )
             if not cleared:
-                return ("🧠 RSI status", "estate:rsi")
+                add("🧠 RSI status", "estate:rsi")
     except Exception:
         pass
 
+    return out
+
+
+def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
+    """The single most severe thing outstanding, or Fleet when nothing is."""
+    concerns = _concerns(conn, C, verdict)
     # Only when truly CLEAR — fleet overview beats Prospector tunnel vision
-    return ("🚀 Fleet", "estate:fleet")
+    return concerns[0] if concerns else ("🚀 Fleet", "estate:fleet")
 
 
-def mission_buttons(paused: bool, primary: Tuple[str, str]) -> List[ButtonRow]:
+# The surfaces that are always worth one tap, whatever is happening. This is deliberately a
+# fixed grid and not state-driven: the concern rows above it already change with the estate,
+# and if the stable part moved too there would be no position on the card a thumb could learn.
+_SURFACES: List[ButtonRow] = [
+    [("🚀 Fleet", "estate:fleet"), ("🛒 Store", "estate:st_status"), ("📥 Inbox", "estate:inbox")],
+    [("⚙️ Daemons", "estate:daemons"), ("📋 Missions", "estate:missions"), ("🏗 CI", "estate:builds")],
+    [("🧠 RSI", "estate:rsi"), ("🗓 Cron", "estate:pd_cron"), ("📸 Changed", "estate:diff")],
+]
+
+_MAX_CONCERNS = 3
+
+
+def mission_buttons(
+    paused: bool, primary: Tuple[str, str], concerns: Optional[List[Tuple[str, str]]] = None
+) -> List[ButtonRow]:
+    """Concerns first (one row each), then the fixed surfaces, then the spine.
+
+    The card is now severity-driven at the top and stable at the bottom. When nothing is
+    wrong the concern rows simply do not render, and the card is the three surface rows plus
+    the spine — which is the quietest the cockpit has ever been on a good day.
+
+    Capped at `_MAX_CONCERNS`: on a phone a fourth full-width row pushes the surface grid off
+    the first screen, and a concern you have to scroll to is not a concern you will act on.
+    The overflow is not lost — it is exactly what the panel each button points at is for.
+    """
     pause_or_resume = (
         ("▶️ Resume", "estate:resume") if paused else ("⏸ Pause", "estate:pause")
     )
@@ -320,34 +372,24 @@ def mission_buttons(paused: bool, primary: Tuple[str, str]) -> List[ButtonRow]:
         cron_ok = bool(cron_delivery_state().get("ok"))
     except Exception:
         cron_ok = bool(os.getenv("TELEGRAM_CRON_THREAD_ID", "").strip())
-    rows: List[ButtonRow] = [[primary]]
+
+    live = list(concerns or [])
+    if not any(a == primary[1] for _l, a in live):
+        live.insert(0, primary)  # nothing outstanding → primary is the Fleet fallback
+    rows: List[ButtonRow] = [[c] for c in live[:_MAX_CONCERNS]]
+
     # When cron destination unset — can't-miss dedicated row
     if not cron_ok:
         rows.append([("🗓 Cron delivery", "estate:setup_cron_topic")])
-    rows.extend(
-        [
-            [
-                ("🧠 RSI", "estate:rsi"),
-                ("🏗 CI", "estate:builds"),
-                ("🚀 Fleet", "estate:fleet"),
-            ],
-            [
-                ("⚙️ Daemons", "estate:daemons"),
-                ("🛒 Store", "estate:st_status"),
-                (
-                    ("🗓 Cron ✓", "estate:setup_cron_topic")
-                    if cron_ok
-                    else ("🚀 Missions", "estate:missions")
-                ),
-            ],
-            # Pause/Resume halts (or restarts) ALL estate spend. It used to sit between Fleet
-            # and Daemons — two of the most-tapped buttons on the card. Its own row.
-            [pause_or_resume, ("⛽ Fuel", "estate:system_fuel")],
-            # The root screen carries the same bottom row as every sub-panel, so the three
-            # navigation positions mean the same thing on literally every screen.
-            nav("refresh"),
-        ]
-    )
+
+    rows.extend(_SURFACES)
+    # Pause/Resume halts (or restarts) ALL estate spend. It is also the first button on the
+    # Run panel, but it stays here too: an emergency halt at two taps is an emergency halt
+    # you reach too late. This is the one deliberate duplicate in the cockpit.
+    rows.append([pause_or_resume])
+    # Every screen ends with the same spine, so Now / Run / Tune mean the same thing and sit
+    # in the same place on literally every panel.
+    rows.append(nav("refresh"))
     return rows
 
 
@@ -362,7 +404,8 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
         prod = _product_autonomy(conn, C)
         product = _product_line(conn, C)
         paused = bool(C.estate_paused())
-        primary = _primary_cta(conn, C, f"{verdict} — {detail}")
+        concerns = _concerns(conn, C, f"{verdict} — {detail}")
+        primary = concerns[0] if concerns else ("🚀 Fleet", "estate:fleet")
         blocked_n = _blocked_missions(conn)
     finally:
         conn.close()
@@ -440,6 +483,17 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
         )
     elif cron.get("mode") == "main_dm":
         lines.append("_Cron stays in this DM (no topic). Mute/filter as you like._")
-    lines.extend(["", f"→ *{primary[0]}*"])
+    # Say what needs you, in severity order, instead of naming only the top item. The buttons
+    # underneath are these lines in the same order, so the card reads top-to-bottom as
+    # "here is what is wrong / here is the button that fixes it".
+    if concerns:
+        shown = concerns[:_MAX_CONCERNS]
+        lines.append("")
+        lines.append(f"*Needs you ({len(concerns)}):*")
+        lines.extend(f"→ {c[0]}" for c in shown)
+        if len(concerns) > len(shown):
+            lines.append(f"_+{len(concerns) - len(shown)} more_")
+    else:
+        lines.extend(["", "✅ *Nothing needs you.*"])
     text = "\n".join(lines)
-    return text, paused, mission_buttons(paused, primary)
+    return text, paused, mission_buttons(paused, primary, concerns)
