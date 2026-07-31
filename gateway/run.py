@@ -5738,7 +5738,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # a heartbeat write must never perturb the watcher.
             try:
                 import os as _os, time as _time
-                with open(_os.path.expanduser("~/.hermes/gateway.heartbeat"), "w") as _hb:
+                with open(_os.path.expanduser("~/.hermes/gateway.heartbeat"), "w", encoding="utf-8") as _hb:
                     _hb.write(str(int(_time.time())))
             except Exception:
                 pass
