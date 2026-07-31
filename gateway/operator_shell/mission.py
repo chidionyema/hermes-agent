@@ -385,12 +385,23 @@ def mission_buttons(
     rows.extend(_SURFACES)
     # Pause/Resume halts (or restarts) ALL estate spend. It is also the first button on the
     # Run panel, but it stays here too: an emergency halt at two taps is an emergency halt
-    # you reach too late. This is the one deliberate duplicate in the cockpit.
-    rows.append([pause_or_resume])
+    # you reach too late.
+    #
+    # Skipped when a concern row already offers it. When the estate is paused, `_concerns()`
+    # returns exactly ("▶️ Resume spend", "estate:resume") — rendering the row as well put the
+    # SAME callback on the card twice, four rows apart, under two different labels.
+    if not any(a == pause_or_resume[1] for _l, a in rows_actions(rows)):
+        rows.append([pause_or_resume])
     # Every screen ends with the same spine, so Now / Run / Tune mean the same thing and sit
-    # in the same place on literally every panel.
-    rows.append(nav("refresh"))
+    # in the same place on literally every panel. No self_action here: on the home card
+    # "⚡️ Now" already *is* refresh, so passing one rendered estate:refresh twice in one row.
+    rows.append(nav())
     return rows
+
+
+def rows_actions(rows: List[ButtonRow]) -> List[Tuple[str, str]]:
+    """Flatten button rows to (label, action) pairs."""
+    return [b for row in rows for b in row]
 
 
 def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
