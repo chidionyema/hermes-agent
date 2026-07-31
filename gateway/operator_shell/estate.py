@@ -397,6 +397,42 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
             )
         )
 
+    # ---- Store money rail (st_*) ----
+    # Deliberately before pd_*: both touch store/scheduler/PAUSE, and a prefix that reads as
+    # "store" must never fall through into the generation-daemon controls.
+    if action.startswith("st_"):
+        from gateway.operator_shell import store_ops as SO
+
+        rest = action[len("st_"):]
+
+        if rest in ("status", "health", "reconcile", "money"):
+            text, buttons = SO.render(rest)
+            return _finish(
+                PanelView(
+                    text=text,
+                    buttons=buttons,
+                    toast=rest.capitalize(),
+                    proof_receipt=_proof(
+                        f"st_{rest}", "done", f"Store {rest}", request_id=rid
+                    ),
+                )
+            )
+
+        # No st_deploy, on purpose — see store_ops.py. Anything else is a typo, and answering
+        # a typo with a plausible panel is how the wrong verb gets trusted.
+        return _finish(
+            PanelView(
+                text=(
+                    f"⚠️ Unknown store verb `{rest}`.\n\n"
+                    "Try: `store status`, `store health`, `store reconcile`.\n"
+                    "To stop the daemon writing to prod, say `pause prospector`."
+                ),
+                buttons=SO.buttons(),
+                ok=False,
+                toast="Unknown verb",
+            )
+        )
+
     if action.startswith("pd_") or action in ("pd_logs",):
         from gateway.operator_shell.prospector_daemon import (
             confirm_card as pd_confirm,

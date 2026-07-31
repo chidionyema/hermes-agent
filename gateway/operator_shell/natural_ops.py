@@ -106,6 +106,28 @@ _PATTERNS = [
     (re.compile(
         r"^\s*(run|fire|kick)\s+(hermes\s+)?watchdog\s*(now)?\s*$", re.I),
      "daemon_run_now", "watchdog", "Run Hermes watchdog now"),
+    # Store money rail (read-only; every phrase carries "store"/"buyer" so none of these can
+    # collide with the bare `status` / `health` mission pulls above).
+    # No pause verb here on purpose — store/scheduler/PAUSE is already owned by
+    # `pause prospector`, and one switch must not have two names.
+    (re.compile(
+        r"^\s*(store|storefront|shop)\s*(status)?\s*\??\s*$", re.I),
+     "st_status", "", "Store status"),
+    (re.compile(
+        r"^\s*(store\s+(health|probe|sellable)|"
+        r"(is\s+the\s+)?store\s+(ok|up|working|live)|"
+        r"can\s+(we|anyone|someone)\s+(take\s+money|buy|pay\s+us)|"
+        r"are\s+we\s+sellable)\s*\??\s*$", re.I),
+     "st_health", "", "Store health"),
+    (re.compile(
+        r"^\s*(store\s+)?(reconcile|orders?|deliveries|delivery\s+check|"
+        r"paid[\s-]?(without|no)[\s-]?deliver\w*|"
+        r"did\s+(anyone|everyone|every\s+buyer)\s+get\s+(their|it)\w*|"
+        r"buyers?)\s*\??\s*$", re.I),
+     "st_reconcile", "", "Paid vs delivered"),
+    (re.compile(
+        r"^\s*store\s+(money|money\s+paths?|payments?|proof)\s*\??\s*$", re.I),
+     "st_money", "", "Money-path proof"),
     # Signal Engine / money rail (before prospector — no overlap, but keep the
     # money rail early so a typo never lands on a generation command)
     (re.compile(
