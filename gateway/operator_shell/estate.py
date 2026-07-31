@@ -139,6 +139,27 @@ def render_panel_view() -> PanelView:
 
 
 def handle_estate_action(action: str, request_id: str = "") -> PanelView:
+    """Public entry point: dispatch, and record what happened.
+
+    The recording lives HERE rather than inside `_dispatch` because `_dispatch` has dozens of
+    return paths and can raise — and a raise is exactly the outcome worth auditing. Wrapping
+    the whole call is the only version that cannot drift when someone adds a branch. `record`
+    never raises (see `activity.py`), so this wrapper cannot take the cockpit down.
+    """
+    from gateway.operator_shell.activity import record
+
+    t0 = time.time()
+    try:
+        view = _dispatch(action, request_id)
+    except Exception as exc:
+        record(action, request_id, status="error", error=repr(exc),
+               ms=(time.time() - t0) * 1000.0)
+        raise
+    record(action, request_id, view=view, ms=(time.time() - t0) * 1000.0)
+    return view
+
+
+def _dispatch(action: str, request_id: str = "") -> PanelView:
     """Dispatch estate:<action> with idempotency + proof receipts."""
     from gateway.operator_shell.proof import (
         check_idempotent,
@@ -216,6 +237,27 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
                 buttons=buttons,
                 toast="Run",
                 proof_receipt=_proof("run", "done", "Action panel", request_id=rid),
+            )
+        )
+
+    if action == "activity":
+        from gateway.operator_shell.cockpit import render_activity
+
+        # estate:activity → 7d; estate:activity:30 → that window. Anything unparseable falls
+        # back to 7 rather than erroring: a bad arg must not hide the audit trail.
+        try:
+            days = max(1, min(90, int(arg))) if arg else 7
+        except Exception:
+            days = 7
+        text, buttons = render_activity(days)
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Activity",
+                proof_receipt=_proof(
+                    "activity", "done", f"Operator log ({days}d)", request_id=rid
+                ),
             )
         )
 

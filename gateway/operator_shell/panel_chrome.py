@@ -58,7 +58,12 @@ def nav(self_action: Optional[str] = None) -> ButtonRow:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").
         act = self_action.removeprefix("estate:")
-        row.append(("🔄", f"estate:{act}"))
+        cb = f"estate:{act}"
+        # On a spine panel itself, the spine button ALREADY re-renders this screen, so a 🔄
+        # beside it would be the same callback twice — the duplicate-button defect the home
+        # card was fixed for. Callers must not have to know this; nav decides.
+        if cb not in {a for _l, a in row}:
+            row.append(("🔄", cb))
     return row
 
 

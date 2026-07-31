@@ -42,8 +42,10 @@ STOREOPS = REPO / "store_platform" / "scripts" / "storeops"
 _TIMEOUT = {"status": 240, "health": 300, "reconcile": 240, "money": 900}
 
 _BUTTONS: List[ButtonRow] = [
-    [("🔄 Store status", "estate:st_status"), ("🩺 Health", "estate:st_health")],
-    [("🧾 Reconcile", "estate:st_reconcile"), ("💰 Money paths", "estate:st_money")],
+    # No "🔄 Store status" button: nav("st_status") already ends this panel with a 🔄 that
+    # re-renders exactly this screen, and two buttons firing one callback read as a bug.
+    [("🩺 Health", "estate:st_health"), ("🧾 Reconcile", "estate:st_reconcile")],
+    [("💰 Money paths", "estate:st_money")],
     nav("st_status"),
 ]
 

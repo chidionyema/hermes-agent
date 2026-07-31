@@ -228,6 +228,10 @@ _PATTERNS = [
     (re.compile(
         r"^\s*(budget|spend\s+today|burn|fuel)\s*\??\s*$", re.I),
      "system_fuel", "", "Fuel"),
+    (re.compile(
+        r"^\s*(activity|audit(\s+log)?|what\s+(did|have)\s+i\s+"
+        r"(do|done|tap|tapped)|what\s+broke)\s*\??\s*$", re.I),
+     "activity", "", "Activity log"),
     # Coding run status / cancel (short pulls only — long tasking goes to code_remote)
     (re.compile(
         r"^\s*(?:task|run|job|how'?s\s+(?:that\s+)?task)\s+`?([0-9a-fA-F]{4,12})`?\s*\??\s*$",

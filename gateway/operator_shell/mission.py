@@ -382,7 +382,16 @@ def mission_buttons(
     if not cron_ok:
         rows.append([("🗓 Cron delivery", "estate:setup_cron_topic")])
 
-    rows.extend(_SURFACES)
+    # A live concern outranks its own tile in the grid. `_concerns()` legitimately points at
+    # destinations the grid also lists — 🚀 Fleet is both the idle fallback and a tile, and a
+    # blocked-inbox concern is 📥 Inbox — so rendering both put one action on the card twice
+    # under two labels. The concern row is the prominent one and the tile gives way; the
+    # destination stays exactly as reachable. A row that empties out entirely is dropped.
+    claimed = {a for _l, a in rows_actions(rows)}
+    for surface_row in _SURFACES:
+        kept = [b for b in surface_row if b[1] not in claimed]
+        if kept:
+            rows.append(kept)
     # Pause/Resume halts (or restarts) ALL estate spend. It is also the first button on the
     # Run panel, but it stays here too: an emergency halt at two taps is an emergency halt
     # you reach too late.

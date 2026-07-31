@@ -161,15 +161,21 @@ def _idle_is_live_fire(idle: Optional[dict]) -> bool:
     return bool(idle.get("exit") != 0 or idle.get("failed_phases"))
 
 
-def _primary_next(armed: bool, idle: Optional[dict], staged: int) -> Tuple[str, str]:
-    """Single next action for the RSI surface."""
+def _primary_next(armed: bool, idle: Optional[dict], staged: int) -> Optional[Tuple[str, str]]:
+    """Single next action for the RSI surface, or None when the spine already covers it.
+
+    The two dropped cases used to hand back `estate:rsi` ("🔄 Refresh status") and
+    `estate:refresh` ("🎛 Mission") — both of which the nav row at the bottom of this same
+    panel already offers, so the screen showed one action under two labels. None means
+    "nothing here needs a button of its own"; the caller says so in words instead.
+    """
     if not armed:
         return ("🟢 Arm learning", "estate:arm_learning")
     if _idle_is_live_fire(idle):
-        return ("🔄 Refresh status", "estate:rsi")
+        return None  # live-firing: the only useful act is to re-read, and 🔄 does that
     if staged > 0:
         return ("📥 Open inbox", "estate:inbox")
-    return ("🎛 Mission", "estate:refresh")
+    return None  # armed, idle, nothing staged — nothing to do here
 
 
 def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
@@ -216,7 +222,7 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
 
     # Don't CTA-trap on a cleared Phase0 after bootstrap.
     if idle_stale_phase0:
-        primary = ("🎛 Mission", "estate:refresh")
+        primary = None
 
     text = "\n".join(
         [
@@ -228,7 +234,7 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
             f"Staged changes: `{staged}` · proofs: `{proofs}`",
             f"Evidence ledger: `{evidence}`",
             "",
-            f"→ *{primary[0]}*",
+            f"→ *{primary[0]}*" if primary else "✅ *Nothing to do here.*",
         ]
     )
 
@@ -237,8 +243,10 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
         if armed
         else ("🟢 Arm", "estate:arm_learning")
     )
-    buttons: List[ButtonRow] = [
-        [primary],
+    buttons: List[ButtonRow] = []
+    if primary:
+        buttons.append([primary])
+    buttons += [
         [arm_btn],
         [("⛽ Fuel", "estate:system_fuel")],
         nav("rsi"),

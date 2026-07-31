@@ -189,6 +189,21 @@ def _se_params() -> Dict[str, object]:
         return {}
 
 
+def _cron_label() -> str:
+    """Where cron briefs land, as the delivery module itself reports it.
+
+    `?` when the probe fails — never a guess. The env var is only the fallback because
+    `~/.hermes/.env` is loaded lazily: read at import time it says UNSET, read during a
+    render it says `main DM (ok)`, and only the second one is what the operator has.
+    """
+    try:
+        from gateway.operator_shell.delivery import cron_delivery_state
+
+        return str(cron_delivery_state().get("label") or "?")
+    except Exception:
+        return "?"
+
+
 def _pd_params() -> Dict[str, object]:
     try:
         from gateway.operator_shell.prospector_daemon import read_params
@@ -233,6 +248,10 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
     lines.append("")
     for label, _action, what in _TUNE_GROUPS:
         lines.append(f"*{label}* — {what}")
+    # Where the cron briefs land is configuration too — it survives a restart, so it belongs
+    # here and not on Run. The home card only offers it while it is BROKEN; this is the door
+    # that stays open when it is healthy, so DM -> Topics is still a reachable change.
+    lines.append(f"*🗓 Cron delivery* — where briefs land · now `{_cron_label()}`")
     lines += ["", "_Rail changes still require the two-screen ARM confirmation._"]
 
     rows: List[ButtonRow] = [
@@ -240,7 +259,8 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
          (_TUNE_GROUPS[1][0], f"estate:{_TUNE_GROUPS[1][1]}")],
         [(_TUNE_GROUPS[2][0], f"estate:{_TUNE_GROUPS[2][1]}"),
          (_TUNE_GROUPS[3][0], f"estate:{_TUNE_GROUPS[3][1]}")],
-        [(_TUNE_GROUPS[4][0], f"estate:{_TUNE_GROUPS[4][1]}")],
+        [(_TUNE_GROUPS[4][0], f"estate:{_TUNE_GROUPS[4][1]}"),
+         ("🗓 Cron delivery", "estate:setup_cron_topic")],
         nav("tune"),
     ]
     return "\n".join(lines), rows
@@ -261,7 +281,8 @@ def render_tune_group(group: str) -> Tuple[str, List[ButtonRow]]:
         rows.append(list(buttons))
     lines += ["", "_Every change is confirmed on a second screen and restarts the daemon._"]
 
-    rows.append([("⚙️ All knobs", "estate:tune")])
+    # No "All knobs" row — the spine's ⚙️ Tune already goes there, and the same callback twice
+    # on one screen is the defect, not a convenience.
     rows.append(nav(f"tune:{group}"))
     return "\n".join(lines), rows
 
@@ -384,5 +405,73 @@ def render_run() -> Tuple[str, List[ButtonRow]]:
         ("⛽ Fuel / CB", "estate:system_fuel"),
         ("🖥 Host", "estate:host"),
     ])
+    rows.append([("📜 Activity", "estate:activity")])
     rows.append(nav("run"))
     return "\n".join(lines), rows
+
+
+def render_activity(days: int = 7) -> Tuple[str, List[ButtonRow]]:
+    """What the operator actually did, and how it ended.
+
+    Failures lead. A usage list is interesting; a list of buttons that *did not work* is the
+    thing that changes what gets built next, so it prints first and prints even when empty
+    (an explicit "none" is evidence; a missing section is ambiguous).
+    """
+    from gateway.operator_shell import activity as act
+
+    r = act.rollup(days)
+    rows_all = r["rows"]
+
+    lines = [f"📜 *Activity* — last {days} days", ""]
+    if not rows_all:
+        lines += [
+            "_Nothing recorded yet._",
+            "",
+            "Recording starts at the dispatcher, so this fills up as soon as the gateway "
+            "running this code serves its first tap.",
+        ]
+        # No standalone Run row: nav() already carries 🎛 Run, and the same action twice on
+        # one screen reads as a bug.
+        return "\n".join(lines), [nav("activity")]
+
+    fail_n = r["failure_total"]
+    pct = (fail_n / r["total"] * 100.0) if r["total"] else 0.0
+    lines.append(f"{r['total']} actions · {r['distinct']} distinct · *{fail_n} failed* ({pct:.0f}%)")
+    lines.append("")
+
+    lines.append("*Failed*")
+    if r["failures"]:
+        for lab, n in r["failures"]:
+            tot = dict(r["top"]).get(lab)
+            lines.append(f"🔴 `{lab}` — {n}×" + (f" of {tot}" if tot else ""))
+    else:
+        lines.append("✅ none")
+    lines.append("")
+
+    lines.append("*Most used*")
+    for lab, n in r["top"]:
+        lines.append(f"• `{lab}` — {n}×")
+
+    if r["slowest"]:
+        lines += ["", "*Slowest*"]
+        for ms, lab in r["slowest"]:
+            lines.append(f"⏱ `{lab}` — {ms/1000:.1f}s")
+
+    lines += ["", "*Last 8*"]
+    for row in rows_all[-8:][::-1]:
+        stamp = str(row.get("iso") or "")[5:16].replace("T", " ")
+        lab = f"{row.get('action')}:{row.get('arg')}" if row.get("arg") else str(row.get("action"))
+        mark = "🔴" if (row.get("status") in ("failed", "error") or row.get("outcome") == "failed") else "·"
+        lines.append(f"{mark} `{stamp}` {lab}")
+
+    # Offer the windows you are NOT in. The current one is a no-op tap, and it would collide
+    # with nav's 🔄 (same callback), which is the duplicate-button defect this cockpit
+    # already fixed once on the home card.
+    windows: ButtonRow = [
+        (f"📅 {lab}", f"estate:activity:{n}")
+        for n, lab in ((1, "24h"), (7, "7d"), (30, "30d"))
+        if n != days
+    ]
+    buttons: List[ButtonRow] = [windows] if windows else []
+    buttons.append(nav(f"activity:{days}"))
+    return "\n".join(lines), buttons
