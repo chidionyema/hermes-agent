@@ -8,6 +8,7 @@ deliberate choice to warn rather than deny by default.
 
 from __future__ import annotations
 
+import os
 import subprocess
 
 import pytest
@@ -15,19 +16,33 @@ import pytest
 from gateway.operator_shell import integrity
 
 
+def _git(*args, cwd):
+    """Run git against the temp repo ONLY.
+
+    `cwd=` is not enough. Git exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE to hook
+    children, and these very tests are what the pre-commit gate runs — so inside the hook
+    every `git add` here wrote to hermes-agent's real index and `git commit` failed with
+    "invalid object ... Error building trees" (the temp repo's object store has none of
+    those blobs). All 8 tests passed standalone and failed under the gate, which is how a
+    working gate gets bypassed with --no-verify.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run(["git", *args], cwd=cwd, check=True, env=env)
+
+
 def _git_repo(tmp_path):
     pkg = tmp_path / "operator_shell"
     pkg.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=tmp_path, check=True)
+    _git("init", "-q", cwd=tmp_path)
+    _git("config", "user.email", "t@t", cwd=tmp_path)
+    _git("config", "user.name", "t", cwd=tmp_path)
     return pkg
 
 
 def _commit(tmp_path, *names):
     for n in names:
-        subprocess.run(["git", "add", f"operator_shell/{n}"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "commit", "-qm", "x"], cwd=tmp_path, check=True)
+        _git("add", f"operator_shell/{n}", cwd=tmp_path)
+    _git("commit", "-qm", "x", cwd=tmp_path)
 
 
 def test_ghost_modules_flags_untracked_file(tmp_path):

@@ -31,6 +31,12 @@ _PKG_DIR = Path(__file__).resolve().parent
 
 def _tracked_modules(pkg_dir: Path) -> set:
     """Module stems git tracks in ``pkg_dir``. Empty set if git cannot answer."""
+    # Scrub GIT_* before asking. The question is always "what does the repo *containing this
+    # package* track" — never an inherited one. Git exports GIT_DIR / GIT_INDEX_FILE to hook
+    # children, so a gateway (or a test) started under a hook would otherwise interrogate the
+    # wrong index and report every module as untracked, i.e. "running UNREVIEWED code" for
+    # code that is perfectly well tracked.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     try:
         out = subprocess.run(
             ["git", "ls-files", "--", str(pkg_dir)],
@@ -39,6 +45,7 @@ def _tracked_modules(pkg_dir: Path) -> set:
             timeout=10,
             cwd=str(pkg_dir),
             check=False,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         logger.warning("integrity: git ls-files failed (%s) — check skipped", exc)
