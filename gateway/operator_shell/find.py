@@ -22,6 +22,7 @@ import re
 from typing import Dict, List, Optional, Set, Tuple
 
 from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.usage import example_command
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -52,9 +53,9 @@ def _keywords(pattern: str, label: str) -> Set[str]:
 
 
 class Entry:
-    __slots__ = ("action", "args", "label", "words", "needs_arg")
+    __slots__ = ("action", "args", "label", "words", "needs_arg", "usage")
 
-    def __init__(self, action: str, args: str, label: str, words: Set[str]):
+    def __init__(self, action: str, args: str, label: str, words: Set[str], usage: Optional[str] = None):
         self.action = action
         self.args = args
         self.label = label
@@ -62,6 +63,10 @@ class Entry:
         # "{g1}" is a capture placeholder: the op is only meaningful with an id or value
         # the operator supplies, so it can be told about but not offered as a tap.
         self.needs_arg = "{g" in (args or "")
+        # What to type, derived from the pattern itself. The action name is NOT it —
+        # `match_natural_op("se_set …")` is None, so printing that sent the operator to a
+        # command the router has never accepted.
+        self.usage = usage
 
     @property
     def callback(self) -> str:
@@ -75,15 +80,46 @@ def _index() -> List[Entry]:
     for pat, action, args, label in _PATTERNS:
         if not label:
             continue  # unlabelled noise-absorbers ("ok", "👍") are not destinations
-        entry = Entry(action, args, label, _keywords(pat.pattern, label))
+        entry = Entry(action, args, label, _keywords(pat.pattern, label),
+                      example_command(pat) if "{g" in (args or "") else None)
         # Several patterns reach the same destination (there are five ways to ask for the
         # brief). Merge their vocabulary onto one result instead of listing it five times.
         key = f"{action}|{args}"
         if key in seen:
             seen[key].words |= entry.words
+            if seen[key].usage is None:
+                seen[key].usage = entry.usage
         else:
             seen[key] = entry
-    return list(seen.values())
+    return _collapse_same_label(list(seen.values()))
+
+
+def _collapse_same_label(entries: List[Entry]) -> List[Entry]:
+    """One destination, one row — even when it is reachable both by tap and by typing.
+
+    `find` is registered twice: argless (open the panel) and with a capture (`find spend`).
+    Distinct keys, identical label, so a search for "search" printed *Find anything* as a
+    ⌨️ line **and** as a button — the same duplicate-button defect already fixed twice on
+    the home card. The tappable form wins: it is the one a button can carry, and the panel
+    it opens explains the typed form anyway.
+    """
+    by_label: Dict[str, Entry] = {}
+    order: List[str] = []
+    for entry in entries:
+        key = f"{entry.action}|{entry.label}"
+        if key not in by_label:
+            by_label[key] = entry
+            order.append(key)
+            continue
+        kept = by_label[key]
+        if kept.needs_arg and not entry.needs_arg:
+            entry.words |= kept.words
+            entry.usage = entry.usage or kept.usage
+            by_label[key] = entry
+        else:
+            kept.words |= entry.words
+            kept.usage = kept.usage or entry.usage
+    return [by_label[k] for k in order]
 
 
 def search(query: str, limit: int = 8) -> List[Tuple[int, Entry]]:
@@ -140,7 +176,11 @@ def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
     row: ButtonRow = []
     for _score, entry in hits:
         if entry.needs_arg:
-            lines.append(f"⌨️ *{entry.label}* — type `{entry.action} <id>`")
+            if entry.usage:
+                lines.append(f"⌨️ *{entry.label}* — type `{entry.usage}`")
+            else:
+                # Never invent one. An unroutable command reads as a broken feature.
+                lines.append(f"⌨️ *{entry.label}* — ask for it in plain words")
             continue
         lines.append(f"• {entry.label}")
         row.append((entry.label, entry.callback))

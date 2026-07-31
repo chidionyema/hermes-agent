@@ -51,6 +51,23 @@ _BASELINE: Optional[Tuple[int, int, int]] = None
 _WATCHING = False
 
 
+def signal_planned_restart() -> None:
+    """Declare this reload PLANNED, then ask ourselves to shut down gracefully.
+
+    Order matters: the marker must exist before the signal, because the shutdown handler
+    consumes it while handling that signal.
+    """
+    try:
+        from gateway.status import write_takeover_marker
+
+        write_takeover_marker(os.getpid())
+    except Exception:
+        logger.exception("Source watch: could not mark the reload planned; exiting anyway")
+    # SIGTERM, not os._exit: it runs the same graceful shutdown a kickstart would, so
+    # sessions drain and get re-scheduled instead of being cut mid-turn.
+    os.kill(os.getpid(), signal.SIGTERM)
+
+
 def _iter_sources(root: Path = _ROOT, packages: Iterable[str] = _WATCHED):
     for pkg in packages:
         base = root / pkg
@@ -136,9 +153,19 @@ def start_watcher(
                 on_restart()
             except Exception:
                 logger.exception("Source watch: on_restart hook failed; exiting anyway")
-        # SIGTERM, not os._exit: it runs the same graceful shutdown a kickstart would, so
-        # sessions drain and get re-scheduled instead of being cut mid-turn.
-        os.kill(os.getpid(), signal.SIGTERM)
+        # Declare the reload PLANNED before signalling. Without this the shutdown handler
+        # classifies its own SIGTERM as unexpected and exits 1; launchd records status 1,
+        # and `verify_estate.sh` reads that back as
+        #   "ai.hermes.gateway last exit=1 — job is failing every run"  -> VERDICT DEGRADED.
+        # Measured: a clean estate went OPERATIONAL -> DEGRADED purely because the watcher
+        # had done its job. A source-of-truth probe that goes red on correct behaviour is
+        # the failure the LAUNCHD section of that script was written to prevent — it trains
+        # the eye to ignore a real red. The marker names our own pid, which is exactly what
+        # `consume_takeover_marker_for_self` matches on, so the handler exits 0 instead.
+        # Safe because this job is KeepAlive=true (unconditional): launchd revives us on a
+        # zero exit just the same. Best-effort — a failed write costs a false red, not the
+        # restart, so we signal either way.
+        signal_planned_restart()
 
     def _loop():
         current = baseline
