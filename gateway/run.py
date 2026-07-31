@@ -8404,9 +8404,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             source.chat_id or "unknown", _msg_preview, _reply_id, _reply_txt,
         )
 
-        # ---- Operator shell: CEO natural ops + voice executive brief ----
-        # Structured actions only — never freeform guessing. Fail open to agent.
+        # ---- Operator shell FALLBACK (Telegram CEO verbs owned by otto-inbound) ----
+        # Primary path: pre_gateway_dispatch → chat_router → skip.
+        # Re-run natural_ops here ONLY when plugin did not claim the message
+        # (allow / plugin missing). Prevents double-hit on the same verb.
         try:
+            from gateway.operator_shell.chat_router import telegram_plugin_owns_ceo
             from gateway.operator_shell.natural_ops import match_natural_op
             from gateway.operator_shell.voice_brief import (
                 wants_executive_brief,
@@ -8423,19 +8426,24 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _raw_text = _raw_text.lstrip("🎙️").strip().strip('"')
 
             if source.platform == _OpPlatform.TELEGRAM and _raw_text:
-                _nop = match_natural_op(_raw_text)
-                if _nop is not None:
-                    _action = _nop.action if not _nop.args else f"{_nop.action}:{_nop.args}"
-                    _view = await asyncio.to_thread(handle_estate_action, _action)
-                    _adapter = self.adapters.get(source.platform)
-                    if _adapter and hasattr(_adapter, "send_operator_panel"):
-                        await _adapter.send_operator_panel(event, _view)
-                    elif _adapter:
-                        _meta = self._thread_metadata_for_source(
-                            source, self._reply_anchor_for_event(event)
-                        )
-                        await _adapter.send(source.chat_id, _view.text, metadata=_meta)
-                    return
+                # Plugin already owns CEO verbs on Telegram text path.
+                # Voice transcripts often arrive after STT inside this handler —
+                # still route them once here (plugin saw empty/caption earlier).
+                _run_fallback = _from_voice or not telegram_plugin_owns_ceo()
+                if _run_fallback:
+                    _nop = match_natural_op(_raw_text)
+                    if _nop is not None:
+                        _action = _nop.action if not _nop.args else f"{_nop.action}:{_nop.args}"
+                        _view = await asyncio.to_thread(handle_estate_action, _action)
+                        _adapter = self.adapters.get(source.platform)
+                        if _adapter and hasattr(_adapter, "send_operator_panel"):
+                            await _adapter.send_operator_panel(event, _view)
+                        elif _adapter:
+                            _meta = self._thread_metadata_for_source(
+                                source, self._reply_anchor_for_event(event)
+                            )
+                            await _adapter.send(source.chat_id, _view.text, metadata=_meta)
+                        return
                 if wants_executive_brief(_raw_text, from_voice=_from_voice):
                     _brief, _btns = await asyncio.to_thread(render_executive_brief)
                     from gateway.operator_shell.estate import PanelView as _PV

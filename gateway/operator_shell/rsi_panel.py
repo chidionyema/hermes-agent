@@ -49,23 +49,29 @@ def learning_armed() -> bool:
 
 
 def glance_line() -> str:
-    """One-line RSI for mission card / brief."""
+    """One-line RSI for mission card / brief — armed vs idle with reason."""
     armed = learning_armed()
     staged = _staged_count()
     idle = _last_idle()
+    if not armed:
+        return "🧠 RSI `OFF` · OFF_SWITCH absent · arm via 🧠 RSI"
     idle_bit = "—"
+    reason = ""
     if idle:
         if not _idle_is_live_fire(idle) and (
             idle.get("exit") != 0 or idle.get("failed_phases")
         ):
             idle_bit = f"cleared {idle.get('_ago') or '?'}"
+            reason = " · prior fail cleared"
         else:
             ok = idle.get("exit") == 0 and not idle.get("failed_phases")
             mark = "ok" if ok else "fail"
             when = idle.get("_ago") or "?"
             idle_bit = f"{mark} {when}"
+            if not ok:
+                reason = f" · {str(idle.get('reason') or idle.get('failed_phases') or 'fail')[:28]}"
     return (
-        f"🧠 RSI `{'ARMED' if armed else 'OFF'}` · idle `{idle_bit}` · "
+        f"🧠 RSI `ARMED` · idle `{idle_bit}`{reason} · "
         f"staged `{staged}` · proofs `{_proof_count()}`"
     )
 

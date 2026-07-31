@@ -108,7 +108,7 @@ def _verdict(conn, C) -> Tuple[str, str]:
         if code:
             tid, st = code
             return "🟡 BUSY", f"code `{tid[:8]}` {st}"
-        if not claude_ok:
+        if not claude_ok or not agy_ok:
             return "🟡 DEGRADED", cb_detail
         return "🟢 CLEAR", "go"
     except Exception as exc:

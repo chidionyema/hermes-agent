@@ -20,14 +20,19 @@ class NaturalOp:
 
 # Order matters: first match wins. Prefer specific (approve id) before broad (status).
 _PATTERNS = [
+    # Noise → mission card (same contract as otto CEO free-chat)
+    (re.compile(
+        r"^\s*(ok|okay|k|kk|hi|hey|hello|yo|sup|thanks|thank you|thx|ty|"
+        r"👍|👌|\.|…+|hmm+|yep|yeah|cool|nice)\s*$", re.I),
+     "refresh", "", "Mission card"),
     # Spend / estate power
     (re.compile(
         r"^\s*(pause\s+(all\s+)?spend|pause\s+estate|freeze\s+spend|"
         r"pause\s+everything|stop\s+spending)\s*$", re.I),
      "pause", "", "Pause spend"),
     (re.compile(
-        r"^\s*(resume\s+(spend|estate)?|unfreeze|unpause|go\s+live|"
-        r"resume\s+everything)\s*$", re.I),
+        r"^\s*(resume(\s+(spend|estate|everything))?|unfreeze|unpause|go\s+live)\s*$",
+        re.I),
      "resume", "", "Resume spend"),
     # Mission / status / sitrep
     (re.compile(
@@ -79,6 +84,18 @@ _PATTERNS = [
     (re.compile(
         r"^\s*(daemons?|services?|launchctl|estate\s+daemons?)\s*\??\s*$", re.I),
      "daemons", "", "Daemons"),
+    (re.compile(
+        r"^\s*(restart|bounce)\s+(the\s+)?gateway\s*$", re.I),
+     "daemon_restart", "gateway", "Bounce gateway (confirm)"),
+    (re.compile(
+        r"^\s*restart\s+(the\s+)?(coord|coordinator)\s*$", re.I),
+     "daemon_restart", "coordinator", "Restart coordinator"),
+    (re.compile(
+        r"^\s*(coord|coordinator)\s+logs?\s*$", re.I),
+     "daemon_logs", "coordinator", "Coordinator logs"),
+    (re.compile(
+        r"^\s*(run|fire|kick)\s+(hermes\s+)?watchdog\s*(now)?\s*$", re.I),
+     "daemon_run_now", "watchdog", "Run Hermes watchdog now"),
     (re.compile(
         r"^\s*(prospector\s+daemons?|prospect\s+daemons?|"
         r"prospector\s+(status|health)|daemon\s+status\s+prospector|"
@@ -149,6 +166,10 @@ _PATTERNS = [
     (re.compile(
         r"^\s*pause\s+(?:task\s+)?`?([0-9a-fA-F]{4,12})`?\s*$", re.I),
      "pause_task", "{g1}", "Pause task"),
+    # Explicit assign prefix (natural assign also lives in code_remote via chat_router)
+    (re.compile(
+        r"^\s*(?:assign|code|cc)\s*[:\-]?\s+(.+)$", re.I | re.DOTALL),
+     "code_assign", "{g1}", "Assign code"),
 ]
 
 

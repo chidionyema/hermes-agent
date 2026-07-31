@@ -528,16 +528,54 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
             text, buttons = pd_confirm(rest, unit or "scheduler")
             return _finish(PanelView(text=text, buttons=buttons, toast="Confirm"))
 
-    if action.startswith("daemon_"):
+    if action.startswith("daemon_") or action == "code_assign":
+        if action == "code_assign":
+            from gateway.operator_shell import code_remote as CR
+
+            body = (arg or "").strip() or None
+            if not body:
+                return _finish(
+                    PanelView(text="Usage: `assign <task>` / `code <task>`", ok=False)
+                )
+            ack, tid, buttons = CR.start_code_run(
+                body, created_by="telegram:estate"
+            )
+            return _finish(
+                PanelView(
+                    text=ack,
+                    buttons=buttons,
+                    toast="Coding run",
+                    proof_receipt=_proof(
+                        "code_assign",
+                        "done",
+                        f"code `{tid[:8] if tid else '?'}`",
+                        request_id=rid,
+                    ),
+                )
+            )
+
         from gateway.operator_shell.daemons import (
             confirm_card as d_confirm,
             render_daemons,
+            render_logs as d_logs,
             run_op as d_run,
             _resolve_short,
         )
 
         rest = action[len("daemon_") :]
         unit = arg
+        if rest == "logs":
+            text, buttons = d_logs(unit or "coordinator")
+            return _finish(
+                PanelView(
+                    text=text,
+                    buttons=buttons,
+                    toast="Logs",
+                    proof_receipt=_proof(
+                        "daemon_logs", "done", f"logs `{unit}`", request_id=rid
+                    ),
+                )
+            )
         if rest.endswith("_confirm"):
             op_name = rest[: -len("_confirm")]
             label = _resolve_short(unit or "")
