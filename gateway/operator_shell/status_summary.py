@@ -35,28 +35,21 @@ def _spend_gauge(used: float, cap: float) -> str:
     return f"{emoji} ${used:.2f} / ${cap:.2f} {bar} {pct:.0%}  [daily cap]"
 
 
+from gateway.operator_shell.launchd_health import probe_estate as _probe_daemons, summarize as _summarize_daemons
+
+
 def _count_daemons() -> Tuple[int, int]:
-    """(running, total) for estate daemons."""
-    labels = [
-        "ai.hermes.gateway",
-        "ai.hermes.coordinator",
-        "ai.hermes.watchdog",
-        "ai.hermes.progress",
-        "ai.hermes.rsi",
-    ]
-    running = 0
-    uid = os.getuid()
-    for label in labels:
-        try:
-            r = subprocess.run(
-                ["launchctl", "print", f"gui/{uid}/{label}"],
-                capture_output=True, text=True, timeout=3,
-            )
-            if "state = running" in (r.stdout or ""):
-                running += 1
-        except Exception:
-            pass
-    return running, len(labels)
+    """(ok, total) — periodic daemons counted correctly as healthy when scheduled."""
+    hs = _probe_daemons()
+    ok, total, _faults = _summarize_daemons(hs)
+    return ok, total
+
+
+def _daemon_faults() -> list:
+    """List of daemons that are actually broken (not just between periodic ticks)."""
+    hs = _probe_daemons()
+    _ok, _total, faults = _summarize_daemons(hs)
+    return faults
 
 
 def _count_cron() -> Tuple[int, int, int]:
