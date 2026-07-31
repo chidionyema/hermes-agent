@@ -53,16 +53,21 @@ def _keywords(pattern: str, label: str) -> Set[str]:
 
 
 class Entry:
-    __slots__ = ("action", "args", "label", "words", "needs_arg", "usage")
+    __slots__ = ("action", "args", "label", "words", "needs_arg", "usage", "typed")
 
-    def __init__(self, action: str, args: str, label: str, words: Set[str], usage: Optional[str] = None):
+    def __init__(self, action: str, args: str, label: str, words: Set[str],
+                 usage: Optional[str] = None, typed: bool = False):
         self.action = action
         self.args = args
         self.label = label
         self.words = words
+        # A slash command: it is dispatched by typing it into the chat, not by a callback,
+        # so there is no button form of it at all. Same "tell them, don't offer a dead
+        # button" treatment as an op that needs an argument.
+        self.typed = typed
         # "{g1}" is a capture placeholder: the op is only meaningful with an id or value
         # the operator supplies, so it can be told about but not offered as a tap.
-        self.needs_arg = "{g" in (args or "")
+        self.needs_arg = typed or "{g" in (args or "")
         # What to type, derived from the pattern itself. The action name is NOT it —
         # `match_natural_op("se_set …")` is None, so printing that sent the operator to a
         # command the router has never accepted.
@@ -91,7 +96,37 @@ def _index() -> List[Entry]:
                 seen[key].usage = entry.usage
         else:
             seen[key] = entry
-    return _collapse_same_label(list(seen.values()))
+    return _collapse_same_label(list(seen.values())) + _slash_entries()
+
+
+def _slash_entries() -> List[Entry]:
+    """The slash commands, as findable destinations.
+
+    Telegram's ``/`` list shows 9 commands and hides the other 49 (``menu_profile:
+    operator``, config.yaml). The hidden ones still dispatch perfectly — but a command you
+    cannot see and cannot guess the name of does not exist to the operator. This is the only
+    surface that can reintroduce them, because it is searched by meaning rather than
+    browsed.
+
+    They are `typed`, never buttons: a slash command is text the router parses, so a
+    callback button could not carry it. Derived from the registry for the same reason the
+    op index is derived from `_PATTERNS` — a hand-kept copy drifts.
+    """
+    try:
+        from hermes_cli.commands import gateway_command_index
+    except Exception:
+        return []  # find must never be the thing that breaks; no commands is survivable
+    try:
+        rows = gateway_command_index()
+    except Exception:
+        return []
+    out: List[Entry] = []
+    for name, description, args_hint, aliases in rows:
+        vocab = " ".join([name, *aliases]).replace("-", " ").replace("_", " ")
+        usage = f"/{name} {args_hint}".strip() if args_hint else f"/{name}"
+        out.append(Entry("", "", description, _keywords(vocab, description),
+                         usage=usage, typed=True))
+    return out
 
 
 def _collapse_same_label(entries: List[Entry]) -> List[Entry]:
@@ -137,20 +172,24 @@ def search(query: str, limit: int = 8) -> List[Tuple[int, Entry]]:
                 score += 1
         if score:
             scored.append((score, entry))
-    # Sort by score, then label, so equal-scoring results come back in a stable order
-    # rather than shuffling between renders of the same query.
-    scored.sort(key=lambda pair: (-pair[0], pair[1].label))
+    # Score, then taps before typing, then label — stable across renders of the same query.
+    # A slash command that scores level with an estate op loses the tie on purpose: both
+    # get you there, and one of them is a button.
+    scored.sort(key=lambda pair: (-pair[0], pair[1].typed, pair[1].label))
     return scored[:limit]
 
 
 def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
     query = (query or "").strip()
     if not query:
-        total = len(_index())
+        index = _index()
+        total = len(index)
+        slash = sum(1 for e in index if e.typed)
         text = "\n".join([
             "🔎 *Find* — type what you want, not where it lives",
             "",
-            f"`find <anything>` searches all {total} operations. For example:",
+            f"`find <anything>` searches all {total} operations, including the "
+            f"{slash} slash commands — most of which Telegram's `/` list hides.",
             "",
             "• `find restart` — every restart there is",
             "• `find spend` — caps, pause, budget",
@@ -175,6 +214,9 @@ def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
     buttons: List[ButtonRow] = []
     row: ButtonRow = []
     for _score, entry in hits:
+        if entry.typed:
+            lines.append(f"⌨️ `{entry.usage}` — {entry.label}")
+            continue
         if entry.needs_arg:
             if entry.usage:
                 lines.append(f"⌨️ *{entry.label}* — type `{entry.usage}`")

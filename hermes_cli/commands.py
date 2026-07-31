@@ -463,6 +463,29 @@ def _requires_argument(args_hint: str) -> bool:
     return args_hint.strip().startswith("<")
 
 
+def gateway_command_index() -> list[tuple[str, str, str, tuple[str, ...]]]:
+    """``(name, description, args_hint, aliases)`` for every chat-reachable command.
+
+    Same availability gate as :func:`gateway_help_lines` — this is the help list as data
+    rather than as rendered strings, so a consumer can search it instead of printing it.
+
+    It exists because Telegram's ``/`` menu shows 9 of these and hides the rest
+    (``operator_shell.menu_profile: operator``); the hidden ones still dispatch, but nothing
+    on screen said they existed. :mod:`gateway.operator_shell.find` folds this into the
+    cockpit's 🔎 search so a hidden command is findable by what it does.
+
+    Aliases ride along because they are search vocabulary — someone hunting for the cockpit
+    types "menu", which is an alias of ``panel`` and appears nowhere in its name.
+    """
+    overrides = _resolve_config_gates()
+    out: list[tuple[str, str, str, tuple[str, ...]]] = []
+    for cmd in COMMAND_REGISTRY:
+        if not _is_gateway_available(cmd, overrides):
+            continue
+        out.append((cmd.name, cmd.description, cmd.args_hint or "", tuple(cmd.aliases or ())))
+    return out
+
+
 def gateway_help_lines() -> list[str]:
     """Generate gateway help text lines from the registry."""
     overrides = _resolve_config_gates()

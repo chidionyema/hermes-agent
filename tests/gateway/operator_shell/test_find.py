@@ -32,7 +32,18 @@ def _typed(hint: str) -> str:
 
 
 def _arg_entries():
-    return [e for e in find._index() if e.needs_arg]
+    """Estate ops that take an argument — the ones `match_natural_op` must accept.
+
+    Slash commands are excluded because they are not natural-language ops: they are routed
+    by `resolve_command`, not by `_PATTERNS`, so typing one at `match_natural_op` correctly
+    returns None. The same "what we tell you to type must be real" invariant applies to
+    them, against their own router — see `test_every_slash_hint_actually_resolves`.
+    """
+    return [e for e in find._index() if e.needs_arg and not e.typed]
+
+
+def _slash_entries():
+    return [e for e in find._index() if e.typed]
 
 
 def test_index_is_derived_and_non_empty():
@@ -60,6 +71,41 @@ def test_every_typed_hint_actually_routes():
                 f"{matched.action if matched else None}"
             )
     assert not failures, "hints that do not route:\n" + "\n".join(failures)
+
+
+def test_every_slash_hint_actually_resolves():
+    """Same invariant as above, for the slash commands: type it and it must be accepted.
+
+    Search now carries the 49 commands Telegram's `/` list hides, which is only worth doing
+    if the string it prints is the string the router takes. `resolve_command` is that
+    router; a hint it returns None for is a command that does not exist.
+    """
+    from hermes_cli.commands import resolve_command
+
+    entries = _slash_entries()
+    assert len(entries) > 20, "the slash commands should be in the index, not a handful"
+    failures = []
+    for entry in entries:
+        assert entry.usage, f"{entry.label}: slash entry with no usage prints nothing to type"
+        # The hint is "/name [args]" — the router is given the name, which is what a
+        # dispatcher does with the first token of the line.
+        name = entry.usage.split()[0]
+        assert name.startswith("/"), f"{entry.usage!r} does not read as a command"
+        if resolve_command(name) is None:
+            failures.append(f"{entry.usage!r} -> resolve_command({name!r}) is None")
+    assert not failures, "slash hints that do not resolve:\n" + "\n".join(failures)
+
+
+def test_a_hidden_command_is_findable_by_what_it_does():
+    """The whole point: Telegram shows 9 commands and hides 49, and search reintroduces them.
+
+    `/compress` is one of the hidden ones. Before the slash index it scored zero matches —
+    the feature existed, dispatched fine, and was unreachable for anyone who did not already
+    know its name.
+    """
+    text, _rows = find.render_find("compress")
+    assert "/compress" in text
+    assert "⌨️" in text, "a slash command must be shown as type-this, never as a dead button"
 
 
 # There is deliberately no "the hint must differ from the action name" test: for approve,

@@ -152,6 +152,12 @@ gateway:
 
   help:
     header:                "📖 **Hermes Commands**\n"
+    # Line 1, ahead of the wall of 58. The list below is a flat A-to-Z with `/panel` at
+    # position 22, looking no more important than `/rollback` — so the one entry that makes
+    # the other 57 unnecessary was the hardest one to spot. "how do i access the menu? is
+    # there one menu are there multiple menus?" (founder, 2026-07-31). Name the door first,
+    # then the long way round.
+    cockpit_hint:          "🎛 **`/panel`** — the cockpit: one pinned card, every operation a tap. Also `/menu`, `/cockpit`.\nInside it, 🔎 searches everything by name, so you rarely need the list below.\n\n_The long way round — type any of these:_"
     skill_header:          "\n⚡ **Skill Commands** ({count} active):"
     more_use_commands:     "\n... and {count} more. Use `/commands` for the full paginated list."
 

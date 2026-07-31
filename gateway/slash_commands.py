@@ -953,6 +953,9 @@ class GatewaySlashCommandsMixin:
         from hermes_cli.commands import gateway_help_lines
         lines = [
             t("gateway.help.header"),
+            # The door, before the list. `gateway_help_lines()` is registry order, so
+            # `/panel` lands mid-list among 58 peers with nothing marking it as the way in.
+            t("gateway.help.cockpit_hint"),
             *gateway_help_lines(),
         ]
         try:
