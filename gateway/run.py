@@ -5391,7 +5391,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         if connected_count > 0:
             logger.info("Gateway running with %s platform(s)", connected_count)
-        
+
+        # Pick up edits without waiting for an unrelated restart. hermes_agent is installed
+        # editable, so a restart always loads the working tree — what was missing is anything
+        # that *causes* one when the tree changes. See gateway/source_watch.py.
+        if connected_count > 0:
+            try:
+                from gateway.source_watch import start_watcher
+                start_watcher()
+            except Exception as e:
+                logger.warning("Source watch unavailable: %s", e)
+
         # Build initial channel directory for send_message name resolution
         try:
             from gateway.channel_directory import build_channel_directory

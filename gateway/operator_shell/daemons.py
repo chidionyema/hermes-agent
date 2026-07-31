@@ -475,6 +475,54 @@ def confirm_card(op: str, label: str) -> Tuple[str, List[ButtonRow]]:
     return text, buttons
 
 
+def is_own_job(label: str) -> bool:
+    """True when `label` is the launchd job this very process is running as.
+
+    Asked by pid, not by name: the cockpit imports the same module in a terminal, in a
+    test and inside the gateway, and only one of those must take the deferred path.
+    """
+    try:
+        return int(launchctl_state(label).get("pid") or -1) == os.getpid()
+    except Exception:
+        return False
+
+
+def restart_self(label: str, delay: float = 2.0) -> Tuple[bool, str]:
+    """Restart the job we ARE, without killing the reply that ordered it.
+
+    PROVEN 2026-07-31 with a disposable launchd job: a process that runs
+    `launchctl kickstart -k` on its own label is SIGKILLed *inside* subprocess.run —
+    the call never returns, so every line after it is unreachable. In run_op that meant
+    the receipt, the PanelView and the activity row never happened: the founder taps
+    ✅ Confirm, the gateway restarts, and the phone shows nothing. The button was not
+    missing, its answer was.
+
+    So hand the job to a detached child and return immediately. SIGTERM first (KeepAlive=1
+    on ai.hermes.gateway brings it back, and the gateway drains in-flight sessions on TERM
+    and resumes them on the way up), with a kickstart a few seconds later as the net in
+    case the process ignores TERM or KeepAlive is off.
+    """
+    target = f"gui/{_uid()}/{label}"
+    pid = os.getpid()
+    script = (
+        f"sleep {delay:g}; kill -TERM {pid} 2>/dev/null; "
+        f"sleep 8; launchctl kickstart {target} >/dev/null 2>&1"
+    )
+    try:
+        subprocess.Popen(
+            ["/bin/sh", "-c", script],
+            start_new_session=True,  # survive our own death; not in our process group
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        return False, f"could not schedule restart: {exc}"[:200]
+    return True, (
+        f"restarting pid {pid} in {delay:g}s (graceful TERM, launchd brings it back). "
+        "Telegram drops for a few seconds; this panel is the last one from the old process."
+    )
+
+
 def run_op(op: str, label: str) -> Tuple[bool, str]:
     """Execute start/stop/restart/run_now via launchctl. Returns (ok, detail)."""
     if op == "start" and label in _FENCED_START:
@@ -482,6 +530,17 @@ def run_op(op: str, label: str) -> Tuple[bool, str]:
     kind = _KIND.get(label, "keepalive")
     if kind in ("interval", "calendar") and op in ("start", "restart"):
         op = "run_now"
+    if is_own_job(label):
+        if op == "restart":
+            return restart_self(label)
+        if op == "stop":
+            # Refused, not silently upgraded to a restart. Stopping the door from the door
+            # leaves no way back in — `start` is fenced (_FENCED_START) precisely because
+            # of that, so this would be a one-way trip taken by mistake.
+            return False, (
+                "Refusing to stop the gateway from inside the gateway — that closes the "
+                "only door back in. Restart works; a real stop needs the CLI."
+            )
     target = f"gui/{_uid()}/{label}"
     plist = _plist_dir() / f"{label}.plist"
     try:

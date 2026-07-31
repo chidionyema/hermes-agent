@@ -247,6 +247,27 @@ _PATTERNS = [
     (re.compile(
         r"^\s*pause\s+(?:task\s+)?`?([0-9a-fA-F]{4,12})`?\s*$", re.I),
      "pause_task", "{g1}", "Pause task"),
+    # Find. The answer to "I don't know where anything is" — anchored above code_assign so
+    # "find the spend cap" is a lookup, not a coding task.
+    (re.compile(r"^\s*(?:find|search|lookup|look\s+up)\s+(.+?)\s*\??\s*$", re.I),
+     "find", "{g1}", "Find anything"),
+    (re.compile(
+        r"^\s*(?:where\s+(?:is|are|do\s+i\s+find)|how\s+do\s+i)\s+(.+?)\s*\??\s*$", re.I),
+     "find", "{g1}", "Find anything"),
+    (re.compile(r"^\s*(?:find|search|menu|help|commands?)\s*\??\s*$", re.I),
+     "find", "", "Find anything"),
+    # Brain / model. Anchored above code_assign because that `cc|code` prefix is broad.
+    (re.compile(
+        r"^\s*(?:which\s+|what\s+)?(?:model|brain|llm)"
+        r"(?:\s+(?:am\s+i|are\s+we)\s+(?:on|using))?\s*\??\s*$", re.I),
+     "brain", "", "Brain picker"),
+    (re.compile(
+        r"^\s*(?:change|switch|swap|pick|set)\s+(?:the\s+)?(?:model|brain|llm)\s*$", re.I),
+     "brain", "", "Brain picker"),
+    (re.compile(
+        r"^\s*(?:use|switch\s+to|change\s+to|swap\s+to|run\s+on)\s+(?:the\s+)?"
+        r"(opus|sonnet|haiku|deepseek|minimax)\b.*$", re.I),
+     "brain_set", "{g1}", "Switch brain"),
     # Explicit assign prefix (natural assign also lives in code_remote via chat_router)
     (re.compile(
         r"^\s*(?:assign|code|cc)\s*[:\-]?\s+(.+)$", re.I | re.DOTALL),

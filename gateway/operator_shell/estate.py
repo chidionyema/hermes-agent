@@ -18,6 +18,22 @@ from gateway.operator_shell.panel_chrome import nav
 
 ButtonRow = List[Tuple[str, str]]
 
+# Pre-warm the coordinator import in a background thread so the first tap on 🎛 Run
+# is instant. _load_coordinator() takes ~13s on first load (2938-line coordinator.py);
+# without this the first operator to open Run waits 13s staring at nothing.
+import threading
+
+
+def _prewarm_coordinator() -> None:
+    try:
+        _load_coordinator()
+    except Exception:
+        pass
+
+
+_thread = threading.Thread(target=_prewarm_coordinator, daemon=True)
+_thread.start()
+
 
 @dataclass
 class PanelView:
@@ -275,6 +291,55 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
                 proof_receipt=_proof(
                     "activity", "done", f"Operator log ({days}d)", request_id=rid
                 ),
+            )
+        )
+
+    if action == "find":
+        from gateway.operator_shell.find import render_find
+
+        text, buttons = render_find(arg)
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Find",
+                proof_receipt=_proof(
+                    "find", "done", f"search `{arg or '(help)'}`", request_id=rid
+                ),
+            )
+        )
+
+    if action == "brain":
+        from gateway.operator_shell.brain import render_brain
+
+        text, buttons = render_brain()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Brain",
+                proof_receipt=_proof("brain", "done", "Model picker", request_id=rid),
+            )
+        )
+
+    if action == "brain_set":
+        from gateway.operator_shell.brain import render_brain, set_model
+
+        ok, detail = set_model(arg or "")
+        receipt = _proof(
+            "brain_set",
+            "done" if ok else "failed",
+            f"brain → `{arg}`",
+            request_id=rid,
+            evidence=[detail],
+        )
+        text, buttons = render_brain()
+        return _finish(
+            PanelView(
+                text=receipt + "\n\n" + text,
+                buttons=buttons,
+                toast="🧠 switched" if ok else "⚠️ Failed",
+                ok=ok,
             )
         )
 

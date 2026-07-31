@@ -233,6 +233,17 @@ def _cron_label() -> str:
         return "?"
 
 
+def _brain_label() -> str:
+    """The configured model, short. `?` on any failure — never a guessed default."""
+    try:
+        from gateway.operator_shell.brain import current
+
+        model, provider = current()
+        return f"{model} ({provider})"
+    except Exception:
+        return "?"
+
+
 def _pd_params() -> Dict[str, object]:
     try:
         from gateway.operator_shell.prospector_daemon import read_params
@@ -312,6 +323,9 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
     # here and not on Run. The home card only offers it while it is BROKEN; this is the door
     # that stays open when it is healthy, so DM -> Topics is still a reachable change.
     lines.append(f"*🗓 Cron delivery* — where briefs land · now `{_cron_label()}`")
+    # The model is configuration in exactly the same sense: it persists, it costs money, and
+    # it was previously only reachable by typing `/model <name>` from memory.
+    lines.append(f"*🧠 Brain* — which model thinks · now `{_brain_label()}`")
     lines += ["", "_Rail changes still require the two-screen ARM confirmation._"]
 
     rows += [
@@ -321,6 +335,7 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
          (_TUNE_GROUPS[3][0], f"estate:{_TUNE_GROUPS[3][1]}")],
         [(_TUNE_GROUPS[4][0], f"estate:{_TUNE_GROUPS[4][1]}"),
          ("🗓 Cron delivery", "estate:setup_cron_topic")],
+        [("🧠 Brain", "estate:brain")],
         nav("tune"),
     ]
     return "\n".join(lines), rows
@@ -372,9 +387,12 @@ def _estate_paused() -> Optional[bool]:
     def _probe() -> Optional[bool]:
         from gateway.operator_shell.estate import _load_coordinator
 
-        return bool(_load_coordinator().estate_paused())
+        C = _load_coordinator()
+        if C is None:
+            return None
+        return bool(C.estate_paused())
 
-    return _safe(_probe)  # type: ignore[return-value]
+    return _safe(_probe, default=None)  # type: ignore[return-value]
 
 
 def _pd_paused() -> Optional[bool]:

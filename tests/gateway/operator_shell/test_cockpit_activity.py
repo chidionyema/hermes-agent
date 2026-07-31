@@ -24,7 +24,10 @@ from gateway.operator_shell.cockpit import render_activity
 from gateway.operator_shell.mission import mission_buttons
 from gateway.operator_shell.panel_chrome import nav
 
-SPINE = ["estate:refresh", "estate:run", "estate:tune"]
+# Four positions since 2026-07-31: the three containers plus search. Browsing alone stopped
+# working at 131 destinations ("i dont know where to find anything"), so Find is spine, not a
+# leaf. The Find panel itself omits it — it would re-render the screen you are on.
+SPINE = ["estate:refresh", "estate:run", "estate:tune", "estate:find"]
 
 
 def _callbacks(rows):
@@ -42,16 +45,16 @@ def test_nav_omits_the_refresh_glyph_on_a_spine_panel(self_action):
     callback twice — the caller must not have to know that, so nav decides."""
     row = nav(self_action)
     cbs = [cb for _label, cb in row]
-    assert cbs[:3] == SPINE
-    assert len(cbs) == 3, f"nav({self_action!r}) appended a redundant refresh: {cbs}"
+    assert cbs[:4] == SPINE
+    assert len(cbs) == 4, f"nav({self_action!r}) appended a redundant refresh: {cbs}"
 
 
 @pytest.mark.parametrize("self_action", ["se_params", "activity:7", "st_status"])
 def test_nav_keeps_the_refresh_glyph_off_spine(self_action):
     row = nav(self_action)
     cbs = [cb for _label, cb in row]
-    assert cbs[:3] == SPINE
-    assert cbs[3] == f"estate:{self_action}", (
+    assert cbs[:4] == SPINE
+    assert cbs[4] == f"estate:{self_action}", (
         # removeprefix, not lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (both 's' and 'e' are in "estate:").
         f"nav({self_action!r}) mangled the self-action: {cbs}"
@@ -73,7 +76,7 @@ def test_nav_keeps_the_refresh_glyph_off_spine(self_action):
 def test_mission_card_never_offers_the_same_action_twice(paused, primary, concerns):
     rows = mission_buttons(paused, primary, concerns)
     assert not _dupes(rows), f"home card duplicates: {_dupes(rows)}"
-    assert [cb for _l, cb in rows[-1]][:3] == SPINE
+    assert [cb for _l, cb in rows[-1]][:4] == SPINE
 
 
 def test_mission_card_caps_concerns_but_says_how_many_were_hidden():
@@ -311,3 +314,48 @@ def test_rsi_panel_offers_the_arm_toggle_once(monkeypatch, armed):
     assert _callbacks(rows).count(toggle) == 1
     if not armed:
         assert "Arm learning" in text
+
+
+# --- Find: search is the answer to "I don't know where anything is" -------------------
+
+def test_find_panel_does_not_offer_itself():
+    """The one nav position that must adapt. On every other panel 🔎 goes to Find; on Find
+    it would be this same screen, which is the duplicate-callback defect in a new place."""
+    cbs = [cb for _label, cb in nav("find")]
+    assert cbs == SPINE, cbs          # 🔎 is the self button; no 🔄 beside it
+    assert cbs.count("estate:find") == 1, cbs
+
+
+@pytest.mark.parametrize("query,expect_action", [
+    ("restart", "daemon_restart"),
+    ("model", "brain"),
+    ("spend", "pause"),
+    ("logs", "daemon_logs"),
+])
+def test_search_finds_the_obvious_word(query, expect_action):
+    from gateway.operator_shell.find import search
+
+    actions = {entry.action for _score, entry in search(query)}
+    assert expect_action in actions, f"{query!r} did not surface {expect_action}: {actions}"
+
+
+def test_search_is_empty_rather_than_wrong():
+    """A no-hit answer must say so. Returning the whole index for an unmatched word is how
+    a search box teaches an operator to stop trusting it."""
+    from gateway.operator_shell.find import search
+
+    assert search("xyzzyqux") == []
+    assert search("") == []
+
+
+def test_every_find_result_is_dispatchable():
+    """The index is derived from natural_ops, so a renamed action silently becomes a dead
+    button. Every argument-free hit must round-trip through the real dispatcher."""
+    from gateway.operator_shell.find import _index
+
+    for entry in _index():
+        assert entry.callback.startswith("estate:")
+        if not entry.needs_arg:
+            assert " " not in entry.callback, f"unusable callback: {entry.callback}"
+            assert len(entry.callback.encode()) <= 64, (
+                f"callback exceeds Telegram's 64-byte limit: {entry.callback}")

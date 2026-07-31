@@ -34,6 +34,7 @@ ButtonRow = List[Tuple[str, str]]
 _NOW = ("⚡️ Now", "estate:refresh")
 _RUN = ("🎛 Run", "estate:run")
 _TUNE = ("⚙️ Tune", "estate:tune")
+_FIND = ("🔎", "estate:find")
 
 
 def nav(self_action: Optional[str] = None) -> ButtonRow:
@@ -54,6 +55,12 @@ def nav(self_action: Optional[str] = None) -> ButtonRow:
     four buttons fit one phone row without wrapping.
     """
     row: ButtonRow = [_NOW, _RUN, _TUNE]
+    # Three containers hold 131 destinations, so browsing alone stops working — "buttons may
+    # exist but the UI is so confusing i dont know where to find anything" (founder,
+    # 2026-07-31). Search is the fourth spine position. Bare glyph, so the row still fits a
+    # phone. On the Find panel itself it needs no special case: the glyph rule below already
+    # refuses to add a 🔄 whose callback is already in the row, so 🔎 *is* the self button.
+    row.append(_FIND)
     if self_action:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").
