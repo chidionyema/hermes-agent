@@ -298,7 +298,15 @@ class TestRunBackgroundTask:
         # (default mode requires the file to exist as a regular file).
         import os as _os
         import tempfile as _tempfile
-        _tmpdir = _tempfile.mkdtemp(prefix="bg_media_")
+        # realpath, because the delivery path validator resolves symlinks before its
+        # containment/denylist check (gateway/platforms/base.py — "Symlinks are resolved
+        # before any containment / denylist check", `expanded.resolve(strict=True)`).
+        # That resolution is the security property: without it a symlink smuggles
+        # ~/.ssh/id_rsa past the denylist. So the adapter is *correctly* handed the
+        # resolved path, and comparing against the unresolved one is the test's bug.
+        # It only shows on macOS, where /var is a symlink to /private/var — on Linux
+        # mkdtemp already returns a real path and this assertion passed by luck.
+        _tmpdir = _os.path.realpath(_tempfile.mkdtemp(prefix="bg_media_"))
         _ogg = _os.path.join(_tmpdir, "clip.ogg")
         _mp4 = _os.path.join(_tmpdir, "render.mp4")
         _png = _os.path.join(_tmpdir, "chart.png")
