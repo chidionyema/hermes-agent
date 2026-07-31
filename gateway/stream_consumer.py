@@ -95,6 +95,13 @@ class GatewayStreamConsumer:
     # progressive edits for the remainder of the stream.
     _MAX_FLOOD_STRIKES = 3
 
+    # Ceiling on how long we will honour a platform-stated flood wait. Telegram has
+    # asked for 270s; waiting that out is correct for a background edit but a stream
+    # that sleeps five minutes is indistinguishable from a hang, and the consumer has
+    # a fallback final send for exactly this case. Above the ceiling we wait the
+    # ceiling, then let the strike counter promote the stream into fallback mode.
+    _MAX_FLOOD_BACKOFF = 60.0
+
     # Reasoning/thinking tags that models emit inline in content.
     # Must stay in sync with cli.py _OPEN_TAGS/_CLOSE_TAGS and
     # run_agent.py _strip_think_blocks() tag variants.
@@ -920,10 +927,16 @@ class GatewayStreamConsumer:
                 if result.success:
                     break
                 if attempt == 0 and self._is_flood_error(result):
+                    # Same defect as the edit path: this slept 3s against penalties the
+                    # gateway logged at 13–270s, so the retry was guaranteed to be
+                    # rejected and to extend the lockout. Wait what we were told.
+                    stated = self._stated_retry_after(result)
+                    wait = self._flood_backoff(result)
                     logger.debug(
-                        "Flood control on fallback send, retrying in 3s"
+                        "Flood control on fallback send, retrying in %.1fs (platform stated %s)",
+                        wait, f"{stated:.0f}s" if stated is not None else "nothing",
                     )
-                    await asyncio.sleep(3.0)
+                    await asyncio.sleep(wait)
                 else:
                     break  # non-flood error or second attempt failed
 
@@ -993,6 +1006,55 @@ class GatewayStreamConsumer:
         err = getattr(result, "error", "") or ""
         err_lower = err.lower()
         return "flood" in err_lower or "retry after" in err_lower or "rate" in err_lower
+
+    def _flood_backoff(self, result) -> float:
+        """How long to wait after this flood-control rejection, in seconds.
+
+        One rule for both retry paths (progressive edit and fallback send) so they cannot
+        drift apart again — they were 10s-capped and 3s-hardcoded respectively while the
+        platform was asking for up to 270s.
+
+        The platform's number is a FLOOR, not a target: when it asks for less than we had
+        already backed off to, we keep our own interval. Capped at ``_MAX_FLOOD_BACKOFF``
+        so a stream cannot go silent for minutes.
+        """
+        stated = self._stated_retry_after(result)
+        doubled = min(self._current_edit_interval * 2, 10.0)
+        if stated is None:
+            return doubled
+        return max(doubled, min(stated, self._MAX_FLOOD_BACKOFF))
+
+    @staticmethod
+    def _stated_retry_after(result) -> Optional[float]:
+        """Seconds the platform asked us to wait, or None if it named no number.
+
+        Prefers the structured ``SendResult.retry_after`` and falls back to parsing the
+        error string, because the number reaches us both ways: Telegram's adapter encodes
+        long waits as ``flood_control:140.0`` and PTB's own message reads "Flood control
+        exceeded. Retry in 140 seconds".
+
+        None means "no number given" and the caller must keep its own backoff — never
+        treat it as zero.
+        """
+        raw = getattr(result, "retry_after", None)
+        if raw is not None:
+            try:
+                secs = float(raw)
+                if secs > 0:
+                    return secs
+            except (TypeError, ValueError):
+                pass
+        err = getattr(result, "error", "") or ""
+        m = re.search(r"flood_control:([0-9]+(?:\.[0-9]+)?)", err, re.I) or re.search(
+            r"retry(?:\s+after|\s+in)?[^0-9]{0,12}([0-9]+(?:\.[0-9]+)?)", err, re.I
+        )
+        if m:
+            try:
+                secs = float(m.group(1))
+                return secs if secs > 0 else None
+            except ValueError:
+                return None
+        return None
 
     def _resolve_draft_streaming(self) -> bool:
         """Decide whether this run should use native draft streaming.
@@ -1519,15 +1581,22 @@ class GatewayStreamConsumer:
                         # edits after _MAX_FLOOD_STRIKES consecutive failures.
                         if self._is_flood_error(result):
                             self._flood_strikes += 1
-                            self._current_edit_interval = min(
-                                self._current_edit_interval * 2, 10.0,
-                            )
+                            # The platform usually states exactly how long to wait.
+                            # Doubling a local interval to a 10s ceiling while Telegram
+                            # says 140s means ~14 further requests inside the penalty
+                            # window, and each rejected request extends the penalty —
+                            # which is how 13s lockouts became 270s ones on 2026-07-31.
+                            # Obey the stated number when we have one; the local
+                            # doubling remains the fallback for platforms that give none.
+                            stated = self._stated_retry_after(result)
+                            self._current_edit_interval = self._flood_backoff(result)
                             logger.debug(
                                 "Flood control on edit (strike %d/%d), "
-                                "backoff interval → %.1fs",
+                                "backoff interval → %.1fs (platform stated %s)",
                                 self._flood_strikes,
                                 self._MAX_FLOOD_STRIKES,
                                 self._current_edit_interval,
+                                f"{stated:.0f}s" if stated is not None else "nothing",
                             )
                             if self._flood_strikes < self._MAX_FLOOD_STRIKES:
                                 # Don't disable edits yet — just slow down.

@@ -1570,6 +1570,18 @@ class SendResult:
     # made up the full payload, in send order.  Empty tuple for the common
     # single-message case.
     continuation_message_ids: tuple = ()
+    # Seconds the platform told us to wait before trying again — Telegram's
+    # ``RetryAfter.retry_after`` / "Flood control exceeded. Retry in N seconds".
+    # ``None`` means the platform stated no number, NOT "retry immediately".
+    #
+    # This field exists because the number was being discarded: on 2026-07-31
+    # the gateway logged 56 flood rejections stating waits of 13–270s while the
+    # stream consumer backed off to a local 10s ceiling and the fallback send
+    # slept a hardcoded 3s.  Every retry issued inside a penalty window is
+    # itself a rejected request, which is how a short penalty compounds into a
+    # multi-minute one during which every other feature in the chat — slash
+    # commands included — is refused too.
+    retry_after: Optional[float] = None
 
 
 class EphemeralReply(str):
