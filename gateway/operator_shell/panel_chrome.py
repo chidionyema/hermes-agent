@@ -27,9 +27,25 @@ thing taken away is the need to re-learn the keyboard on every screen.
 from __future__ import annotations
 
 import re
-from typing import List, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence, Tuple
 
 ButtonRow = List[Tuple[str, str]]
+
+# A group may span at most this many grid rows before it stops reading as one idea.
+#
+# Deliberately a PER-GROUP cap, not a per-panel one. Run carries 19 buttons and every one of
+# them is a control the operator must keep — capping the panel would mean either deleting a
+# verb or pushing it a tap deeper, and both are a loss of control to buy a cosmetic number.
+# What actually made Run unreadable was that its 19 buttons arrived as one undifferentiated
+# pile: 10 rows of grid against 4 lines of text, spanning 5 subsystems, with nothing saying
+# where one subsystem ended and the next began. Grouped and labelled, 19 is navigable; the
+# thing worth bounding is how much sits under a single label.
+#
+# Counted in ROWS, not buttons. Buttons are the wrong unit: the grid wraps by row, so two
+# 2-button rows scan as one block while five stacked single-button rows scan as five. The
+# first draft of this capped buttons at 4 and immediately mis-flagged the `👁 Look` group —
+# 5 buttons but only 3 rows, and visually the tightest group on the panel.
+MAX_GROUP_ROWS = 3
 
 _NOW = ("⚡️ Now", "estate:refresh")
 _RUN = ("🎛 Run", "estate:run")
@@ -81,6 +97,97 @@ def with_nav(rows: Optional[List[ButtonRow]], self_action: Optional[str] = None)
     purpose, so adopting it panel by panel can never strand a destination.
     """
     return list(rows or []) + [nav(self_action)]
+
+
+class Group:
+    """One labelled block of a panel: a legend line in the text, its own rows in the grid.
+
+    Telegram hands you two independent channels — a message body and a button grid — and it
+    will not let you put a heading *between* two button rows. So on every dense screen the
+    grid arrives with no legend, and the reader has to infer the seams. `Run` was the worst
+    case: 19 buttons across `estate spend`, `signal engine`, `prospector`, `daemons` and four
+    read-only destinations, under a header that said "the actions", with three status lines
+    that named three of the five groups and mapped to nothing.
+
+    A Group ties the two channels together so they cannot drift apart:
+
+        Group("💹 Signal engine", [[("⏹ Stop", ...), ("♻️ Restart", ...)]], status="`running`")
+
+    `compose()` then guarantees the invariant that makes the legend trustworthy — every legend
+    line has buttons under it, and every button sits under a legend line. A group whose rows
+    are all filtered out (state-dependent verbs frequently are) prints no legend line at all,
+    so the text can never promise a control the grid does not offer.
+    """
+
+    __slots__ = ("title", "rows", "status", "note")
+
+    def __init__(
+        self,
+        title: str,
+        rows: Optional[Sequence[ButtonRow]] = None,
+        status: str = "",
+        note: str = "",
+    ):
+        self.title = title
+        # Drop empty rows here rather than at every call site: `render_run` builds rows
+        # conditionally on three probes that are each allowed to return None.
+        self.rows: List[ButtonRow] = [list(r) for r in (rows or []) if r]
+        self.status = status
+        self.note = note
+
+    @property
+    def n_buttons(self) -> int:
+        return sum(len(r) for r in self.rows)
+
+    def legend(self) -> List[str]:
+        """The text lines that stand for this group. Empty when the group has no buttons."""
+        if not self.rows:
+            return []
+        head = f"*{self.title}*"
+        if self.status:
+            head += f" — {self.status}"
+        return [head] + ([f"  _{self.note}_"] if self.note else [])
+
+
+def compose(
+    header: Iterable[str],
+    groups: Sequence[Group],
+    self_action: Optional[str] = None,
+    footer: Iterable[str] = (),
+    tail: Optional[Sequence[ButtonRow]] = None,
+) -> Tuple[str, List[ButtonRow]]:
+    """Build (text, rows) so the text is a legend for the grid, in the same order.
+
+    The join key between the two channels is the emoji: a group titled `💹 Signal engine`
+    prints that emoji in the body and its buttons follow immediately in the grid, so a thumb
+    scanning down the keyboard can find where it is without reading back up. This is why the
+    order of `groups` is the order of BOTH outputs and why nothing may be inserted between
+    them — `tail` exists for exactly the rows that belong to no group (the spine), and it is
+    appended after every group, never interleaved.
+
+    Returns the same `(text, rows)` shape every panel already returns, so adopting it is a
+    per-panel change with no dispatcher involvement.
+    """
+    live = [g for g in groups if g.rows]
+    lines = [l for l in header]
+    if live:
+        lines.append("")
+    for g in live:
+        lines.extend(g.legend())
+    for f in footer:
+        lines.append(f)
+
+    rows: List[ButtonRow] = []
+    for g in live:
+        rows.extend(g.rows)
+    rows.extend(list(tail or []))
+    rows.append(nav(self_action))
+    return "\n".join(lines), rows
+
+
+def oversized_groups(groups: Sequence[Group]) -> List[Tuple[str, int]]:
+    """Groups that exceed `MAX_GROUP_ROWS` — the density check, as data not an assert."""
+    return [(g.title, len(g.rows)) for g in groups if len(g.rows) > MAX_GROUP_ROWS]
 
 
 _SENT_END = re.compile(r"[.!?;:](?:\s|$)")
