@@ -37,6 +37,15 @@ _ESTATE: Tuple[Tuple[str, str, str, Tuple[Path, ...]], ...] = (
         ),
     ),
     (
+        "ai.hermes.keepawake",
+        "keepawake",
+        "keepalive",
+        (
+            Path.home() / ".hermes" / "logs" / "keepawake.out.log",
+            Path.home() / ".hermes" / "logs" / "keepawake.err.log",
+        ),
+    ),
+    (
         "ai.hermes.watchdog",
         "watch",
         "interval",
@@ -321,6 +330,22 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
     if down:
         lines.append("")
         lines.append(f"⬇️ needs attention: {', '.join(down)}")
+
+    # TIE calendar EX_CONFIG — phone-visible + Mac command
+    tie_st = launchctl_state("com.tie.ai-review")
+    if (_plist_dir() / "com.tie.ai-review.plist").is_file():
+        lex = str(tie_st.get("last_exit") or "")
+        if lex and lex not in ("0", "0:"):
+            lines.append("")
+            lines.append(
+                f"⚠️ *TIE review* last exit `{lex}` — calendar job unhealthy."
+            )
+            lines.append(
+                "Mac: `launchctl kickstart -k "
+                f"gui/$UID/com.tie.ai-review` · logs under "
+                "`~/Documents/code/the-introduction-exchange/review/logs/`"
+            )
+
     lines.append("")
     lines.append("_Gateway start fenced. Prospect gen → Prospect daemons._")
 
@@ -344,6 +369,9 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
         ],
         [
             ("⚙️ Prospect daemons", "estate:prospector_daemon"),
+            ("💹 Signal Engine", "estate:signal_engine"),
+        ],
+        [
             ("🔄 Refresh", "estate:daemons"),
             ("🎛 Mission", "estate:refresh"),
         ],
@@ -393,6 +421,9 @@ def _resolve_short(arg: str) -> Optional[str]:
         "gw": "ai.hermes.gateway",
         "coord": "ai.hermes.coordinator",
         "coordinator": "ai.hermes.coordinator",
+        "keepawake": "ai.hermes.keepawake",
+        "keep-awake": "ai.hermes.keepawake",
+        "caffeinate": "ai.hermes.keepawake",
         "watch": "ai.hermes.watchdog",
         "watchdog": "ai.hermes.watchdog",
         "prog": "ai.hermes.progress",

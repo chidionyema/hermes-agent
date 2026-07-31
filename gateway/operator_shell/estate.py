@@ -342,6 +342,41 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
             )
         )
 
+    if action in ("host", "keepawake", "keep_awake", "estate_online", "online"):
+        from gateway.operator_shell.host import render_host_panel
+
+        text, buttons = render_host_panel()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Host",
+                proof_receipt=_proof("host", "done", "Estate host status", request_id=rid),
+            )
+        )
+
+    if action in ("host_keepawake_start", "keepawake_start", "start_keepawake"):
+        from gateway.operator_shell.host import render_host_panel, start_keepawake
+
+        ok, detail = start_keepawake()
+        text, buttons = render_host_panel()
+        receipt = _proof(
+            "host_keepawake_start",
+            "done" if ok else "failed",
+            detail,
+            request_id=rid,
+            evidence=[detail],
+        )
+        return _finish(
+            PanelView(
+                text=receipt + "\n\n" + text,
+                buttons=buttons,
+                toast="Keep-awake" if ok else "Keep-awake failed",
+                ok=ok,
+                proof_receipt=receipt,
+            )
+        )
+
     if action in (
         "prospector_daemon",
         "prospector_daemons",
@@ -528,6 +563,162 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
             text, buttons = pd_confirm(rest, unit or "scheduler")
             return _finish(PanelView(text=text, buttons=buttons, toast="Confirm"))
 
+    if action in ("signal_engine", "signalengine", "se", "money_rail"):
+        from gateway.operator_shell.signal_engine import render_signal_engine
+
+        text, buttons = render_signal_engine()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Signal Engine",
+                proof_receipt=_proof(
+                    "signal_engine", "done", "Signal Engine status", request_id=rid
+                ),
+            )
+        )
+
+    if action.startswith("se_"):
+        from gateway.operator_shell.signal_engine import (
+            arm_card as se_arm_card,
+            confirm_card as se_confirm,
+            confirm_set_param as se_confirm_set,
+            render_logs as se_logs,
+            render_params as se_render_params,
+            render_signal_engine,
+            run_op as se_run,
+            set_param as se_set_param,
+        )
+
+        rest = action[len("se_") :]
+
+        if rest == "params":
+            text, buttons = se_render_params()
+            return _finish(
+                PanelView(
+                    text=text,
+                    buttons=buttons,
+                    toast="Knobs",
+                    proof_receipt=_proof(
+                        "se_params", "done", "Signal Engine knobs", request_id=rid
+                    ),
+                )
+            )
+
+        if rest == "logs":
+            text, buttons = se_logs()
+            return _finish(
+                PanelView(
+                    text=text,
+                    buttons=buttons,
+                    toast="Logs",
+                    proof_receipt=_proof(
+                        "se_logs", "done", "Signal Engine logs", request_id=rid
+                    ),
+                )
+            )
+
+        # Apply a knob: estate:se_set_confirm:<key>:<value>
+        if rest == "set_confirm":
+            parts_kv = (arg or "").split(":", 1)
+            key = parts_kv[0] if parts_kv else ""
+            val = parts_kv[1] if len(parts_kv) > 1 else ""
+            ok, detail, need_restart = se_set_param(key, val)
+            evidence = [detail]
+            if ok and need_restart:
+                # A knob written to config.yaml is not in effect until the daemon
+                # re-reads it, so the receipt must carry the restart result too —
+                # "set" with a failed restart is a change that never took.
+                rok, rdetail = se_run("restart")
+                evidence.append(f"restart: {rdetail}")
+                ok = ok and rok
+                detail = detail + " · " + rdetail
+            receipt = _proof(
+                "se_set",
+                "done" if ok else "failed",
+                f"set `{key}={val}`",
+                request_id=rid,
+                evidence=evidence,
+            )
+            text, buttons = se_render_params()
+            return _finish(
+                PanelView(
+                    text=receipt + "\n\n" + text,
+                    buttons=buttons,
+                    toast=("✅ set " + key) if ok else "⚠️ Failed",
+                    ok=ok,
+                    proof_receipt=receipt,
+                )
+            )
+
+        # A rejected knob (unknown key, value off the allowlist) renders as a card
+        # with no way forward. That is a refusal, so the view must not claim ok —
+        # the adapter styles ok=False differently and the receipt log needs the truth.
+        def _offers_next_step(rows: List[ButtonRow]) -> bool:
+            return any(
+                cb.startswith(("estate:se_set_confirm", "estate:se_arm"))
+                for row in rows
+                for _lbl, cb in row
+            )
+
+        # Second screen for rail knobs: estate:se_arm:<key>:<value>
+        if rest == "arm":
+            parts_kv = (arg or "").split(":", 1)
+            key = parts_kv[0] if parts_kv else ""
+            val = parts_kv[1] if len(parts_kv) > 1 else ""
+            text, buttons = se_arm_card(key, val)
+            ok = _offers_next_step(buttons)
+            return _finish(
+                PanelView(
+                    text=text,
+                    buttons=buttons,
+                    ok=ok,
+                    toast="Arm check" if ok else "⚠️ Rejected",
+                )
+            )
+
+        # First screen for any knob: estate:se_set:<key>:<value>
+        if rest == "set":
+            parts_kv = (arg or "").split(":", 1)
+            key = parts_kv[0] if parts_kv else ""
+            val = parts_kv[1] if len(parts_kv) > 1 else ""
+            text, buttons = se_confirm_set(key, val)
+            ok = _offers_next_step(buttons)
+            return _finish(
+                PanelView(
+                    text=text,
+                    buttons=buttons,
+                    ok=ok,
+                    toast="Confirm set" if ok else "⚠️ Rejected",
+                )
+            )
+
+        # Execute: estate:se_<op>_confirm
+        if rest.endswith("_confirm"):
+            op_name = rest[: -len("_confirm")]
+            ok, detail = se_run(op_name)
+            receipt = _proof(
+                f"se_{op_name}",
+                "done" if ok else "failed",
+                f"Signal Engine {op_name}",
+                request_id=rid,
+                evidence=[detail],
+            )
+            text, buttons = render_signal_engine()
+            return _finish(
+                PanelView(
+                    text=receipt + "\n\n" + text,
+                    buttons=buttons,
+                    toast=("✅ " + op_name) if ok else "⚠️ Failed",
+                    ok=ok,
+                    proof_receipt=receipt,
+                )
+            )
+
+        # Confirm prompt for start/stop/restart/pause/resume/reset
+        text, buttons = se_confirm(rest)
+        return _finish(PanelView(text=text, buttons=buttons, toast="Confirm"))
+
     if action.startswith("daemon_") or action == "code_assign":
         if action == "code_assign":
             from gateway.operator_shell import code_remote as CR
@@ -700,17 +891,84 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         view.text = view.proof_receipt + "\n\n" + view.text
         return _finish(view)
 
-    if action == "setup_cron_topic":
+    if action == "cron_use_main_dm":
+        from hermes_cli.config import save_env_value
+
+        save_env_value("TELEGRAM_CRON_IN_MAIN_DM", "1")
+        os.environ["TELEGRAM_CRON_IN_MAIN_DM"] = "1"
+        # Do not invent TELEGRAM_CRON_THREAD_ID
         view = render_panel_view()
-        view.needs_cron_topic_setup = True
-        view.toast = "Cron topic…"
+        view.toast = "Cron → this chat"
+        view.proof_receipt = _proof(
+            "cron_use_main_dm",
+            "done",
+            "Accepted cron delivery in private DM (no topic)",
+            request_id=rid,
+            evidence=["TELEGRAM_CRON_IN_MAIN_DM=1", "TELEGRAM_CRON_THREAD_ID unset (honest)"],
+        )
+        view.text = view.proof_receipt + "\n\n" + view.text
+        return _finish(view)
+
+    if action == "setup_cron_topic":
+        from gateway.operator_shell.delivery import cron_delivery_state
+
+        cron = cron_delivery_state()
+        view = render_panel_view()
+        if cron.get("ok"):
+            view.toast = "Cron routing ok"
+            view.proof_receipt = _proof(
+                "setup_cron_topic",
+                "done",
+                f"Cron already routed: {cron.get('label')}",
+                request_id=rid,
+            )
+            view.text = view.proof_receipt + "\n\n" + view.text
+            return _finish(view)
+
+        # Show choose panel first — do NOT auto-fire createForumTopic on private DMs
+        # (that API always returns "chat is not a forum" here). Retry button sets force.
+        view.needs_cron_topic_setup = False
+        view.toast = "Cron delivery"
+        how = (
+            "🗓 *Cron delivery*\n\n"
+            "Your Otto home is a *private DM* (`getChat.type=private`).\n"
+            "Telegram does *not* show a Topics toggle when you tap the bot name — "
+            "that UI is for groups/forums. Live API: `createForumTopic` → "
+            "`chat is not a forum`.\n\n"
+            "*Recommended (works now):*\n"
+            "→ Tap *Keep cron in this chat*\n\n"
+            "*Optional later (real Topics):*\n"
+            "1. Create a private group\n"
+            "2. Group settings → enable *Topics*\n"
+            "3. Add Otto as admin\n"
+            "4. Open/create a *Cron* topic → send `/sethome`\n"
+            "_No fake thread id will be written._"
+        )
         view.proof_receipt = _proof(
             "setup_cron_topic",
             "pending_confirm",
-            "Creating Cron topic + wiring TELEGRAM_CRON_THREAD_ID",
+            "Private DM — choose main-chat delivery or Topics group",
             request_id=rid,
         )
-        view.text = view.proof_receipt + "\n\n" + view.text
+        view.text = how + "\n\n" + view.proof_receipt
+        view.buttons = [
+            [("✅ Keep cron in this chat", "estate:cron_use_main_dm")],
+            [("🔄 Try create topic anyway", "estate:setup_cron_topic_force")],
+            [("🚀 Missions", "estate:missions"), ("🎛 Mission", "estate:refresh")],
+        ]
+        return _finish(view)
+
+    if action == "setup_cron_topic_force":
+        view = render_panel_view()
+        view.needs_cron_topic_setup = True
+        view.toast = "Trying topic…"
+        view.proof_receipt = _proof(
+            "setup_cron_topic_force",
+            "pending_confirm",
+            "Attempting createForumTopic (expected fail on private DM)",
+            request_id=rid,
+        )
+        view.text = view.proof_receipt + "\n\n" + (view.text or "")
         return _finish(view)
 
     if action == "budget_override":

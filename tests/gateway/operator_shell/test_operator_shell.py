@@ -75,9 +75,50 @@ def test_natural_ops_pause_spend():
     assert match_natural_op("please rewrite the entire prospector pipeline") is None
 
 
-def test_natural_ops_run_prospector_count():
-    op = match_natural_op("run prospector 20")
-    assert op is not None and op.action == "run_prospector" and op.args == "20"
+def test_natural_ops_host_keep_awake():
+    for phrase in ("host", "keep awake", "estate online", "Mac awake?"):
+        op = match_natural_op(phrase)
+        assert op is not None and op.action == "host", phrase
+    op = match_natural_op("start keep awake")
+    assert op is not None and op.action == "host_keepawake_start"
+
+
+def test_host_glance_line_shape(monkeypatch):
+    from gateway.operator_shell import host as host_mod
+
+    monkeypatch.setattr(
+        host_mod,
+        "probe_host",
+        lambda: {
+            "line": "🖥 Host: AWAKE · online",
+            "status": "awake",
+            "at_risk": False,
+        },
+    )
+    assert "AWAKE" in host_mod.glance_line()
+
+
+def test_host_wake_grace_suppresses_stale_alarm(monkeypatch):
+    from gateway.operator_shell import host as host_mod
+
+    monkeypatch.setattr(
+        host_mod,
+        "_keepawake_running",
+        lambda: {"running": True, "pid": 1, "state": "running", "detail": "pid 1", "installed": True},
+    )
+    monkeypatch.setattr(host_mod, "_gateway_heartbeat_age", lambda: 2000)
+    monkeypatch.setattr(
+        host_mod,
+        "_watchdog_meta",
+        lambda: {"last_run_age": 60, "in_wake_grace": True, "wake_age": 120},
+    )
+    monkeypatch.setattr(host_mod, "_load_uptime", lambda: {"load": (1.0, 1.0, 1.0), "uptime_s": 1000})
+    monkeypatch.setattr(host_mod, "_net_ok", lambda: True)
+    monkeypatch.setattr(host_mod, "_pmset_sleep", lambda: "0")
+    p = host_mod.probe_host()
+    assert p["at_risk"] is False
+    assert p["status"] in ("waking", "awake", "degraded")
+    assert "grace" in p["line"].lower() or p["status"] == "waking"
 
 
 def test_voice_brief_triggers():

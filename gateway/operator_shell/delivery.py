@@ -62,21 +62,56 @@ def load_delivery_policy(cfg: Optional[Dict[str, Any]] = None) -> DeliveryPolicy
     )
 
 
-def cron_topic_advisory() -> str:
-    """Return operator guidance when cron topic is unset."""
+def cron_delivery_state() -> dict:
+    """Honest cron routing state for mission card / 🗓 button.
+
+    Private bot DMs are usually NOT forums — Topics cannot be toggled on the
+    bot profile. Modes:
+      topic   — TELEGRAM_CRON_THREAD_ID set (group topic or rare DM topic)
+      main_dm — founder accepted cron in the main private chat
+      unset   — neither; show actionable CTA (not fake Topics instructions)
+    """
     import os
 
-    if os.getenv("TELEGRAM_CRON_THREAD_ID", "").strip():
+    thread = os.getenv("TELEGRAM_CRON_THREAD_ID", "").strip()
+    main_ok = os.getenv("TELEGRAM_CRON_IN_MAIN_DM", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if thread:
+        return {
+            "mode": "topic",
+            "ok": True,
+            "label": f"topic `{thread}`",
+            "thread_id": thread,
+        }
+    if main_ok:
+        return {
+            "mode": "main_dm",
+            "ok": True,
+            "label": "main DM (ok)",
+            "thread_id": "",
+        }
+    return {"mode": "unset", "ok": False, "label": "UNSET", "thread_id": ""}
+
+
+def cron_topic_advisory() -> str:
+    """Return operator guidance when cron topic is unset."""
+    st = cron_delivery_state()
+    if st["ok"]:
         return ""
     policy = load_delivery_policy()
     if not policy.cron_topic_required:
         return (
-            "\n\n_Tip: set `TELEGRAM_CRON_THREAD_ID` to a Telegram topic so cron "
-            "doesn't land in an unrepliable lobby. `/sethome` in a topic also helps._"
+            "\n\n_Cron: private DMs usually have no Topics. Tap 🗓 → "
+            "*Keep cron in this chat*, or `/sethome` inside a Topics group._"
         )
     return (
-        "\n\n⚠️ `TELEGRAM_CRON_THREAD_ID` unset — cron may land in the root lobby. "
-        "Create a Cron topic and set the env var."
+        "\n\n⚠️ Cron destination unset — private DMs cannot enable Topics on "
+        "the bot profile. Tap 🗓 to accept main-DM delivery, or use a "
+        "Topics-enabled group + `/sethome` in a Cron topic."
     )
 
 

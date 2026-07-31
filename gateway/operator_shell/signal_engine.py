@@ -45,9 +45,22 @@ LABEL = "com.signalengine.daemon"
 PLIST = PLIST_DIR / f"{LABEL}.plist"
 CONFIG = REPO / "config.yaml"
 CONTROL = REPO / "data_store" / "daemon_control.json"
-ERR_LOG = REPO / "daemon.err.log"
-OUT_LOG = REPO / "daemon.out.log"
-LOGS: Tuple[Path, ...] = (ERR_LOG, OUT_LOG)
+# Logs live OUTSIDE ~/Documents, and that is load-bearing. launchd opens
+# StandardOutPath/StandardErrorPath itself, before exec'ing the program — and the
+# per-user launchd has no TCC grant for the Documents folder, so a log path under
+# ~/Documents/code/signalengine made the whole job die with 78/EX_CONFIG before
+# Python ever started. Proven 2026-07-31: the identical unit, with only these two
+# paths changed to /tmp, went from `last exit code = 78` to `state = running`.
+# Granting the interpreter Documents access does NOT fix this; launchd is the one
+# opening the file, not python.
+LOG_DIR = Path.home() / ".hermes" / "logs"
+ERR_LOG = LOG_DIR / "signalengine-daemon.err.log"
+OUT_LOG = LOG_DIR / "signalengine-daemon.out.log"
+# The pre-2026-07-31 logs stay readable from the phone: they hold the 37-day
+# outage and everything before it.
+LEGACY_ERR_LOG = REPO / "daemon.err.log"
+LEGACY_OUT_LOG = REPO / "daemon.out.log"
+LOGS: Tuple[Path, ...] = (ERR_LOG, OUT_LOG, LEGACY_ERR_LOG, LEGACY_OUT_LOG)
 
 # Anchored on the `-m <module>` argv pair. The bare module name false-positives on
 # any command line that merely quotes it — measured 2026-07-31, the loose pattern
@@ -278,7 +291,7 @@ _VERDICT_WORD = {
     "ok": "healthy (launchd-supervised)",
     "stalled": "process alive but heartbeat STALE",
     "unsupervised": "running, but launchd does NOT own it",
-    "tcc_denied": "BLOCKED — interpreter denied Full Disk Access",
+    "tcc_denied": "BLOCKED — EX_CONFIG(78), launchd refused before exec",
     "down": "DOWN",
     "not_installed": "no LaunchAgent installed",
 }
@@ -510,19 +523,44 @@ def ack_line() -> str:
     return f"{mark} ack `{str(ack.get('action'))}` {ack.get('status')} `{str(ack.get('at'))[:19]}`{err}"
 
 
+def _under_documents(path: Path) -> bool:
+    """True when launchd would have to open this path inside the TCC-gated folder."""
+    try:
+        path.relative_to(Path.home() / "Documents")
+        return True
+    except ValueError:
+        return False
+
+
 # ── Rendering ───────────────────────────────────────────────────────────────
 
 
 def _tcc_block() -> List[str]:
-    return [
-        "🚫 *launchd cannot start this daemon.*",
-        "The venv interpreter has no Full Disk Access, so it cannot read the repo",
-        "and exits `EX_CONFIG(78)` before Python starts. KeepAlive will retry forever.",
+    """Explain EX_CONFIG(78), most-likely cause first.
+
+    Ordering matters — this is what the founder reads on a phone. On 2026-07-31 the
+    actual cause was cause #1 and the panel originally only listed cause #2, which
+    would have sent them to a GUI screen that could not have fixed it.
+    """
+    lines = [
+        "🚫 *launchd cannot start this daemon.* It exits `EX_CONFIG(78)`",
+        "before Python runs, and KeepAlive retries forever.",
         "",
-        "*Founder, one-time (GUI only — cannot be scripted):*",
-        "System Settings → Privacy & Security → Full Disk Access → `+`",
+        "*1. A path launchd itself must open is inside ~/Documents.*",
+        "launchd opens StandardOut/ErrorPath before exec, and it has no",
+        "Documents grant. Fixable from here — no GUI needed:",
+    ]
+    for label, path in (("stdout", OUT_LOG), ("stderr", ERR_LOG)):
+        inside = "❌ inside ~/Documents" if _under_documents(path) else "✅ outside"
+        lines.append(f"  {label}: `{path}` — {inside}")
+    lines += [
+        "",
+        "*2. Or the interpreter cannot read the repo.* Founder, one-time",
+        "(GUI only — cannot be scripted): System Settings → Privacy &",
+        "Security → Files and Folders → Documents (or Full Disk Access) → `+`",
         f"`{_TCC_HINT_PATH}`",
     ]
+    return lines
 
 
 def _status_lines(h: Dict[str, object]) -> List[str]:

@@ -1692,9 +1692,9 @@ class TelegramAdapter(BasePlatformAdapter):
                 )
             elif "not a forum" in error_text or "forums_disabled" in error_text:
                 logger.warning(
-                    "[%s] Cannot create DM topic '%s' in chat %s: Topics mode is not enabled. "
-                    "The user must open the DM with this bot in Telegram, tap the bot name "
-                    "at the top, and enable 'Topics' in chat settings before topics can be created.",
+                    "[%s] Cannot create DM topic '%s' in chat %s: chat is not a forum. "
+                    "Private bot DMs usually have no Topics toggle on the bot profile — "
+                    "accept main-DM cron delivery or use a Topics-enabled group + /sethome.",
                     self.name, name, chat_id,
                 )
             else:
@@ -6135,17 +6135,39 @@ class TelegramAdapter(BasePlatformAdapter):
             )
         return InlineKeyboardMarkup(rows) if rows else None
 
-    async def _operator_setup_cron_topic(self, view, query):
-        """Create Cron DM topic and wire TELEGRAM_CRON_THREAD_ID."""
+    async def _operator_setup_cron_topic(self, view, view_or_query=None, query=None):
+        """Try forum topic; on private DM failure offer main-DM accept (no Topics goose chase)."""
+        # Compat: historically called as (view, query)
+        if query is None:
+            query = view_or_query
         from hermes_cli.config import save_env_value
         from gateway.operator_shell.proof import Proof, new_request_id
 
         chat_id = str(query.message.chat_id)
+        chat_type = "unknown"
+        is_forum = False
         try:
-            thread_id = await self.ensure_dm_topic(chat_id, "Cron", force_create=True)
-            if not thread_id:
-                # Fallback: try create_handoff_thread
+            chat = await self._bot.get_chat(chat_id)
+            chat_type = getattr(chat, "type", None) or "unknown"
+            if hasattr(chat_type, "value"):
+                chat_type = chat_type.value
+            chat_type = str(chat_type)
+            is_forum = bool(getattr(chat, "is_forum", False))
+        except Exception as exc:
+            logger.warning("cron topic getChat failed: %s", exc)
+
+        try:
+            thread_id = None
+            # Only attempt createForumTopic when forum/group — private DMs fail with
+            # "chat is not a forum" and there is no Topics toggle on bot profiles.
+            if chat_type != "private" or is_forum:
+                thread_id = await self.ensure_dm_topic(chat_id, "Cron", force_create=True)
+                if not thread_id:
+                    thread_id = await self.create_handoff_thread(chat_id, "Cron")
+            else:
+                # Still poke once so logs prove the API rejection for this account
                 thread_id = await self.create_handoff_thread(chat_id, "Cron")
+
             if thread_id:
                 save_env_value("TELEGRAM_CRON_THREAD_ID", str(thread_id))
                 os.environ["TELEGRAM_CRON_THREAD_ID"] = str(thread_id)
@@ -6154,50 +6176,67 @@ class TelegramAdapter(BasePlatformAdapter):
                     status="done",
                     summary=f"Cron topic ready · thread `{thread_id}`",
                     request_id=new_request_id(),
-                    evidence=[f"TELEGRAM_CRON_THREAD_ID={thread_id}"],
+                    evidence=[f"TELEGRAM_CRON_THREAD_ID={thread_id}", f"chat_type={chat_type}"],
                 ).render()
-                # Re-render mission card with topic set
                 from gateway.operator_shell.estate import render_panel_view
 
                 fresh = render_panel_view()
                 fresh.text = receipt + "\n\n" + fresh.text
                 fresh.toast = "Cron topic ✓"
                 return fresh
+
+            private = chat_type == "private" and not is_forum
+            if private:
+                summary = (
+                    "🗓 *No Topics on this private DM*\n\n"
+                    f"`getChat` → type=`{chat_type}`, is_forum=`{is_forum}`.\n"
+                    "Telegram does *not* offer a Topics toggle when you tap Otto's "
+                    "name in a 1:1 bot chat. API returns `chat is not a forum` "
+                    "(proven). Do *not* hunt for Topics on the bot profile.\n\n"
+                    "*Do this instead:*\n"
+                    "1. Tap *Keep cron in this chat* (cron stays in this DM)\n"
+                    "2. Optional later — Topics group:\n"
+                    "   create private group → enable Topics → add Otto → "
+                    "open Cron topic → `/sethome`\n\n"
+                    "_No `TELEGRAM_CRON_THREAD_ID` invented._"
+                )
+            else:
+                summary = (
+                    "Cron topic create failed (chat may need Topics/forum on).\n\n"
+                    "For *groups*: enable Topics in group settings, then retry.\n"
+                    "Or `/sethome` inside an existing Cron topic.\n"
+                    "_No thread id invented._"
+                )
             receipt = Proof(
                 action="setup_cron_topic",
                 status="failed",
-                summary=(
-                    "Cron topic needs Topics ON (Telegram won't fake a thread).\n\n"
-                    "*One-tap founder step:*\n"
-                    "1. Open this Otto DM\n"
-                    "2. Tap Otto's name → *Topics* → enable\n"
-                    "3. Tap 🗓 Cron again\n\n"
-                    "Until then cron stays in the main chat (still works)."
-                ),
+                summary=summary,
                 request_id=new_request_id(),
-                evidence=["createForumTopic: chat is not a forum"],
+                evidence=[
+                    f"chat_type={chat_type}",
+                    f"is_forum={is_forum}",
+                    "createForumTopic: chat is not a forum",
+                ],
             ).render()
-            # Keep actionable buttons — don't leave a dead-end receipt
             view.text = receipt
             view.buttons = [
-                [("🗓 Try Cron again", "estate:setup_cron_topic")],
-                [("🎛 Mission", "estate:refresh"), ("⛽ Fuel", "estate:system_fuel")],
+                [("✅ Keep cron in this chat", "estate:cron_use_main_dm")],
+                [("🔄 Retry topic create", "estate:setup_cron_topic")],
+                [("🚀 Missions", "estate:missions"), ("🎛 Mission card", "estate:refresh")],
             ]
             view.ok = False
-            view.toast = "Enable Topics first"
+            view.toast = "Use main DM" if private else "Topics needed on group"
             return view
         except Exception as exc:
             logger.error("cron topic setup failed: %s", exc, exc_info=True)
-            err = str(exc)
-            tip = ""
-            if "not a forum" in err.lower() or "400" in err:
-                tip = (
-                    "\n\n*Fix:* Otto DM → tap bot name → enable *Topics* → tap 🗓 again. "
-                    "No thread_id invented."
-                )
+            tip = (
+                "\n\nThis is a private DM — there is *no* Topics toggle on the bot. "
+                "Tap *Keep cron in this chat*, or use a Topics-enabled group + `/sethome`."
+            )
             view.text = f"⚠️ Cron topic setup failed: {exc}{tip}\n\n" + (view.text or "")
             view.buttons = [
-                [("🗓 Retry", "estate:setup_cron_topic"), ("🎛 Mission", "estate:refresh")]
+                [("✅ Keep cron in this chat", "estate:cron_use_main_dm")],
+                [("🎛 Mission", "estate:refresh")],
             ]
             view.ok = False
             return view

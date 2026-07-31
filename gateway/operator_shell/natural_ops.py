@@ -80,6 +80,16 @@ _PATTERNS = [
         r"^\s*(disarm\s+(self[-\s]?improv\w*|learning|rsi)|"
         r"disable\s+(self[-\s]?improv\w*|learning|rsi))\s*$", re.I),
      "disarm_learning", "", "Disarm learning"),
+    # Host / keep-awake / always-on (before daemons)
+    (re.compile(
+        r"^\s*(host|keep\s*awake|keep-awake|estate\s+online|"
+        r"always\s*on|mac\s+(awake|online|status)|is\s+the\s+(mac|host)\s+"
+        r"(awake|online|up))\s*\??\s*$", re.I),
+     "host", "", "Host status"),
+    (re.compile(
+        r"^\s*(start\s+keep\s*awake|start\s+keep-awake|"
+        r"enable\s+keep\s*awake|caffeinate\s+on)\s*$", re.I),
+     "host_keepawake_start", "", "Start keep-awake"),
     # Estate / Prospector daemons (before generic "run prospector")
     (re.compile(
         r"^\s*(daemons?|services?|launchctl|estate\s+daemons?)\s*\??\s*$", re.I),
@@ -96,6 +106,51 @@ _PATTERNS = [
     (re.compile(
         r"^\s*(run|fire|kick)\s+(hermes\s+)?watchdog\s*(now)?\s*$", re.I),
      "daemon_run_now", "watchdog", "Run Hermes watchdog now"),
+    # Signal Engine / money rail (before prospector — no overlap, but keep the
+    # money rail early so a typo never lands on a generation command)
+    (re.compile(
+        r"^\s*(signal(\s*engine)?|signalengine|money\s+rail|trading\s+(daemon|engine)|"
+        r"how'?s\s+(the\s+)?(signal|trading)(\s+engine)?|equity|pnl|p&l)\s*\??\s*$", re.I),
+     "signal_engine", "", "Signal Engine"),
+    (re.compile(
+        r"^\s*restart\s+(the\s+)?(signal(\s*engine)?|signalengine|trading)\s*$", re.I),
+     "se_restart", "", "Restart Signal Engine"),
+    (re.compile(
+        r"^\s*start\s+(the\s+)?(signal(\s*engine)?|signalengine|trading)\s*$", re.I),
+     "se_start", "", "Start Signal Engine"),
+    (re.compile(
+        r"^\s*stop\s+(the\s+)?(signal(\s*engine)?|signalengine|trading)\s*$", re.I),
+     "se_stop", "", "Stop Signal Engine"),
+    (re.compile(
+        r"^\s*pause\s+(the\s+)?(signal(\s*engine)?|signalengine|trading)\s*$", re.I),
+     "se_pause", "", "Pause trading"),
+    (re.compile(
+        r"^\s*(resume|unpause)\s+(the\s+)?(signal(\s*engine)?|signalengine|trading)\s*$",
+        re.I),
+     "se_resume", "", "Resume trading"),
+    (re.compile(
+        r"^\s*(signal(\s*engine)?|signalengine|trading)\s+(logs?|log\s*tail|errors?)\s*$",
+        re.I),
+     "se_logs", "", "Signal Engine logs"),
+    (re.compile(
+        r"^\s*(signal(\s*engine)?|signalengine|trading|risk|money)\s+"
+        r"(params?|settings?|knobs?|config|risk|caps?)\s*\??\s*$", re.I),
+     "se_params", "", "Signal Engine knobs"),
+    # Rail phrases route to the SET flow, which always shows confirm → ARM first.
+    # Saying "go live" out loud must never be the last step before real orders.
+    (re.compile(
+        r"^\s*(arm\s+(the\s+)?(money\s+rail|live\s+trading|real\s+money)|"
+        r"go\s+live\s+trading|live\s+trading\s+on)\s*$", re.I),
+     "se_set", "exec_mode:live", "Arm money rail"),
+    (re.compile(
+        r"^\s*(disarm|paper\s+mode|go\s+paper|stop\s+(real|live)\s+trading|"
+        r"disarm\s+(the\s+)?(money\s+rail|trading))\s*$", re.I),
+     "se_set", "exec_mode:internal_sim", "Back to paper"),
+    (re.compile(
+        r"^\s*set\s+signal\s+"
+        r"(exec_mode|ramp_stage|vol_target|leverage|per_instrument|killswitch|"
+        r"max_positions|stop_loss|llm_cap|live_feed)\s+([A-Za-z0-9_.]+)\s*$", re.I),
+     "se_set", "{g1}:{g2}", "Set Signal Engine knob"),
     (re.compile(
         r"^\s*(prospector\s+daemons?|prospect\s+daemons?|"
         r"prospector\s+(status|health)|daemon\s+status\s+prospector|"

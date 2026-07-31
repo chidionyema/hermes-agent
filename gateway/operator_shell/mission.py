@@ -266,7 +266,7 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
     except Exception:
         pass
     if _blocked_missions(conn):
-        return ("📥 Decide", "estate:inbox")
+        return ("🚀 Open missions", "estate:missions")
 
     if "BUDGET" in verdict:
         return ("⛽ Fuel", "estate:system_fuel")
@@ -307,24 +307,40 @@ def mission_buttons(paused: bool, primary: Tuple[str, str]) -> List[ButtonRow]:
     pause_or_resume = (
         ("▶️ Resume", "estate:resume") if paused else ("⏸ Pause", "estate:pause")
     )
-    return [
-        [primary],
+    try:
+        from gateway.operator_shell.delivery import cron_delivery_state
+
+        cron_ok = bool(cron_delivery_state().get("ok"))
+    except Exception:
+        cron_ok = bool(os.getenv("TELEGRAM_CRON_THREAD_ID", "").strip())
+    rows: List[ButtonRow] = [[primary]]
+    # When cron destination unset — can't-miss dedicated row
+    if not cron_ok:
+        rows.append([("🗓 Cron delivery", "estate:setup_cron_topic")])
+    rows.extend(
         [
-            ("🧠 RSI", "estate:rsi"),
-            ("🏗 CI", "estate:builds"),
-            ("📥 Inbox", "estate:inbox"),
-        ],
-        [
-            pause_or_resume,
-            ("🚀 Fleet", "estate:fleet"),
-            ("⚙️ Daemons", "estate:daemons"),
-        ],
-        [
-            ("🔄 Refresh", "estate:refresh"),
-            ("⛽ Fuel", "estate:system_fuel"),
-            ("🗓 Cron", "estate:setup_cron_topic"),
-        ],
-    ]
+            [
+                ("🧠 RSI", "estate:rsi"),
+                ("🏗 CI", "estate:builds"),
+                ("📥 Inbox", "estate:inbox"),
+            ],
+            [
+                pause_or_resume,
+                ("🚀 Fleet", "estate:fleet"),
+                ("⚙️ Daemons", "estate:daemons"),
+            ],
+            [
+                ("🔄 Refresh", "estate:refresh"),
+                ("⛽ Fuel", "estate:system_fuel"),
+                (
+                    ("🗓 Cron ✓", "estate:setup_cron_topic")
+                    if cron_ok
+                    else ("🚀 Missions", "estate:missions")
+                ),
+            ],
+        ]
+    )
+    return rows
 
 
 def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
@@ -339,6 +355,7 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
         product = _product_line(conn, C)
         paused = bool(C.estate_paused())
         primary = _primary_cta(conn, C, f"{verdict} — {detail}")
+        blocked_n = _blocked_missions(conn)
     finally:
         conn.close()
 
@@ -352,24 +369,69 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
         )
         rsi_line = f"🧠 RSI `{'ARMED' if armed else 'OFF'}`"
 
-    cron_topic = (
-        "ok" if os.getenv("TELEGRAM_CRON_THREAD_ID", "").strip() else "unset · tap 🗓"
-    )
+    try:
+        from gateway.operator_shell.delivery import cron_delivery_state
+
+        cron = cron_delivery_state()
+    except Exception:
+        cron = {
+            "ok": bool(os.getenv("TELEGRAM_CRON_THREAD_ID", "").strip()),
+            "label": "?",
+            "mode": "unset",
+        }
+
+    try:
+        from gateway.operator_shell.host import glance_line as host_glance
+
+        host_line = host_glance()
+    except Exception:
+        host_line = "🖥 Host: ?"
+
+    # Money rail on the mission card, not two taps away. The 2026-06-24 → 07-31
+    # outage was invisible precisely because nothing on the top card mentioned it;
+    # only a healthy rail is allowed to be quiet.
+    try:
+        from gateway.operator_shell.signal_engine import glance_line as se_glance, health
+
+        _se_h = health()
+        se_line = se_glance(_se_h) if str(_se_h.get("verdict")) != "ok" else ""
+    except Exception:
+        se_line = ""
 
     lines = [
         f"*{verdict}* — {detail}",
+        host_line,
         f"💰 `{burn}`  ·  📈 {prod}",
         rsi_line,
         f"🧱 {blocker}",
     ]
+    if se_line:
+        lines.insert(2, se_line)
     if product:
         lines.append(product)
-    lines.extend(
-        [
-            f"🧵 cron `{cron_topic}`",
-            "",
-            f"→ *{primary[0]}*",
-        ]
-    )
+    if blocked_n:
+        lines.append(
+            f"🚀 *{blocked_n} blocked mission(s)* — tap *Open missions* "
+            f"(or say `missions`) → resume/abort from the board."
+        )
+    lines.append(f"🧵 cron `{cron.get('label', '?')}`")
+    if not cron.get("ok"):
+        lines.extend(
+            [
+                "",
+                "⚠️ *Cron destination unset*",
+                "Home chat is a *private DM* — Telegram does *not* show a Topics "
+                "toggle on the bot profile (that only exists for groups/forums).",
+                "",
+                "*What works:*",
+                "1. Tap *🗓 Cron delivery* → *Keep cron in this chat* (recommended)",
+                "2. Or later: make a private group → enable Topics → add Otto → "
+                "open a Cron topic → send `/sethome`",
+                "_API proof: createForumTopic → `chat is not a forum` on this DM._",
+            ]
+        )
+    elif cron.get("mode") == "main_dm":
+        lines.append("_Cron stays in this DM (no topic). Mute/filter as you like._")
+    lines.extend(["", f"→ *{primary[0]}*"])
     text = "\n".join(lines)
     return text, paused, mission_buttons(paused, primary)
