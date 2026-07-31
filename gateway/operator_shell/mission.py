@@ -429,6 +429,22 @@ def rows_actions(rows: List[ButtonRow]) -> List[Tuple[str, str]]:
     return [b for row in rows for b in row]
 
 
+def card_headline(verdict: str, detail: str) -> str:
+    """Line 0 of the mission card — and therefore the whole cockpit's only permanent label.
+
+    A separate function because it is the one line with a hard external contract: Telegram's
+    pinned-message banner renders the FIRST line of the pinned message and nothing else. This
+    card is pinned (`telegram.py:6390`) and edited in place (`telegram.py:6369`), so whatever
+    this returns is the only cockpit text visible while the operator scrolls anywhere else in
+    the chat.
+
+    Identity first, state second. The banner is one line and Telegram truncates it, so the
+    order decides what survives the cut: put the verdict first and a long detail eats the
+    word that tells you this is the way in.
+    """
+    return f"🎛 *Cockpit* · *{verdict}* — {detail}"
+
+
 def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
     """Compact forever-card — brand-dense, zero theater, honest verdict."""
     C = _coord()
@@ -487,9 +503,22 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
 
     from datetime import datetime, timezone
     edit_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    # Line 0 must NAME this thing, because line 0 is the only cockpit text most of the
+    # session ever shows. Telegram's pinned banner across the top of the chat renders the
+    # first line of the pinned message and nothing else — and this card is pinned
+    # (telegram.py:6390) and edited in place (telegram.py:6369), so that banner is the one
+    # piece of permanent chrome in the whole UI. It used to read
+    #     "2026-07-31 19:16:30 UTC · auto-refresh · say now to force"
+    # so the only always-visible label for the estate cockpit identified it as a timestamp:
+    # "how do you even get to the menu?" (founder, 2026-07-31). The door was there, pinned
+    # and working; nothing on screen said so.
+    #
+    # Identity goes FIRST so that the banner's truncation eats the detail, not the label,
+    # and the verdict rides on the same line so the banner is worth reading at a glance.
+    # The timestamp moves to the foot: it exists to prove the card is being refreshed and to
+    # keep each edit textually distinct, and it does both just as well from the bottom.
     lines = [
-        f"_{edit_iso} · auto-refresh · say `now` to force_",
-        f"*{verdict}* — {detail}",
+        card_headline(verdict, detail),
         host_line,
         f"💰 `{burn}`  ·  📈 {prod}",
         rsi_line,
@@ -534,5 +563,9 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
             lines.append(f"_+{len(concerns) - len(shown)} more_")
     else:
         lines.extend(["", "✅ *Nothing needs you.*"])
+    # Foot, not head — see the note on line 0. Still every-edit-unique, so an edit is never
+    # rejected as "not modified", and still the operator's proof that the card is live rather
+    # than a frozen screenshot of an hour ago.
+    lines.append(f"_{edit_iso} · auto-refresh · say `now` to force_")
     text = "\n".join(lines)
     return text, paused, mission_buttons(paused, primary, concerns)

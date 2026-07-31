@@ -141,6 +141,48 @@ def test_home_grid_has_no_duplicate_destinations():
     assert len(cbs) == len(set(cbs))
 
 
+# --- the door ------------------------------------------------------------------------------
+# Telegram's pinned-message banner renders the FIRST line of the pinned message and nothing
+# else. The mission card is pinned (telegram.py:6390) and edited in place (telegram.py:6369),
+# so line 0 is the only cockpit text on screen while the operator is anywhere else in the
+# chat. It used to be the refresh timestamp — "2026-07-31 19:16:30 UTC · auto-refresh · say
+# now to force" — so the estate cockpit's one permanent label identified it as a clock, and
+# the buttons read as unreachable ("how do you even get to the menu?", founder 2026-07-31).
+
+
+def test_the_pinned_banner_names_the_cockpit():
+    from gateway.operator_shell.mission import card_headline
+
+    assert card_headline("🟡 BLOCKED", "4 need you").startswith("🎛 *Cockpit*")
+
+
+def test_the_banner_leads_with_identity_not_state():
+    """Telegram truncates the banner. Verdict-first means a long detail eats the one word
+    that tells the operator this is the way in, so the order is the whole point."""
+    from gateway.operator_shell.mission import card_headline
+
+    line = card_headline("🔴 HALTED", "x" * 200)
+    assert line.index("Cockpit") < line.index("HALTED")
+
+
+def test_the_banner_still_carries_the_live_verdict():
+    """Identity alone would make it a label worth ignoring. It has to be worth reading."""
+    from gateway.operator_shell.mission import card_headline
+
+    line = card_headline("🟢 OK", "nothing needs you")
+    assert "🟢 OK" in line and "nothing needs you" in line
+
+
+def test_menu_and_cockpit_reach_the_panel():
+    """The words people type when they cannot find the buttons. Telegram filters the "/" list
+    by name, so a door called only `panel` is invisible to someone hunting for a menu."""
+    from hermes_cli.commands import resolve_command
+
+    for word in ("menu", "cockpit", "panel", "control", "mission"):
+        cmd = resolve_command(word)
+        assert cmd is not None and cmd.name == "panel", f"/{word} does not open the cockpit"
+
+
 def test_home_grid_money_row_leads():
     """Row one is what the estate is FOR. Regression: Fleet/Store/Inbox used to share it."""
     assert [cb for _l, cb in _SURFACES[0]] == [

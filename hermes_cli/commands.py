@@ -114,8 +114,13 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("profile", "Show active profile name and home directory", "Info"),
     CommandDef("sethome", "Set this chat as the home channel", "Session",
                gateway_only=True, aliases=("set-home",)),
-    CommandDef("panel", "Pinned mission card — estate cockpit", "Session",
-               gateway_only=True, aliases=("control", "mission")),
+    # "menu" and "cockpit" are aliases because they are the words people actually type when
+    # they cannot find the buttons. Telegram filters the "/" list by NAME as you type, so a
+    # door called only "panel" is invisible to anyone hunting for a menu — and it genuinely
+    # was ("how do you even get to the menu?", founder 2026-07-31). The description leads
+    # with the verb and carries the word "menu" for the same reason.
+    CommandDef("panel", "Open the cockpit — every button, one tap (menu)", "Session",
+               gateway_only=True, aliases=("menu", "cockpit", "control", "mission")),
     CommandDef("inbox", "Decisions waiting on you (approvals / blocked)", "Session",
                gateway_only=True, aliases=("decisions",)),
     CommandDef("fleet", "Project tiles: prospector / signal / TIE / haworks", "Session",
