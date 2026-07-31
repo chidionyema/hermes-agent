@@ -14,7 +14,7 @@ import logging
 import os
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -403,7 +403,9 @@ def set_param(key: str, value: str) -> Tuple[bool, str, bool]:
 def set_paused(paused: bool) -> Tuple[bool, str]:
     STORE.mkdir(parents=True, exist_ok=True)
     if paused:
-        _PAUSE.write_text(f"paused via Telegram {datetime.utcnow().isoformat()}Z\n")
+        _PAUSE.write_text(
+            f"paused via Telegram {datetime.now(timezone.utc).isoformat()}\n"
+        )
         return True, f"PAUSE armed at `{_PAUSE}` — daemon idles each cycle"
     if _PAUSE.is_file():
         _PAUSE.unlink()
@@ -640,7 +642,7 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
             [[("🎛 Mission", "estate:refresh"), ("🚀 Fleet", "estate:fleet")]],
         )
 
-    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     lines = [
         "⚙️ *Prospector control*",
         f"_captured {now_utc} · scheduler=KeepAlive daemon · watchdog=15m oneshot_",

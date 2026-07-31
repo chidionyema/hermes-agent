@@ -130,6 +130,10 @@ def render_fleet() -> Tuple[str, List[ButtonRow]]:
             ("⚙️ Prospect daemons", "estate:prospector_daemon"),
         ],
         [
+            ("💹 Signal Engine", "estate:signal_engine"),
+            ("💰 Risk knobs", "estate:se_params"),
+        ],
+        [
             ("⚡️ Run Prospector", "estate:run_prospector"),
             ("⚙️ Estate daemons", "estate:daemons"),
         ],
@@ -138,14 +142,27 @@ def render_fleet() -> Tuple[str, List[ButtonRow]]:
             ("🎛 Mission", "estate:refresh"),
         ],
     ]
-    # Prefixed glance for Prospector daemon health
+    # Prefixed glance for daemon health. Signal Engine goes first: it is the money
+    # rail, and it is the one that spent 37 days dead without anyone seeing it.
+    glances: List[str] = []
+    try:
+        from gateway.operator_shell.signal_engine import glance_line as se_glance
+
+        line = se_glance()
+        if line:
+            glances.append(line)
+    except Exception:
+        pass
     try:
         from gateway.operator_shell.prospector_daemon import glance_line
 
-        glance = glance_line()
-        if glance:
-            lines.insert(1, glance)
-            lines.insert(2, "")
+        line = glance_line()
+        if line:
+            glances.append(line)
     except Exception:
         pass
+    if glances:
+        for offset, line in enumerate(glances):
+            lines.insert(1 + offset, line)
+        lines.insert(1 + len(glances), "")
     return "\n".join(lines).rstrip(), buttons
