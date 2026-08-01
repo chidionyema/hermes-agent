@@ -307,7 +307,36 @@ def render_summary_card(text: str) -> str:
     out.append("")
 
     # =======================================================================
-    # SCORE CARD — three ciphers, root numbers, ladder preview
+    # AT-A-GLANCE CHIP ROW — three roots as a single readable line
+    # =======================================================================
+    py_chip = _score_chip(py.root, _is_master(py.root))
+    he_chip = _score_chip(he.root, _is_master(he.root))
+    ch_chip = _score_chip(ch.root, _is_master(ch.root))
+    out.append(
+        f"**At a glance:**  "
+        f"🧮 {py_chip} · ✡️ {he_chip} · 🌙 {ch_chip}"
+    )
+    roots = {py.root, he.root, ch.root}
+    if len(roots) == 1:
+        resonance = f"🌀 **Resonance** — all three ciphers reduce to **{py.root}**"
+    elif len(roots) == 2:
+        shared = next(iter(roots))
+        resonance = (
+            f"🌗 **Partial agreement** — 2 of 3 ciphers reduce to **{shared}**"
+        )
+    else:
+        resonance = "🌈 **All-different** — three distinct root numbers"
+    out.append(f"▸ {resonance}")
+    out.append("")
+
+    # =======================================================================
+    # DIVIDER — visual section break (Telegram collapses blank lines)
+    # =======================================================================
+    out.append("───")
+    out.append("")
+
+    # =======================================================================
+    # SCORE CARD — three ciphers, raw + root + ladder preview
     # =======================================================================
     out.append("#### 🎯 Numerological Scores")
     out.append("")
@@ -325,18 +354,7 @@ def render_summary_card(text: str) -> str:
             f"{_score_chip(c.root, _is_master(c.root))} | {ladder_short} |"
         )
     out.append("")
-
-    # Root number agreement — when all three ciphers reduce to the same root
-    roots = {py.root, he.root, ch.root}
-    if len(roots) == 1:
-        out.append(f"🌀 **Resonance** — all three ciphers reduce to **{py.root}**.")
-    elif len(roots) == 2:
-        shared = next(iter(roots))
-        out.append(
-            f"🌗 **Partial agreement** — 2 of 3 ciphers reduce to **{shared}**."
-        )
-    else:
-        out.append("🌈 **All-different** — three distinct root numbers (no resonance).")
+    out.append("───")
     out.append("")
 
     # =======================================================================
@@ -372,6 +390,16 @@ def render_summary_card(text: str) -> str:
             f"| Most common | `{prof.most_common_letter[0]}` "
             f"×{prof.most_common_letter[1]}"
         )
+    out.append("")
+
+    # =======================================================================
+    # DIVIDER — visual section break before collapsibles
+    # =======================================================================
+    out.append("───")
+    out.append("")
+    out.append("#### 📐 Detailed Breakdowns")
+    out.append("")
+    out.append("_Tap to expand each cipher's full math._")
     out.append("")
 
     # =======================================================================
