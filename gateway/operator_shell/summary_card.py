@@ -279,91 +279,158 @@ def _anagram_factorial_str(letter_count: int) -> str:
 
 
 def render_summary_card(text: str) -> str:
-    """Render the world-class summary card for *text*."""
+    """Render the world-class summary card for *text*.
+
+    Layout (visual hierarchy):
+        1. Header band     — titled frame with target + char count
+        2. At-a-glance     — boxed chip grid (3 ciphers + composition)
+        3. Resonance       — boxed banner callout
+        4. Parts / Scores  — framed blocks (one per part or per cipher)
+        5. Insights        — blockquoted discoveries (only when relevant)
+        6. Profile         — table of structural composition
+        7. Detailed        — collapsibles with full math
+    """
     text = text.strip()
     if not text:
         return "🔮 **Summary Card**\n\n_Send text to analyze._"
 
-    # Run the three ciphers in parallel
+    # ─── DATA ──────────────────────────────────────────────────────────────
     py = pythagorean(text)
     he = hebrew(text)
     ch = chaldean(text)
-
-    # Structural profile
     prof = structural_profile(text)
     anagrams = generate_anagrams(text)
     letter_count = prof.letter_count
     anagram_count = len(anagrams)
-
-    # Parse name parts (whitespace-separated tokens with ≥2 letters)
     parts = [tok for tok in text.split() if len(_letters_only(tok)) >= 2]
     has_parts = len(parts) >= 2
 
-    # Line buffer
+    # ─── BUFFER ────────────────────────────────────────────────────────────
     out: list[str] = []
 
-    # =======================================================================
-    # HEADER — target + at-a-glance chip row
-    # =======================================================================
-    out.append("### 🔮 Summary Card")
+    # ─── 1. HEADER BAND ────────────────────────────────────────────────────
+    out.append("### 🔮 Isopsephy Card")
     out.append("")
-    out.append(f"**Target:** `{text}`")
+    out.append("```")
+    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    out.append(f"   {text}")
+    out.append(f"   📊 {prof.char_count} chars · {prof.letter_count} letters")
+    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    out.append("```")
     out.append("")
 
-    # =======================================================================
-    # AT-A-GLANCE CHIP ROW — three roots as a single readable line
-    # =======================================================================
+    # ─── 2. AT-A-GLANCE BOXED CHIP GRID ───────────────────────────────────
     py_chip = _score_chip(py.root, _is_master(py.root))
     he_chip = _score_chip(he.root, _is_master(he.root))
     ch_chip = _score_chip(ch.root, _is_master(ch.root))
+    flags = []
+    if prof.isogram:
+        flags.append("✨ isogram")
+    if prof.palindrome:
+        flags.append("🔁 palindrome")
+    flag_str = ("  ·  " + " · ".join(flags)) if flags else ""
+    out.append("```")
+    out.append("╔═══════ AT-A-GLANCE ═══════════════════════╗")
     out.append(
-        f"**At a glance:**  "
-        f"🧮 {py_chip} · ✡️ {he_chip} · 🌙 {ch_chip}"
+        f"║  🧮 {py_chip}   ·   ✡️ {he_chip}   ·   🌙 {ch_chip}"
     )
+    out.append(
+        f"║  {prof.vowel_count}V/{prof.consonant_count}C  ·  "
+        f"{prof.unique_letters} unique{flag_str}"
+    )
+    out.append("╚════════════════════════════════════════════╝")
+    out.append("```")
+    out.append("")
+
+    # ─── 3. RESONANCE BANNER ──────────────────────────────────────────────
     roots = {py.root, he.root, ch.root}
     if len(roots) == 1:
-        resonance = f"🌀 **Resonance** — all three ciphers reduce to **{py.root}**"
+        re_, rl, rb_ = "🌀", "MASTER RESONANCE", f"all 3 ciphers reduce to **{py.root}**"
     elif len(roots) == 2:
         shared = next(iter(roots))
-        resonance = (
-            f"🌗 **Partial agreement** — 2 of 3 ciphers reduce to **{shared}**"
-        )
+        re_, rl, rb_ = "🌗", "PARTIAL AGREEMENT", f"2 of 3 ciphers reduce to **{shared}**"
     else:
-        resonance = "🌈 **All-different** — three distinct root numbers"
-    out.append(f"▸ {resonance}")
+        re_, rl, rb_ = "🌈", "ALL-DIFFERENT", "3 distinct root numbers — no resonance"
+    out.append("```")
+    out.append(f"┌── {re_} {rl} ──────────────────────┐")
+    out.append(f"│  {rb_}")
+    out.append("└──────────────────────────────────────────┘")
+    out.append("```")
     out.append("")
 
-    # =======================================================================
-    # DIVIDER — visual section break (Telegram collapses blank lines)
-    # =======================================================================
-    out.append("───")
-    out.append("")
+    # ─── 4. PARTS / SCORES ─────────────────────────────────────────────────
+    def _line_for(tok_py, tok_he, tok_ch):
+        return (
+            f"🧮 {tok_py.raw}→{_score_chip(tok_py.root, _is_master(tok_py.root))}"
+            f"  ·  ✡️ {tok_he.raw}→{_score_chip(tok_he.root, _is_master(tok_he.root))}"
+            f"  ·  🌙 {tok_ch.raw}→{_score_chip(tok_ch.root, _is_master(tok_ch.root))}"
+        )
 
-    # =======================================================================
-    # SCORE CARD — three ciphers, raw + root + ladder preview
-    # =======================================================================
-    out.append("#### 🎯 Numerological Scores")
-    out.append("")
-    out.append("| Cipher | Raw | Root | Ladder |")
-    out.append("|---|---|---|---|")
+    def _block(label, lc, content):
+        out.append("```")
+        out.append(f"╭─ {label}  ·  {lc} letters ───────────────╮")
+        out.append(f"│ {content}")
+        out.append("╰──────────────────────────────────────────╯")
+        out.append("```")
+        out.append("")
+
+    if has_parts:
+        out.append("#### 🪪 Name Parts")
+        out.append("")
+        for tok in parts:
+            tp = pythagorean(tok); th = hebrew(tok); tc = chaldean(tok)
+            _block(tok, len(_letters_only(tok)), _line_for(tp, th, tc))
+        _block("Σ COMBINED", letter_count, _line_for(py, he, ch))
+    else:
+        out.append("#### 🎯 Numerological Scores")
+        out.append("")
+        for c in (py, he, ch):
+            ladder = _root_ladder(c.raw)
+            ladder_short = (
+                f"{c.raw}→{c.root}" if len(ladder) <= 2
+                else f"{c.raw}→{ladder[1]}→…→{c.root}"
+            )
+            chip = _score_chip(c.root, _is_master(c.root))
+            out.append("```")
+            out.append(f"╭─ {c.emoji} {c.name:<20} ─────────────────╮")
+            out.append(f"│ raw **{_fmt_int(c.raw)}**  →  root {chip}")
+            out.append(f"│ ladder: `{ladder_short}`")
+            out.append("╰──────────────────────────────────────────╯")
+            out.append("```")
+        out.append("")
+
+    # ─── 5. INSIGHT CALLOUTS ──────────────────────────────────────────────
+    insights: list[str] = []
     for c in (py, he, ch):
-        ladder = _root_ladder(c.raw)
-        ladder_short = (
-            f"`{c.raw}` → `{c.root}`"
-            if len(ladder) <= 2
-            else f"`{c.raw}`→`{ladder[1]}`→…→`{c.root}`"
-        )
-        out.append(
-            f"| {c.emoji} {c.name} | **{_fmt_int(c.raw)}** | "
-            f"{_score_chip(c.root, _is_master(c.root))} | {ladder_short} |"
-        )
-    out.append("")
-    out.append("───")
-    out.append("")
+        if _is_master(c.root):
+            insights.append(
+                f"⚡ **{c.name}** yields **Master Number {c.root}** "
+                f"— preserved, not reduced"
+            )
+    if prof.mirrored_pairs:
+        pairs_str = " · ".join(f"`{a}`↔`{z}`" for a, z in prof.mirrored_pairs)
+        if len(prof.mirrored_pairs) >= 3:
+            insights.append(
+                f"🪞 **{len(prof.mirrored_pairs)} Atbash mirror pairs** — "
+                f"{pairs_str} (high mirror density)"
+            )
+        else:
+            insights.append(f"🪞 Atbash mirror pair: {pairs_str}")
+    if has_parts:
+        for tok in parts:
+            tp = pythagorean(tok)
+            if tp.root == 1 and tp.raw != 1:
+                insights.append(
+                    f"🌀 **`{tok}`** alone is a Pythagorean power number (**{tp.root}**)"
+                )
+    if insights:
+        out.append("#### 💡 Insights")
+        out.append("")
+        for ins in insights:
+            out.append(f"> {ins}")
+        out.append("")
 
-    # =======================================================================
-    # STRUCTURAL PROFILE — quick-glance composition
-    # =======================================================================
+    # ─── 6. STRUCTURAL PROFILE TABLE ──────────────────────────────────────
     out.append("#### 🧬 Structural Profile")
     out.append("")
     out.append("| Metric | Value |")
@@ -374,11 +441,11 @@ def render_summary_card(text: str) -> str:
     out.append(
         f"| Vowel ratio | `{_ratio_bar(prof.vowel_ratio)}` "
         f"**{prof.vowel_ratio * 100:.0f}%** "
-        f"({prof.vowel_count} V / {prof.consonant_count} C)"
+        f"({prof.vowel_count} V / {prof.consonant_count} C) |"
     )
     out.append(
         f"| Bigram diversity | `{_ratio_bar(prof.bigram_diversity)}` "
-        f"**{prof.bigram_diversity * 100:.0f}%**"
+        f"**{prof.bigram_diversity * 100:.0f}%** |"
     )
     if prof.isogram:
         out.append("| ✨ Isogram | _no letter repeats_ |")
@@ -387,70 +454,28 @@ def render_summary_card(text: str) -> str:
     if prof.rarest_letter:
         out.append(
             f"| Rarest letter | `{prof.rarest_letter[0]}` "
-            f"×{prof.rarest_letter[1]}"
+            f"×{prof.rarest_letter[1]} |"
         )
     if prof.most_common_letter:
         out.append(
             f"| Most common | `{prof.most_common_letter[0]}` "
-            f"×{prof.most_common_letter[1]}"
+            f"×{prof.most_common_letter[1]} |"
         )
     out.append("")
 
-    # =======================================================================
-    # NAME PARTS — multi-token breakdown (only when 2+ words, each with letters)
-    # =======================================================================
-    if has_parts:
-        out.append("───")
-        out.append("")
-        out.append("#### 🪪 Name Parts")
-        out.append("")
-        out.append(
-            f"_Each part analyzed independently — Pythagorean · "
-            f"Hebrew · Chaldean_"
-        )
-        out.append("")
-        out.append("| Part | Letters | 🧮 Pythag | ✡️ Hebrew | 🌙 Chaldean |")
-        out.append("|---|---|---|---|---|")
-        for tok in parts:
-            tok_py = pythagorean(tok)
-            tok_he = hebrew(tok)
-            tok_ch = chaldean(tok)
-            out.append(
-                f"| `{tok}` | **{len(_letters_only(tok))}** | "
-                f"**{tok_py.raw}**→{_score_chip(tok_py.root, _is_master(tok_py.root))} | "
-                f"**{tok_he.raw}**→{_score_chip(tok_he.root, _is_master(tok_he.root))} | "
-                f"**{tok_ch.raw}**→{_score_chip(tok_ch.root, _is_master(tok_ch.root))} |"
-            )
-        out.append("")
-        # Combined sum row
-        out.append(
-            f"| **Σ Combined** | **{letter_count}** | "
-            f"**{py.raw}**→{_score_chip(py.root, _is_master(py.root))} | "
-            f"**{he.raw}**→{_score_chip(he.root, _is_master(he.root))} | "
-            f"**{ch.raw}**→{_score_chip(ch.root, _is_master(ch.root))} |"
-        )
-        out.append("")
-
-    # =======================================================================
-    # DIVIDER — visual section break before collapsibles
-    # =======================================================================
-    out.append("───")
+    # ─── 7. DETAILED BREAKDOWNS (collapsibles) ────────────────────────────
+    out.append("---")
     out.append("")
     out.append("#### 📐 Detailed Breakdowns")
-    out.append("")
     out.append("_Tap to expand each cipher's full math._")
     out.append("")
 
-    # =======================================================================
-    # COLLAPSIBLE: per-cipher breakdowns (the math)
-    # =======================================================================
     for c in (py, he, ch):
         ladder = _root_ladder(c.raw)
         is_master = _is_master(c.root)
         ladder_str = " → ".join(str(x) for x in ladder)
         ladder_text = (
-            " _(single step)_"
-            if len(ladder) < 2
+            " _(single step)_" if len(ladder) < 2
             else f"\n_Reduction ladder:_ `{ladder_str}`"
         )
         out.append("<details>")
@@ -463,25 +488,21 @@ def render_summary_card(text: str) -> str:
         out.append("")
         if is_master:
             out.append(
-                f"⚡ **Master Number {c.root}** — preserved, "
-                "not reduced further."
+                f"⚡ **Master Number {c.root}** — preserved, not reduced further."
             )
-        out.append(f"_{c.name} cipher:_ sum → digit sum until single digit, "
-                   "preserving master numbers (11, 22, 33).")
+        out.append(
+            f"_{c.name} cipher:_ sum → digit sum until single digit, "
+            f"preserving master numbers (11, 22, 33)."
+        )
         out.append(ladder_text)
         out.append("</details>")
         out.append("")
 
-    # =======================================================================
-    # COLLAPSIBLE: structural deep dive (mirrored pairs, bigrams)
-    # =======================================================================
     out.append("<details>")
     out.append("<summary>🪞 Structural Deep Dive — Atbash mirrors & patterns</summary>")
     out.append("")
     if prof.mirrored_pairs:
-        pairs_str = " · ".join(
-            f"`{a}`↔`{z}`" for a, z in prof.mirrored_pairs
-        )
+        pairs_str = " · ".join(f"`{a}`↔`{z}`" for a, z in prof.mirrored_pairs)
         out.append(f"**Atbash mirrored pairs present:** {pairs_str}")
         out.append("")
         if len(prof.mirrored_pairs) >= 3:
@@ -499,9 +520,6 @@ def render_summary_card(text: str) -> str:
     out.append("</details>")
     out.append("")
 
-    # =======================================================================
-    # COLLAPSIBLE: anagrams (paginated, capped)
-    # =======================================================================
     out.append("<details>")
     if anagrams:
         showing = min(anagram_count, _MAX_ANAGRAM_DISPLAY)
@@ -511,9 +529,7 @@ def render_summary_card(text: str) -> str:
             f"({fact} permutations of {letter_count} letters)</summary>"
         )
         out.append("")
-        # Render as a checklist so users can visually scan matches
-        for i, a in enumerate(anagrams[:_MAX_ANAGRAM_DISPLAY]):
-            # Em-dash separator so the list reads as a flow of words, not bullets
+        for a in anagrams[:_MAX_ANAGRAM_DISPLAY]:
             out.append(f"- [ ] `{a}`")
         if anagram_count > _MAX_ANAGRAM_DISPLAY:
             out.append("")
@@ -534,42 +550,10 @@ def render_summary_card(text: str) -> str:
     out.append("</details>")
     out.append("")
 
-    # =======================================================================
-    # FOOTER — copy-back invitation
-    # =======================================================================
     out.append("---")
-    out.append(
-        f"_Try:_ `/summary {text}` again · `/find summary` · "
-        f"`/commands 1`"
-    )
+    out.append(f"_Try:_ `/summary {text}` again · `/find summary` · `/commands 1`")
 
     return "\n".join(out)
-
-
-# ===========================================================================
-# MULTI-PLATFORM RENDERERS
-# ===========================================================================
-#
-# The Summary Card engine emits *standard Markdown* (GFM-flavored). Each
-# downstream platform speaks its own dialect:
-#
-#   - Telegram: MarkdownV2 (special chars escaped, **bold**, __italic__)
-#   - Slack:    mrkdwn (*bold*, _italic_, no tables, no <details>)
-#   - SMS:      Plain text, 160-char segments, no markup at all
-#   - Email:    HTML (escaped, <strong>, <details>)
-#   - Glasses:  30-char fields, fixed-width, monospace alignment
-#   - Default:  Standard markdown (Discord, Matrix, Feishu, API server, …)
-#
-# Each renderer is a function (card: str, platform: str) -> str. The router
-# ``render_for_platform`` dispatches by name and falls back to ``default``.
-#
-# These renderers do NOT touch platform adapters — adapters consume the
-# output string via their own ``format_message`` override. This module is
-# purely about *content shaping*, not delivery.
-
-SUPPORTED_PLATFORMS = frozenset({
-    "telegram", "slack", "sms", "email", "glasses", "default",
-})
 
 
 def _strip_markdown(text: str) -> str:

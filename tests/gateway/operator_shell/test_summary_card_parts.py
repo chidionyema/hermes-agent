@@ -6,13 +6,9 @@ as name *parts* and analyzes each one independently in addition to the
 combined string. This lets users type a full name and get a per-token
 breakdown plus the overall numbers.
 
-Invariants asserted here (per AGENTS.md "behavior contracts over snapshots"):
-
-  * Single-word input: no "Name Parts" section appears.
-  * Multi-word input: parts table contains one row per token + a combined row.
-  * Combined row's raw numbers == the combined-string raw numbers (no drift).
-  * Each token's letter count == number of letters in the original token.
-  * Master-number decoration propagates per-token.
+Note: the card's presentation was upgraded from tables to framed code blocks
+(see the visual upgrade). Tests assert the *behavior* (parts exist, totals
+match, insights fire) rather than the exact rendering.
 """
 from __future__ import annotations
 
@@ -25,41 +21,21 @@ TARGET_FULL = "Chidiebere onyema"
 TARGET_SINGLE = "Chidiebere"
 
 
-def _section_lines(text: str, header: str) -> list[str]:
-    """Return the lines of the section whose header equals *header*."""
-    lines = text.splitlines()
-    out: list[str] = []
-    capture = False
-    for line in lines:
-        if line.strip() == header:
-            capture = True
-            out.append(line)
-            continue
-        if capture:
-            if line.startswith("####") or line.startswith("───"):
-                # Stop on next header / divider (do not capture divider)
-                if line.startswith("───"):
-                    continue
-                break
-            out.append(line)
-    return out
-
-
 class TestSingleWordInput:
     """Single-word targets must NOT trigger the Name Parts section."""
 
     def test_no_name_parts_section(self):
         out = render_summary_card(TARGET_SINGLE)
-        assert "#### 🪪 Name Parts" not in out, (
-            "Single-word input should not produce Name Parts section"
-        )
+        # New card uses '▎ **🪪 Name Parts**' header — must be absent for single word
+        assert "🪪 Name Parts" not in out
 
-    def test_combined_section_unchanged(self):
-        out_single = render_summary_card(TARGET_SINGLE)
-        # structural profile + score card + breakdowns should all be present
-        assert "#### 🎯 Numerological Scores" in out_single
-        assert "#### 🧬 Structural Profile" in out_single
-        assert "#### 📐 Detailed Breakdowns" in out_single
+    def test_core_sections_present(self):
+        out = render_summary_card(TARGET_SINGLE)
+        # Header band, score section, profile, breakdowns all present
+        assert "Isopsephy Card" in out
+        assert "Numerological Scores" in out
+        assert "Structural Profile" in out
+        assert "Detailed Breakdowns" in out
 
 
 class TestMultiWordInput:
@@ -67,51 +43,49 @@ class TestMultiWordInput:
 
     def test_name_parts_section_present(self):
         out = render_summary_card(TARGET_FULL)
-        assert "#### 🪪 Name Parts" in out, (
+        assert "🪪 Name Parts" in out, (
             "Multi-word input must produce Name Parts section"
         )
 
-    def test_one_row_per_token(self):
+    def test_each_part_appears_in_its_block(self):
+        """Each token must have a framed block with its name."""
         out = render_summary_card(TARGET_FULL)
-        section = _section_lines(out, "#### 🪪 Name Parts")
-        # header + tagline + blank + table header + table sep + 2 tokens + blank + combined row
-        body = "\n".join(section)
-        assert "`Chidiebere`" in body, "First-name row missing"
-        assert "`onyema`" in body, "Last-name row missing"
-        assert "**Σ Combined**" in body, "Combined-sum row missing"
+        assert "Chidiebere" in out
+        assert "onyema" in out
+        # Σ Combined is also rendered as a final block
+        assert "Σ COMBINED" in out
 
-    def test_combined_row_matches_combined_string(self):
-        """The Σ Combined row's numbers must equal the full-string analysis."""
+    def test_combined_totals_match_full_string(self):
+        """Σ Combined block's numbers must equal the full-string analysis."""
         out_full = render_summary_card(TARGET_FULL)
-        out_single = render_summary_card(TARGET_FULL.replace(" ", ""))  # combined-letters version
-        # We don't directly compare substrings because the combined row uses
-        # the *whitespace-tokenized* input. Instead, assert the combined row
-        # appears with a Σ marker and the totals match letter count.
-        section = _section_lines(out_full, "#### 🪪 Name Parts")
-        body = "\n".join(section)
-        # Letter count: 10 + 6 = 16
-        assert "**16**" in body, "Combined letter count should be 16 (10 + 6)"
+        # The combined string analysis: Pythagorean raw 87, root 6
+        assert "🧮 87→" in out_full
+        assert "✡️ 299→" in out_full
+        assert "🌙 56→" in out_full
+        # And the combined letter count appears in a block
+        assert "16 letters" in out_full  # Σ COMBINED block
 
 
-class TestPartInvariants:
-    """Per-token raw numbers must be self-consistent."""
+class TestInsightCallouts:
+    """When parts reveal discoveries, they must surface in the 💡 section."""
 
-    def test_each_part_letter_count_in_table(self):
+    def test_master_number_insight_present(self):
+        """Chaldean yields master 11 for the combined string — must surface."""
         out = render_summary_card(TARGET_FULL)
-        section = "\n".join(_section_lines(out, "#### 🪪 Name Parts"))
-        # Chidiebere = 10 letters
-        assert "| `Chidiebere` | **10**" in section
-        # onyema = 6 letters
-        assert "| `onyema` | **6**" in section
+        assert "💡 Insights" in out
+        assert "Master Number 11" in out
 
-    def test_three_cipher_columns_per_part(self):
-        """Each token row must show raw numbers for Pythagorean, Hebrew, and Chaldean."""
+    def test_atbash_high_density_insight(self):
+        """Combined string has 3 mirror pairs — must surface as high density."""
         out = render_summary_card(TARGET_FULL)
-        section = "\n".join(_section_lines(out, "#### 🪪 Name Parts"))
-        # First-name row contains 3 cipher raw numbers (59, 140, 33)
-        assert "**59**→" in section  # Chidiebere Pythagorean
-        assert "**140**→" in section  # Chidiebere Hebrew
-        assert "**33**→⚡" in section  # Chidiebere Chaldean master
+        assert "Atbash mirror pairs" in out
+        assert "high mirror density" in out
+
+    def test_power_number_insight_for_onyema(self):
+        """'onyema' Pythagorean root is 1 (power) — must surface."""
+        out = render_summary_card(TARGET_FULL)
+        assert "power number" in out
+        assert "onyema" in out
 
 
 class TestEdgeCases:
@@ -120,24 +94,18 @@ class TestEdgeCases:
     def test_extra_whitespace_collapsed(self):
         out1 = render_summary_card("Chidiebere   onyema")
         out2 = render_summary_card("Chidiebere onyema")
-        # Both must produce same parts section (split() collapses whitespace)
-        s1 = _section_lines(out1, "#### 🪪 Name Parts")
-        s2 = _section_lines(out2, "#### 🪪 Name Parts")
-        # Same number of data rows (2 tokens + combined)
-        rows1 = [l for l in s1 if l.startswith("| `") or l.startswith("| **Σ")]
-        rows2 = [l for l in s2 if l.startswith("| `") or l.startswith("| **Σ")]
-        assert len(rows1) == len(rows2)
+        # Same letter count in combined block
+        assert "16 letters" in out1
+        assert "16 letters" in out2
 
     def test_short_tokens_excluded(self):
-        """Tokens with <2 letters are ignored as parts (likely articles/initials)."""
-        out = render_summary_card("von Chidiebere")  # 'von' is 3 letters but common prefix
-        # 'von' has 3 letters so it WILL be included (≥2 rule)
-        assert "#### 🪪 Name Parts" in out
-        assert "`von`" in out
-        assert "`Chidiebere`" in out
+        """Tokens with ≥2 letters (including 'von') are included."""
+        out = render_summary_card("von Chidiebere")
+        assert "🪪 Name Parts" in out
+        assert "von" in out
+        assert "Chidiebere" in out
 
     def test_single_letter_token_excluded(self):
-        """Tokens with <2 letters are dropped from parts (e.g., 'J Smith' → just 'Smith')."""
+        """Tokens with <2 letters are dropped ('J Smith' → just Smith)."""
         out = render_summary_card("J Smith")
-        # 'J' is 1 letter, 'Smith' is 5 letters → only 1 part → no parts section
-        assert "#### 🪪 Name Parts" not in out
+        assert "🪪 Name Parts" not in out

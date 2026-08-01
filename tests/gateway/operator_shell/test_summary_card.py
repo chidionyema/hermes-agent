@@ -226,9 +226,14 @@ class TestRenderer:
         assert "Chaldean" in out
 
     def test_full_card_has_score_table(self):
-        out = render_summary_card("Hello World")
+        out = render_summary_card("Chidiebere")  # single word → Scores table
+        # Score section is rendered as framed blocks for single-word input,
+        # not as a table. The cipher name still appears.
         assert "Numerological Scores" in out
-        assert "| Cipher | Raw | Root | Ladder |" in out
+        assert "### 🔮 Isopsephy Card" in out
+        assert "Pythagorean" in out
+        assert "Hebrew Gematria" in out
+        assert "Chaldean" in out
 
     def test_full_card_has_structural_profile(self):
         out = render_summary_card("Hello World")
