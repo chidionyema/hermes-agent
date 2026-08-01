@@ -295,6 +295,10 @@ def render_summary_card(text: str) -> str:
     letter_count = prof.letter_count
     anagram_count = len(anagrams)
 
+    # Parse name parts (whitespace-separated tokens with ≥2 letters)
+    parts = [tok for tok in text.split() if len(_letters_only(tok)) >= 2]
+    has_parts = len(parts) >= 2
+
     # Line buffer
     out: list[str] = []
 
@@ -391,6 +395,41 @@ def render_summary_card(text: str) -> str:
             f"×{prof.most_common_letter[1]}"
         )
     out.append("")
+
+    # =======================================================================
+    # NAME PARTS — multi-token breakdown (only when 2+ words, each with letters)
+    # =======================================================================
+    if has_parts:
+        out.append("───")
+        out.append("")
+        out.append("#### 🪪 Name Parts")
+        out.append("")
+        out.append(
+            f"_Each part analyzed independently — Pythagorean · "
+            f"Hebrew · Chaldean_"
+        )
+        out.append("")
+        out.append("| Part | Letters | 🧮 Pythag | ✡️ Hebrew | 🌙 Chaldean |")
+        out.append("|---|---|---|---|---|")
+        for tok in parts:
+            tok_py = pythagorean(tok)
+            tok_he = hebrew(tok)
+            tok_ch = chaldean(tok)
+            out.append(
+                f"| `{tok}` | **{len(_letters_only(tok))}** | "
+                f"**{tok_py.raw}**→{_score_chip(tok_py.root, _is_master(tok_py.root))} | "
+                f"**{tok_he.raw}**→{_score_chip(tok_he.root, _is_master(tok_he.root))} | "
+                f"**{tok_ch.raw}**→{_score_chip(tok_ch.root, _is_master(tok_ch.root))} |"
+            )
+        out.append("")
+        # Combined sum row
+        out.append(
+            f"| **Σ Combined** | **{letter_count}** | "
+            f"**{py.raw}**→{_score_chip(py.root, _is_master(py.root))} | "
+            f"**{he.raw}**→{_score_chip(he.root, _is_master(he.root))} | "
+            f"**{ch.raw}**→{_score_chip(ch.root, _is_master(ch.root))} |"
+        )
+        out.append("")
 
     # =======================================================================
     # DIVIDER — visual section break before collapsibles
