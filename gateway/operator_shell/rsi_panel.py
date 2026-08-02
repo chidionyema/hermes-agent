@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-from gateway.operator_shell.panel_chrome import nav, panel_stamp
+from gateway.operator_shell.panel_chrome import nav, with_nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 

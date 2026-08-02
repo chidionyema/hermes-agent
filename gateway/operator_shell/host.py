@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-from gateway.operator_shell.panel_chrome import nav, panel_stamp
+from gateway.operator_shell.panel_chrome import nav, panel_stamp, with_nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -327,7 +327,7 @@ def render_host_panel() -> Tuple[str, List[ButtonRow]]:
     if not ka.get("running"):
         buttons.append([("▶️ Start keep-awake", "estate:host_keepawake_start")])
     buttons.append([("⚙️ Daemons", "estate:daemons")])
-    buttons.append(nav("host"))
+    buttons = with_nav(buttons, "host")
     lines.append("")
     lines.append(panel_stamp("host"))
     return "\n".join(lines), buttons

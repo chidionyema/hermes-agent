@@ -12,7 +12,7 @@ from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
-from gateway.operator_shell.panel_chrome import nav, panel_stamp
+from gateway.operator_shell.panel_chrome import nav, panel_stamp, with_nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -222,6 +222,6 @@ def render_sdlc() -> Tuple[str, List[ButtonRow]]:
     ]
 
     # Append nav spine
-    buttons.append(nav())
+    buttons = with_nav(buttons)
 
     return text, buttons

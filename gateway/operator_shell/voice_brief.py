@@ -7,7 +7,7 @@ import re
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, with_nav
 
 ButtonRow = List[Tuple[str, str]]
 

@@ -171,12 +171,12 @@ def render_atlas() -> Tuple[str, List[ButtonRow]]:
     lines.append("")
     lines.append("_Brief = sitrep · rooms = browse · type = search_")
     lines.append(panel_stamp("atlas"))
-    from gateway.operator_shell.panel_chrome import LEGEND, nav
+    from gateway.operator_shell.panel_chrome import LEGEND, nav, with_nav
 
     lines.extend(["", f"_{LEGEND}_"])
     buttons: List[ButtonRow] = list(tiles)
     buttons.append([("📋 Brief", "estate:brief")])
-    buttons.append(nav("find"))
+    buttons = with_nav(buttons, "find")
     return "\n".join(lines), buttons
 
 
@@ -224,7 +224,7 @@ def _inbox_waiting_line() -> str:
 
 def render_code_prompt() -> Tuple[str, List[ButtonRow]]:
     """Assign entry — Telegram cannot collect free text on a button, so teach the reply."""
-    from gateway.operator_shell.panel_chrome import nav
+    from gateway.operator_shell.panel_chrome import nav, with_nav
 
     lines = [
         "✍️ *Assign a coding run*",
@@ -243,7 +243,7 @@ def render_code_prompt() -> Tuple[str, List[ButtonRow]]:
     if inflight:
         buttons.append(inflight)
     buttons.append([("💻 Code room", "estate:room:code")])
-    buttons.append(nav("code_prompt"))
+    buttons = with_nav(buttons, "code_prompt")
     return "\n".join(lines), buttons
 
 

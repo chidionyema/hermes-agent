@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-from gateway.operator_shell.panel_chrome import nav, panel_stamp
+from gateway.operator_shell.panel_chrome import nav, panel_stamp, with_nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -670,7 +670,7 @@ def render_signal_engine() -> Tuple[str, List[ButtonRow]]:
     buttons.append(
         [("💰 Money room", "estate:room:money"), ("🔭 Prospector", "estate:prospector_daemon")]
     )
-    buttons.append(nav("signal_engine"))
+    buttons = with_nav(buttons, "signal_engine")
     lines.append("")
     lines.append(panel_stamp("signal_engine"))
     return "\n".join(lines).rstrip(), buttons

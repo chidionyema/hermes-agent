@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import List, Tuple
 
-from gateway.operator_shell.panel_chrome import nav, panel_stamp
+from gateway.operator_shell.panel_chrome import nav, panel_stamp, with_nav
 
 logger = logging.getLogger(__name__)
 
@@ -110,5 +110,5 @@ def render_inbox() -> Tuple[str, List[ButtonRow]]:
 
     lines.append(panel_stamp("inbox"))
     buttons.append([("🧠 RSI", "estate:rsi"), ("🚀 Fleet", "estate:fleet")])
-    buttons.append(nav("inbox"))
+    buttons = with_nav(buttons, "inbox")
     return "\n".join(lines).strip(), buttons

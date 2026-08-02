@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 from typing import List, Tuple
 
-from gateway.operator_shell.panel_chrome import clip, nav, panel_stamp
+from gateway.operator_shell.panel_chrome import clip, nav, panel_stamp, with_nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -223,7 +223,7 @@ def render_status_summary() -> Tuple[str, List[ButtonRow]]:
     buttons: List[ButtonRow] = [
         [("🚀 Fleet", "estate:fleet"), ("🗓 Cron", "estate:pd_cron")],
         [("📋 Missions", "estate:missions"), ("📸 Diff", "estate:diff")],
-        nav("status"),
     ]
+    buttons = with_nav(buttons, "status")
 
     return "\n".join(lines), buttons

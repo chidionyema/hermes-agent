@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from gateway.operator_shell.panel_chrome import nav, panel_stamp
+from gateway.operator_shell.panel_chrome import nav, panel_stamp, with_nav
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -48,6 +48,10 @@ def render_help() -> Tuple[str, List[ButtonRow]]:
             ("🗺 Browse all", "estate:find"),
             ("🎛 Actions", "estate:run"),
         ],
+        [
+            ("⚙️ Tune", "estate:tune"),
+            ("🔎 Find", "estate:find"),
+        ],
     ]
-    buttons.append(nav("help"))
+    buttons = with_nav(buttons, "help")
     return "\n".join(lines), buttons

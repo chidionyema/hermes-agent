@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from gateway.operator_shell.panel_chrome import nav, panel_stamp
+from gateway.operator_shell.panel_chrome import nav, panel_stamp, with_nav
 from gateway.operator_shell.usage import example_command
 
 ButtonRow = List[Tuple[str, str]]
@@ -197,7 +197,7 @@ def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
             "",
             panel_stamp("find"),
         ])
-        return text, [nav("find")]
+        return {m.group(1)}, with_nav(None, "find")
 
     lines = [f"🔎 *{query}* — {len(hits)} match{'' if len(hits) == 1 else 'es'}", ""]
     buttons: List[ButtonRow] = []
@@ -220,7 +220,7 @@ def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
             row = []
     if row:
         buttons.append(row)
-    buttons.append(nav("find"))
+    buttons = with_nav(buttons, "find")
     lines.append("")
     lines.append(panel_stamp("find"))
     return "\n".join(lines), buttons
