@@ -4030,9 +4030,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.debug("Busy ack suppressed for session %s", session_key)
             return True  # input still processed, just no ack sent
 
-        # Debounce: only send an acknowledgment once every 30 seconds per session
-        # to avoid spamming the user when they send multiple messages quickly
-        _BUSY_ACK_COOLDOWN = 30
+        # Debounce: only send an acknowledgment once every 8 seconds per session
+        # to avoid spamming the user when they send multiple messages quickly.
+        # Was 30s — too slow for a responsive feel.
+        _BUSY_ACK_COOLDOWN = 8
         now = time.time()
         last_ack = self._busy_ack_ts.get(session_key, 0)
         if now - last_ack < _BUSY_ACK_COOLDOWN:
