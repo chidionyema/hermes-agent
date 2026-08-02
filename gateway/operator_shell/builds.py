@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -241,4 +241,6 @@ def render_builds() -> Tuple[str, List[ButtonRow]]:
         [("🚀 Fleet", "estate:fleet")],
         nav("builds"),
     ]
+    lines.append("")
+    lines.append(panel_stamp("builds"))
     return "\n".join(lines), buttons

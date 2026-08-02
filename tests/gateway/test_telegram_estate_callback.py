@@ -106,18 +106,89 @@ def _buttons(markup):
 
 
 @pytest.mark.asyncio
+async def test_slow_action_from_mission_card_does_not_overwrite_with_loading():
+    """Mission card stays put; Store arrives as a separate message."""
+    adapter = _adapter()
+    query = _query("st_status")
+    view = SimpleNamespace(
+        text="Store: ok",
+        buttons=[[("🏠 Home", "estate:refresh")]],
+        pin_edit=False,
+    )
+    mission = SimpleNamespace(
+        text="Mission home",
+        buttons=[[("🛒 Store", "estate:st_status")]],
+        pin_edit=True,
+    )
+    adapter._send_message_with_thread_fallback = AsyncMock()
+
+    with patch(
+        "gateway.operator_shell.proof.load_mission_card",
+        return_value={"chat_id": "12345", "message_id": "8781"},
+    ), patch(
+        "gateway.operator_shell.estate.handle_estate_action", return_value=view
+    ), patch(
+        "gateway.operator_shell.estate.render_panel_view", return_value=mission
+    ):
+        await _dispatch(adapter, query)
+
+    # No Loading overwrite of the pinned card
+    for text, _ in _edits(query):
+        assert "Probing" not in text and "Loading" not in text, text
+    adapter._send_message_with_thread_fallback.assert_awaited()
+    sent_text = adapter._send_message_with_thread_fallback.await_args.kwargs.get("text", "")
+    assert "Store: ok" in sent_text
+
+
+@pytest.mark.asyncio
 async def test_the_loading_edit_keeps_the_keyboard():
     """The brick. `reply_markup=None` here is what emptied the pinned card."""
     adapter = _adapter()
     query = _query()
     view = SimpleNamespace(text="Store: ok", buttons=[[("🏠 Home", "estate:refresh")]])
 
+    # Not the mission card → loading edit still applies on ephemeral panels.
+    with patch(
+        "gateway.operator_shell.proof.load_mission_card", return_value={}
+    ), patch(
+        "gateway.operator_shell.estate.handle_estate_action", return_value=view
+    ):
+        await _dispatch(adapter, query)
+
+    loading_text, loading_markup = _edits(query)[0]
+    assert "Probing store" in loading_text, _edits(query)
+    assert loading_markup is OLD_KEYBOARD, "the loading edit dropped the operator's only buttons"
+
+
+@pytest.mark.asyncio
+async def test_slow_action_loading_names_the_probe_and_keeps_buttons():
+    """Opaque Loading on a 60s Store probe reads as hung — name the work + ETA."""
+    adapter = _adapter()
+    query = _query("st_health")
+    view = SimpleNamespace(text="Health: ok", buttons=[[("🏠 Home", "estate:refresh")]])
+
     with patch("gateway.operator_shell.estate.handle_estate_action", return_value=view):
         await _dispatch(adapter, query)
 
     loading_text, loading_markup = _edits(query)[0]
-    assert "Loading" in loading_text, _edits(query)
-    assert loading_markup is OLD_KEYBOARD, "the loading edit dropped the operator's only buttons"
+    assert "Probing store health" in loading_text
+    assert "1–2 min" in loading_text or "1-2 min" in loading_text
+    assert loading_markup is OLD_KEYBOARD
+    assert "Health: ok" in _edits(query)[-1][0]
+
+
+@pytest.mark.asyncio
+async def test_fast_action_keeps_short_loading_copy():
+    adapter = _adapter()
+    query = _query("refresh")
+    view = SimpleNamespace(text="Mission", buttons=[[("🏠 Home", "estate:refresh")]])
+
+    with patch("gateway.operator_shell.estate.handle_estate_action", return_value=view):
+        await _dispatch(adapter, query)
+
+    loading_text, _ = _edits(query)[0]
+    assert "Loading" in loading_text
+    assert "Probing" not in loading_text
 
 
 @pytest.mark.asyncio

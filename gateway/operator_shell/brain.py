@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Dict, List, Optional, Tuple
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +129,8 @@ def render_brain() -> Tuple[str, List[ButtonRow]]:
     # twice on one screen is the duplicate-callback defect the cockpit was fixed for.
     buttons.append([("💵 Spend cap", "estate:tune:spend")])
     buttons.append(nav("brain"))
+    lines.append("")
+    lines.append(panel_stamp("brain"))
     return "\n".join(lines), buttons
 
 

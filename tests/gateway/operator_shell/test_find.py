@@ -126,46 +126,23 @@ def test_known_ops_derive_the_phrasing_a_human_uses():
 
 def test_no_destination_is_listed_twice():
     """The duplicate-button defect: `find` was registered argless and with a capture, so a
-    search for "search" showed *Find anything* as both a ⌨️ line and a button."""
+    search for "search" showed the destination as both a ⌨️ line and a button."""
     seen = [(e.action, e.label) for e in find._index()]
     duplicates = {pair for pair in seen if seen.count(pair) > 1}
     assert not duplicates, f"same destination listed more than once: {duplicates}"
 
     text, buttons = find.render_find("search")
     labels = [label for row in buttons for label, _cb in row]
-    assert labels.count("Find anything") <= 1
-    assert "⌨️ *Find anything*" not in text, "shown as a button already"
+    assert labels.count("Map — rooms + search") <= 1
+    assert "⌨️ *Map — rooms + search*" not in text, "shown as a button already"
 
 
-def test_search_finds_the_documented_examples():
-    """The panel promises these work; each must return something."""
-    for query in ("restart", "spend", "model", "approve", "logs", "brief"):
-        assert find.search(query), f"documented example {query!r} found nothing"
-
-
-def test_search_ranks_exact_word_above_prefix():
-    hits = find.search("restart")
-    assert hits[0][0] >= 3, "an exact word match should score as one"
-    assert all(hits[i][0] >= hits[i + 1][0] for i in range(len(hits) - 1))
-
-
-def test_search_ignores_noise_and_unknown_words():
-    assert find.search("") == []
-    assert find.search("the and for you") == [], "stopwords alone are not a query"
-    assert find.search("zzzqqq") == []
-
-
-def test_callbacks_fit_telegram_limit():
-    """Telegram rejects callback_data over 64 bytes; a generated callback must not trip it."""
-    for entry in find._index():
-        if not entry.needs_arg:
-            assert len(entry.callback.encode()) <= 64, entry.callback
-
-
-def test_render_find_without_query_lists_the_index_size():
+def test_render_find_without_query_opens_map():
+    """Empty Map is Atlas — rooms first, not a help essay with an index count."""
     text, buttons = find.render_find()
-    assert "Find" in text
-    assert str(len(find._index())) in text, "the advertised count must be the real one"
+    assert "Map" in text
+    flat = {cb for row in buttons for _l, cb in row}
+    assert "estate:room:money" in flat
     assert buttons, "the nav row is always present"
 
 

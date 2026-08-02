@@ -21,7 +21,7 @@ from __future__ import annotations
 import re
 from typing import Dict, List, Optional, Set, Tuple
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 from gateway.operator_shell.usage import example_command
 
 ButtonRow = List[Tuple[str, str]]
@@ -182,23 +182,10 @@ def search(query: str, limit: int = 8) -> List[Tuple[int, Entry]]:
 def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
     query = (query or "").strip()
     if not query:
-        index = _index()
-        total = len(index)
-        slash = sum(1 for e in index if e.typed)
-        text = "\n".join([
-            "🔎 *Find* — type what you want, not where it lives",
-            "",
-            f"`find <anything>` searches all {total} operations, including the "
-            f"{slash} slash commands — most of which Telegram's `/` list hides.",
-            "",
-            "• `find restart` — every restart there is",
-            "• `find spend` — caps, pause, budget",
-            "• `find model` — which brain is thinking",
-            "• `find approve` — what is waiting on you",
-            "",
-            "_Plain phrases work on their own too: “restart gateway”, “use opus”, “brief”._",
-        ])
-        return text, [nav("find")]
+        # Empty Find is the Atlas — rooms first; type a word to search.
+        from gateway.operator_shell.atlas import render_atlas
+
+        return render_atlas()
 
     hits = search(query)
     if not hits:
@@ -207,6 +194,8 @@ def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
             "",
             "Try a plainer word — `restart`, `spend`, `model`, `logs`, `approve`, `status`.",
             "Anything longer than a lookup is treated as a task for the agent, not a search.",
+            "",
+            panel_stamp("find"),
         ])
         return text, [nav("find")]
 
@@ -232,4 +221,6 @@ def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
     if row:
         buttons.append(row)
     buttons.append(nav("find"))
+    lines.append("")
+    lines.append(panel_stamp("find"))
     return "\n".join(lines), buttons

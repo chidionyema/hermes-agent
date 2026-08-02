@@ -37,7 +37,7 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -619,7 +619,8 @@ def render_signal_engine() -> Tuple[str, List[ButtonRow]]:
     if not REPO.is_dir():
         return (
             "💹 *Signal Engine*\n\n"
-            "⚫ repo missing at `~/Documents/code/signalengine` — not wired.",
+            "⚫ repo missing at `~/Documents/code/signalengine` — not wired.\n\n"
+            + panel_stamp("signal_engine"),
             [[("🚀 Fleet", "estate:fleet")], nav()],
         )
 
@@ -634,34 +635,44 @@ def render_signal_engine() -> Tuple[str, List[ButtonRow]]:
     lines += ["", "*Recent log*", _tail_lines(LOGS, n=3)]
 
     verdict = str(h.get("verdict"))
+    running = verdict in ("ok", "stalled", "unsupervised") and bool(
+        h.get("pid") or h.get("running_flag")
+    )
     buttons: List[ButtonRow] = []
     # The first row is whatever actually helps in THIS state, not a fixed toolbar.
+    primary_restart = False
     if verdict == "tcc_denied":
         buttons.append([("📜 Logs", "estate:se_logs"), ("🔄 Re-check", "estate:signal_engine")])
     elif verdict == "unsupervised":
         buttons.append([("🛡 Load LaunchAgent", "estate:se_start")])
     elif verdict == "stalled":
         buttons.append([("♻️ Restart", "estate:se_restart")])
+        primary_restart = True
 
+    # Context-aware ops row: don't duplicate primary Restart; hide Start when up; hide Stop when dead.
+    ops: ButtonRow = []
+    if not primary_restart:
+        ops.append(("♻️ Restart", "estate:se_restart"))
+    if running:
+        ops.append(("⏹ Stop", "estate:se_stop"))
+    else:
+        ops.append(("▶️ Start", "estate:se_start"))
+    if ops:
+        buttons.append(ops)
     buttons.append(
         [
-            ("♻️ Restart", "estate:se_restart"),
-            ("⏹ Stop", "estate:se_stop"),
-            ("▶️ Start", "estate:se_start"),
-        ]
-    )
-    buttons.append(
-        [
-            ("▶️ Resume" if h.get("paused") else "⏸ Pause",
+            ("▶️ Resume engine" if h.get("paused") else "⏸ Pause engine",
              "estate:se_resume" if h.get("paused") else "estate:se_pause"),
-            ("💰 Knobs", "estate:se_params"),
+            ("💰 Knobs", "estate:tune"),
             ("📜 Logs", "estate:se_logs"),
         ]
     )
     buttons.append(
-        [("⚙️ Prospector", "estate:prospector_daemon"), ("🚀 Fleet", "estate:fleet")]
+        [("💰 Money room", "estate:room:money"), ("🔭 Prospector", "estate:prospector_daemon")]
     )
     buttons.append(nav("signal_engine"))
+    lines.append("")
+    lines.append(panel_stamp("signal_engine"))
     return "\n".join(lines).rstrip(), buttons
 
 

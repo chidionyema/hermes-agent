@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import List, Tuple
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def render_inbox() -> Tuple[str, List[ButtonRow]]:
 
     if not rows and not blocked_missions:
         return (
-            "📥 *Inbox* — clear\n\nNothing needs you.",
+            "📥 *Inbox* — clear\n\nNothing needs you.\n\n" + panel_stamp("inbox"),
             [
                 [("🧠 RSI", "estate:rsi"), ("🚀 Fleet", "estate:fleet")],
                 nav("inbox"),
@@ -68,7 +68,10 @@ def render_inbox() -> Tuple[str, List[ButtonRow]]:
         for d in money[:6]:
             short = d["id"][:8]
             risk = (d["risk_class"] or "").upper()
-            lines.append(f"⏸ `{short}` [{risk}] {d['title'][:40]}")
+            # P1-3: drop the `[:40]` clip — the operator cannot tell a
+            # `MONEY FENCE` blocker from a routine one when the title is cut.
+            # The `👁` button still exists for the rest of the row.
+            lines.append(f"⏸ `{short}` [{risk}] {d['title']}")
             buttons.append(
                 [
                     (f"✅ APPROVE {short}", f"estate:approve:{short}"),
@@ -82,7 +85,8 @@ def render_inbox() -> Tuple[str, List[ButtonRow]]:
         for d in other[:6]:
             short = d["id"][:8]
             tag = "⏸ APPROVE" if d["status"] == "awaiting_approval" else "🔴 BLOCKED"
-            lines.append(f"{tag} `{short}` {d['title'][:44]}")
+            # P1-3: drop the `[:44]` clip — see money-section above
+            lines.append(f"{tag} `{short}` {d['title']}")
             if d["status"] == "awaiting_approval":
                 buttons.append(
                     [
@@ -97,10 +101,14 @@ def render_inbox() -> Tuple[str, List[ButtonRow]]:
     if blocked_missions:
         lines.append(f"🚀 *Missions blocked* — `{len(blocked_missions)}`")
         for m in blocked_missions[:3]:
-            lines.append(f"🔴 `{m['id'][:8]}` {m['name'][:40]}")
+            mid = str(m["id"] if hasattr(m, "keys") else m[0])[:8]
+            name = m["name"] if hasattr(m, "keys") else (m[1] if len(m) > 1 else "?")
+            lines.append(f"🔴 `{mid}` {str(name)[:40]}")
+            buttons.append([(f"👁 Mission {mid}", "estate:missions")])
         lines.append("_Usually Claude quota — see mission card blocker._")
         lines.append("")
 
+    lines.append(panel_stamp("inbox"))
     buttons.append([("🧠 RSI", "estate:rsi"), ("🚀 Fleet", "estate:fleet")])
     buttons.append(nav("inbox"))
     return "\n".join(lines).strip(), buttons

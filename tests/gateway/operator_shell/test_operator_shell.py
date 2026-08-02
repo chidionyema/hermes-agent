@@ -69,6 +69,18 @@ def test_panel_fail_closed_without_coordinator(monkeypatch, tmp_path):
     assert view.ok is False
 
 
+def test_operator_menu_includes_status_door():
+    assert "status" in OPERATOR_TELEGRAM_MENU
+    assert "panel" in OPERATOR_TELEGRAM_MENU
+
+
+def test_natural_ops_status_is_estate_summary():
+    op = match_natural_op("status")
+    assert op is not None and op.action == "status"
+    assert match_natural_op("mission").action == "refresh"
+    assert match_natural_op("panel").action == "refresh"
+
+
 def test_natural_ops_pause_spend():
     op = match_natural_op("pause spend")
     assert op is not None and op.action == "pause"

@@ -24,9 +24,8 @@ from gateway.operator_shell.cockpit import render_activity
 from gateway.operator_shell.mission import mission_buttons
 from gateway.operator_shell.panel_chrome import nav
 
-# Four positions since 2026-07-31: the three containers plus search. Browsing alone stopped
-# working at 131 destinations ("i dont know where to find anything"), so Find is spine, not a
-# leaf. The Find panel itself omits it — it would re-render the screen you are on.
+# Four positions: Now · Run · Tune · Map. Empty Map = Atlas; typed Map = search.
+# On the Map panel itself the 🗺 glyph re-opens Atlas — no duplicate 🔄.
 SPINE = ["estate:refresh", "estate:run", "estate:tune", "estate:find"]
 
 
@@ -80,12 +79,11 @@ def test_mission_card_never_offers_the_same_action_twice(paused, primary, concer
 
 
 def test_mission_card_caps_concerns_but_says_how_many_were_hidden():
-    """Four concerns must not become four rows — the card is read on a phone. The count is
-    printed by render_mission_card; here we only assert the button cap holds."""
+    """Two concerns max on a phone — the rest live under Inbox / Run."""
     concerns = [(f"c{i}", f"estate:fake{i}") for i in range(6)]
     rows = mission_buttons(False, concerns[0], concerns)
     concern_rows = [r for r in rows if len(r) == 1 and r[0][1].startswith("estate:fake")]
-    assert len(concern_rows) <= 3
+    assert len(concern_rows) <= 2
 
 
 def test_activity_panel_has_no_duplicate_callbacks():
@@ -319,10 +317,9 @@ def test_rsi_panel_offers_the_arm_toggle_once(monkeypatch, armed):
 # --- Find: search is the answer to "I don't know where anything is" -------------------
 
 def test_find_panel_does_not_offer_itself():
-    """The one nav position that must adapt. On every other panel 🔎 goes to Find; on Find
-    it would be this same screen, which is the duplicate-callback defect in a new place."""
+    """On Map, 🗺 already re-opens Atlas — no duplicate 🔄 beside it."""
     cbs = [cb for _label, cb in nav("find")]
-    assert cbs == SPINE, cbs          # 🔎 is the self button; no 🔄 beside it
+    assert cbs == SPINE, cbs
     assert cbs.count("estate:find") == 1, cbs
 
 

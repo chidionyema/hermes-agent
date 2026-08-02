@@ -145,3 +145,24 @@ def test_rollup_can_be_asked_for_everything(_isolated, monkeypatch):
     assert r["synthetic"] == 0
 
 
+def test_activity_panel_never_reports_an_empty_log_as_nothing_happening(_isolated, monkeypatch):
+    """A file with 489 probe rows and 0 taps must not render identically to an untouched
+    estate. Same screen, two very different situations."""
+    from gateway.operator_shell.cockpit import render_activity
+
+    monkeypatch.setattr(activity, "_gateway_pid", lambda: os.getpid() + 1)
+    for i in range(3):
+        activity.record(f"refresh:{i}", f"probe-{i}", ms=1.0)
+
+    text, _rows_out = render_activity(1)
+    assert "+3 from probes/tests" in text, text
+    assert "No operator taps recorded yet" in text
+
+
+def test_the_panel_declares_the_suppression_when_there_are_real_rows_too(_isolated, monkeypatch):
+    from gateway.operator_shell.cockpit import render_activity
+
+    _mixed(monkeypatch)
+    text, _rows_out = render_activity(1)
+    assert "1 actions" in text
+    assert "+2 from probes/tests" in text, text

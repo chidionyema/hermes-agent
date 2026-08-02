@@ -8,14 +8,16 @@ cost of asking the truth. The user waited; the operator thumbs-twiddled.
 
 What this does
 --------------
-1. ``cache_get(action)`` returns the last-known result for ``action`` if it is fresh
-   enough (default TTL 60s for state panels, 5s for verdict panels). Returns ``None``
-   when the cache is empty or stale.
+1. ``cache_get(action)`` returns the last-known result for ``action`` even when past
+   TTL (stale-while-revalidate). Returns ``None`` only when the cache is empty.
+   The third element of the tuple is ``fresh`` — True when age ≤ TTL.
 2. ``cache_put(action, text, buttons)`` stores the most recent result. Same payload
    shape every panel already returns — no new contract.
 3. ``cache_refresh(action, render_fn)`` runs ``render_fn()`` in a daemon thread,
    stores the result. The caller returns the cached value immediately and the
    next tap will see the fresh one.
+4. ``warmup_slow_panels()`` pre-fills slow panels at gateway boot so the first
+   phone tap is not a 60s+ cold probe.
 
 Why a separate module
 ---------------------
@@ -30,10 +32,11 @@ Why a separate module
 
 TTL ladder
 ----------
-* 5s  : ``refresh`` (mission card) — user just tapped, real-time feel matters
-* 30s : ``run``, ``tune`` (control surfaces) — state moves on operator action
-* 60s : ``daemons``, ``prospector_daemon``, ``signal_engine``, ``st_*``, ``builds``
-* ∞   : anything else — caller is responsible for caching if it wants to
+* 5s   : ``refresh`` (mission card) — user just tapped, real-time feel matters
+* 30s  : ``run``, ``tune`` (control surfaces) — state moves on operator action
+* 60s  : ``daemons``, ``prospector_daemon``, ``signal_engine``, ``builds``
+* 120s : ``st_*`` — Stripe/reconcile probes; re-probe less often
+* ∞    : anything else — caller is responsible for caching if it wants to
 
 The TTL is a hint, not a contract: a stale entry will still be returned and
 the result re-rendered in the background. The point of the TTL is to avoid
@@ -72,61 +75,94 @@ _TTL: dict = {
     "activity": 30,
     "diff": 30,
     "status": 30,
+    "builds": 60,
+    "st_status": 120,
+    "st_health": 120,
+    "st_reconcile": 120,
+    "st_money": 120,
 }
 
+# Panels whose cold path is felt on the phone — warm at gateway boot (P1-8).
+# st_health / st_money mint live Stripe objects / run long proofs — still warmed
+# when the cache is empty so the first phone tap is not a cold miss, but skipped
+# when a fresh entry already exists (see warmup_slow_panels).
+_WARMUP_ACTIONS = (
+    "st_status",
+    "st_health",
+    "st_reconcile",
+    "st_money",
+    "builds",
+    "refresh",
+)
 
-def _load() -> dict:
+
+def _load_unlocked() -> dict:
     try:
-        with _LOCK:
-            if not _PATH.is_file():
-                return {}
-            with _PATH.open("r") as f:
-                return json.load(f)
+        if not _PATH.is_file():
+            return {}
+        with _PATH.open("r") as f:
+            return json.load(f)
     except Exception as exc:
         logger.debug("preflight: cache load failed: %s", exc)
         return {}
 
 
-def _store(data: dict) -> None:
+def _store_unlocked(data: dict) -> None:
     try:
         _DIR.mkdir(parents=True, exist_ok=True)
-        with _LOCK:
-            tmp = _PATH.with_suffix(".json.tmp")
-            with tmp.open("w") as f:
-                json.dump(data, f)
-            tmp.replace(_PATH)
+        tmp = _PATH.with_suffix(".json.tmp")
+        with tmp.open("w") as f:
+            json.dump(data, f)
+        tmp.replace(_PATH)
     except Exception as exc:
         logger.debug("preflight: cache store failed: %s", exc)
 
 
-def cache_get(action: str) -> Optional[Tuple[str, List[ButtonRow]]]:
-    """Return cached (text, buttons) for action if fresh. None otherwise."""
-    data = _load()
-    entry = data.get(action)
-    if not entry:
-        return None
-    age = time.time() - float(entry.get("ts", 0))
-    ttl = _TTL.get(action, 30)
-    if age > ttl:
-        return None
-    return entry.get("text", ""), entry.get("buttons", [])
+def _load() -> dict:
+    with _LOCK:
+        return _load_unlocked()
+
+
+def _store(data: dict) -> None:
+    with _LOCK:
+        _store_unlocked(data)
+
+
+def cache_get(action: str) -> Optional[Tuple[str, List[ButtonRow], bool]]:
+    """Return ``(text, buttons, fresh)`` for action, or None if empty.
+
+    Stale entries are still returned (``fresh=False``) so the phone never blocks
+    on a cold probe when *any* prior result exists. Callers should background-
+    refresh when ``fresh`` is False.
+    """
+    with _LOCK:
+        data = _load_unlocked()
+        entry = data.get(action)
+        if not entry:
+            return None
+        age = time.time() - float(entry.get("ts", 0))
+        ttl = _TTL.get(action, 30)
+        fresh = age <= ttl
+        return entry.get("text", ""), entry.get("buttons", []), fresh
 
 
 def cache_put(action: str, text: str, buttons: List[ButtonRow]) -> None:
-    """Store a fresh result. Thread-safe."""
-    data = _load()
-    data[action] = {"ts": time.time(), "text": text, "buttons": buttons}
-    # Trim to the last 20 actions to keep the file small.
-    if len(data) > 20:
-        for k in sorted(data, key=lambda k: data[k].get("ts", 0))[: len(data) - 20]:
-            data.pop(k, None)
-    _store(data)
+    """Store a fresh result. Thread-safe (full read-modify-write under lock)."""
+    with _LOCK:
+        data = _load_unlocked()
+        data[action] = {"ts": time.time(), "text": text, "buttons": buttons}
+        # Trim to the last 20 actions to keep the file small.
+        if len(data) > 20:
+            for k in sorted(data, key=lambda k: data[k].get("ts", 0))[: len(data) - 20]:
+                data.pop(k, None)
+        _store_unlocked(data)
 
 
 def cache_invalidate(action: str) -> None:
-    data = _load()
-    data.pop(action, None)
-    _store(data)
+    with _LOCK:
+        data = _load_unlocked()
+        data.pop(action, None)
+        _store_unlocked(data)
 
 
 def cache_refresh(action: str, render_fn: Callable[[], Tuple[str, List[ButtonRow]]]) -> None:
@@ -146,3 +182,30 @@ def cache_refresh(action: str, render_fn: Callable[[], Tuple[str, List[ButtonRow
 
     t = threading.Thread(target=_runner, name=f"preflight-{action}", daemon=True)
     t.start()
+
+
+def warmup_slow_panels(
+    actions: Tuple[str, ...] = _WARMUP_ACTIONS,
+    render_fn: Optional[Callable[[str], Tuple[str, List[ButtonRow]]]] = None,
+) -> None:
+    """Pre-fill slow panels in background threads at gateway boot.
+
+    Best-effort: failures are logged and never raised. Does not block the caller.
+    ``render_fn`` defaults to ``estate._render_for_cache`` so this module stays
+    free of a hard import cycle at module load.
+    """
+
+    def _default_render(action: str) -> Tuple[str, List[ButtonRow]]:
+        from gateway.operator_shell.estate import _render_for_cache
+
+        return _render_for_cache(action)
+
+    render = render_fn or _default_render
+
+    for action in actions:
+        # Skip if we already have a fresh entry — no need to re-probe on every restart.
+        existing = cache_get(action)
+        if existing is not None and existing[2]:
+            continue
+        cache_refresh(action, lambda a=action: render(a))
+    logger.info("preflight: warmup started for %s", ", ".join(actions))

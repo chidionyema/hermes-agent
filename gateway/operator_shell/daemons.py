@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -304,7 +304,19 @@ def _tail(paths: Tuple[Path, ...], n: int = 4) -> str:
 def render_daemons() -> Tuple[str, List[ButtonRow]]:
     lines = [
         "⚙️ *Daemons* — live `launchctl`",
-        "_KeepAlive = pid · interval/calendar = armed between ticks_",
+        # Plain English glossary. The old one (`KeepAlive = pid · interval/calendar = armed
+        # between ticks`) was jargon-on-jargon; the founder asked what each column meant.
+        # New: each launchctl kind gets a one-line plain explanation, so the operator never
+        # has to translate. KeepAlive = a long-lived process with a pid. interval = runs
+        # every N seconds, sits idle between ticks. calendar = runs on a wall-clock schedule.
+        # `armed` here means "scheduled to run, not currently running" — that's the right
+        # word for an interval/calendar job between ticks.
+        "_`pid` = long-lived process · "
+        "`interval` = runs every N seconds · "
+        "`calendar` = runs on a schedule · "
+        "`armed` = scheduled, idle between ticks · "
+        "`fenced` = kept alive by another launchctl job · "
+        "`retired` = plist on disk but not loaded_",
         "",
     ]
     down: List[str] = []
@@ -349,6 +361,7 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
 
     lines.append("")
     lines.append("_Gateway start fenced. Prospect gen → Prospect daemons._")
+    lines.append(panel_stamp("daemons"))
 
     buttons: List[ButtonRow] = [
         [

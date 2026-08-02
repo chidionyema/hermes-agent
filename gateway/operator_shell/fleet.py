@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 logger = logging.getLogger(__name__)
 
@@ -168,21 +168,9 @@ def render_fleet() -> Tuple[str, List[ButtonRow]]:
         lines.append("")
 
     buttons: List[ButtonRow] = [
-        [
-            ("🏗 Builds", "estate:builds"),
-            ("⚙️ Prospect daemons", "estate:prospector_daemon"),
-        ],
-        [
-            ("💹 Signal Engine", "estate:signal_engine"),
-            ("💰 Risk knobs", "estate:se_params"),
-        ],
-        [
-            ("⚡️ Run Prospector", "estate:run_prospector"),
-            ("⚙️ Estate daemons", "estate:daemons"),
-        ],
-        [
-            ("🛒 Store", "estate:st_status"),
-        ],
+        # Code-stage outbounds only — Fleet is Repos health, not a daemon mall.
+        [("🏗 CI", "estate:builds"), ("📸 Diff", "estate:diff")],
+        [("💻 Code room", "estate:room:code")],
         nav("fleet"),
     ]
     # Prefixed glance for daemon health. Signal Engine goes first: it is the money
@@ -214,4 +202,16 @@ def render_fleet() -> Tuple[str, List[ButtonRow]]:
         if not line and (not out or not out[-1]):
             continue
         out.append(line)
+    # Glossary: the founder kept asking what `dirty(N)` and `inflight` meant. Plain English
+    # at the foot answers both at once, and stays out of the way of the project tiles.
+    out.append("")
+    out.append(
+        "_`dirty(N)` = N uncommitted files in git · "
+        "`inflight` = tasks in this project the coord is working on · "
+        "🟢 ok · 🟡 busy · 🔴 failing · ⚪ unverified_"
+    )
+    # P1-2: every panel ends with its absolute edit timestamp so the operator can
+    # tell at a glance whether a card is fresh (just probe'd) or stale (cached).
+    # Mission card invented this format; fleet/daemons/prospector_daemon follow.
+    out.append(panel_stamp("fleet"))
     return "\n".join(out).rstrip(), buttons

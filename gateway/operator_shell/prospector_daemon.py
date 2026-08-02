@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -209,6 +209,29 @@ def _log_mtime_ago(paths: Tuple[Path, ...]) -> str:
     if newest is None:
         return "?"
     return _ago(newest)
+
+
+def _log_mtime_iso(paths: Tuple[Path, ...]) -> str:
+    """Absolute UTC timestamp for the newest log-path mtime in `paths`.
+
+    The header (`*Recent log*`) used to show only `(57m ago)` — the operator could
+    not tell from the cockpit whether the log was stale or fresh. The log entries
+    themselves carry absolute timestamps (`2026-07-31 18:38 UTC`) because the
+    prospector scheduler writes them, but the *header* above the entries did not.
+    Including both ("(57m ago · 2026-07-31 18:38 UTC)") keeps the at-a-glance feel
+    and adds the absolute time the founder asked for.
+    """
+    newest = None
+    for p in paths:
+        try:
+            if p.is_file():
+                m = p.stat().st_mtime
+                newest = m if newest is None else max(newest, m)
+        except Exception:
+            continue
+    if newest is None:
+        return ""
+    return datetime.fromtimestamp(newest, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
 def _tail_lines(paths: Tuple[Path, ...], n: int = 4) -> str:
@@ -456,9 +479,9 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
     lines.append("_Tap a value to confirm change. Secrets never shown/edited._")
     p = read_params()
     pause_btn = (
-        ("▶️ Clear PAUSE", "estate:pd_unpause")
+        ("▶️ Clear Prospector PAUSE", "estate:pd_unpause")
         if p.get("paused")
-        else ("⏸ Arm PAUSE", "estate:pd_pause")
+        else ("⏸ Pause Prospector", "estate:pd_pause")
     )
     # Setters moved to Tune, same as the Signal Engine knobs — one place per knob. This screen
     # keeps the read (which is what it is good at) and hands off the writes. The daily cap is
@@ -540,14 +563,26 @@ def _cron_outcome_lines() -> List[str]:
         lines.append(f"   next `{str(nxt)[:22]}`")
         if err:
             lines.append(f"   ⚠ `{str(err)[:70]}`")
-    ticks = _last_ticks(3)
+    # Read more ticks than we display, so the cluster dedup below can see the full window
+    # of consecutive same-cause failures and collapse them onto one line — the same root-
+    # cause dedup the activity panel got from P0-4. The cluster key is the reason prefix
+    # (the chunk before the first ":"), so `paused: ...` collapses regardless of the path
+    # embedded after the colon. Each successful tick stays as its own line (different event).
+    ticks = _last_ticks(8)
     if ticks:
         lines.append("")
         lines.append("*Daemon ticks (latest)*")
+        clusters: List[Tuple[str, int, str, List[Dict[str, object]]]] = []
         for t in reversed(ticks):
             ts = _ago_iso(t.get("ts"))
             if not t.get("allowed"):
-                lines.append(f"🔴 skip {ts} — `{str(t.get('reason') or '')[:55]}`")
+                reason = str(t.get("reason") or "")
+                key = reason.split(":", 1)[0] if ":" in reason else (reason[:32] or "skipped")
+                if clusters and clusters[-1][0] == key:
+                    _key, prev_count, _prev_ts, prev_members = clusters[-1]
+                    clusters[-1] = (key, prev_count + 1, ts, prev_members + [t])
+                else:
+                    clusters.append((key, 1, ts, [t]))
                 continue
             res = t.get("result") or {}
             err = t.get("error")
@@ -558,6 +593,17 @@ def _cron_outcome_lines() -> List[str]:
                     f"🟢 {ts} · doss `{res.get('dossiers', '?')}` "
                     f"PASS `{res.get('passes', '?')}` · `{str(t.get('reason') or '')[:40]}`"
                 )
+        # Emit clustered skip lines. Each cluster becomes one line: "🔴 skip ×N — {key}".
+        for key, count, last_ts, members in clusters:
+            first_ts = _ago_iso(str(members[0].get("ts") or ""))
+            sample_reason = str(members[0].get("reason") or "")
+            suffix = sample_reason.split(":", 1)[-1].strip()[:45] if ":" in sample_reason else sample_reason[:45]
+            if count > 1:
+                lines.append(
+                    f"🔴 skip ×{count} — `{key}: {suffix}` · last {last_ts} (first {first_ts})"
+                )
+            else:
+                lines.append(f"🔴 skip {last_ts} — `{sample_reason[:55]}`")
     return lines
 
 
@@ -671,7 +717,15 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
     lines.extend(_cron_outcome_lines())
     lines.append("")
     log_age = _log_mtime_ago(_UNITS[0][4])
-    lines.append(f"*Recent log* _({log_age} ago)_")
+    log_iso = _log_mtime_iso(_UNITS[0][4])
+    # At-a-glance delta + absolute UTC. The mission-card pattern: relative for scannability,
+    # absolute so the operator can answer "is this from this session or yesterday?" without
+    # digging into the log entries (which already have their own absolute stamps).
+    header = f"*Recent log* _({log_age} ago"
+    if log_iso:
+        header += f" · {log_iso}"
+    header += ")_"
+    lines.append(header)
     lines.append(_tail_lines(_UNITS[0][4], n=2))
 
     # CTA if last tick failed / zero pass / cron error
@@ -682,7 +736,7 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
         if t.get("error"):
             cta = ("📜 Logs", "estate:pd_logs:scheduler")
         elif not t.get("allowed") and "pause" in str(t.get("reason") or "").lower():
-            cta = ("▶️ Clear PAUSE", "estate:pd_unpause")
+            cta = ("▶️ Clear Prospector PAUSE", "estate:pd_unpause")
     jobs = _prospector_cron_jobs()
     for j in jobs:
         if j.get("last_error") or (
@@ -726,8 +780,9 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
         ("📜 Logs", "estate:pd_logs:scheduler"),
     ])
     buttons.append([("▶️ Run watch", "estate:pd_run_now:watchdog")])
-    buttons.append([("📊 Status", "estate:status"), ("🚀 Fleet", "estate:fleet")])
+    buttons.append([("💰 Money room", "estate:room:money"), ("📊 Status", "estate:status")])
     buttons.append(nav("prospector_daemon"))
+    lines.append(panel_stamp("prospector_daemon"))
     return "\n".join(lines).rstrip(), buttons
 
 

@@ -1,32 +1,20 @@
 """Shared panel chrome — one navigation row, one truncation rule, for every cockpit panel.
 
-The friction this fixes is measurable, not aesthetic. Before this module, 13 panel modules
-built **26 distinct navigation rows and no two were identical**:
+Spine (always last, always this order):
 
-    builds.py             ['🚀 Fleet', '🎛 Mission', '📥 Inbox']
-    fleet.py              ['📥 Inbox', '🎛 Mission']
-    inbox.py              ['🎛 Mission', '🧠 RSI', '🚀 Fleet']
-    daemons.py            ['🔄 Refresh', '🎛 Mission']
-    prospector_daemon.py  ['▶️ Run watch', '🔄 Refresh', '🚀 Fleet']
-    signal_engine.py      ['📡 feed on', '📴 feed off', '🔄 Refresh']
+    ⚡️ Now   fires — concerns, approve, estate pause
+    🎛 Run   verbs — start / stop / restart / run-now
+    ⚙️ Tune  knobs — se_set / pd_set / brain / cron
+    🗺 Map   orient — Atlas rooms when empty, search when typed
 
-Two consequences on a phone:
-
-1. **"Mission" moves.** It is at index 0, 1 or 2 depending on which panel you are looking at,
-   and four rows omit it entirely. Every screen has to be re-read before you can leave it.
-2. **Actions are welded into navigation rows.** `▶️ Run watch`, `📡 feed on` and
-   `▶️ Start keep-awake` each sit in the same row as a navigation button. A thumb aimed at
-   "go back" lands on a live action.
-
-The rule here: navigation is always the LAST row, always the same three buttons, always in the
-same order — Mission · Inbox · Refresh-this-panel. Everything else a panel offers stays exactly
-where it was, one row higher. No feature is removed; 109 callbacks remain reachable. The only
-thing taken away is the need to re-learn the keyboard on every screen.
+Before this chrome, panels invented their own nav rows (Mission/Inbox/Fleet mixed with live
+verbs). The rule: navigation is always the LAST row; actions never sit beside it.
 """
 
 from __future__ import annotations
 
 import re
+import time
 from typing import Iterable, List, Optional, Sequence, Tuple
 
 ButtonRow = List[Tuple[str, str]]
@@ -50,33 +38,39 @@ MAX_GROUP_ROWS = 3
 _NOW = ("⚡️ Now", "estate:refresh")
 _RUN = ("🎛 Run", "estate:run")
 _TUNE = ("⚙️ Tune", "estate:tune")
-_FIND = ("🔎", "estate:find")
+# Callback stays estate:find for compatibility; glyph is Map — empty opens Atlas.
+_MAP = ("🗺", "estate:find")
+
+# Severity legend — one row, glued to the bottom of every panel via compose().
+# The "?" prefix marks it as a definition, not a status, so it never collides with a
+# real-state glyph anywhere on the card.
+LEGEND = "🟢 ok · 🟡 watch · 🔴 act · ⚠️ unproven"
+
+# The four state-glyph slots. Centralised so a panel can never invent its own.
+# - OK      : verified clean by the live probe
+# - WATCH   : degraded but not yet a halt — operator should glance
+# - ACT     : operator action required
+# - UNPROVEN: probe could not run, NOT the same as OK. Always distinct from green.
+VERDICT_GLYPHS = {
+    "ok": "🟢",
+    "watch": "🟡",
+    "act": "🔴",
+    "unproven": "⚠️",
+}
 
 
 def nav(self_action: Optional[str] = None) -> ButtonRow:
     """The one navigation row — the cockpit's spine. Always last, always this order.
 
-    Three positions, and the split between them is the whole information architecture:
+        ⚡️ Now   fires (concerns, approve, estate pause)
+        🎛 Run   verbs (start, stop, restart, run now)
+        ⚙️ Tune  knobs (leverage, caps, batch, cadence, brain)
+        🗺 Map   orient (Atlas rooms empty; type a word to search)
 
-        ⚡️ Now   what is true and what needs me   (read + the fix for what is broken)
-        🎛 Run   the ~10 verbs I actually perform  (start, stop, restart, run now, bounce)
-        ⚙️ Tune  the 29 knobs that configure it    (leverage, caps, batch size, cadence)
-
-    Before this split the three were interleaved on every screen. `se_params` is the proof:
-    28 buttons, mixing `🔴 LIVE` (arms real capital) with `📜 Logs` (a read) — and it was
-    *still* incomplete, with 6 of the 29 allowlisted values having no button at all. Density
-    and coverage were failing at the same time, which is what a wrong container looks like.
-
-    `self_action` re-renders the CURRENT panel. It is the bare glyph, not "🔄 Refresh", so
-    four buttons fit one phone row without wrapping.
+    `self_action` re-renders the CURRENT panel as bare 🔄. On Map itself the 🗺 glyph
+    already re-opens Atlas, so no duplicate 🔄 is added.
     """
-    row: ButtonRow = [_NOW, _RUN, _TUNE]
-    # Three containers hold 131 destinations, so browsing alone stops working — "buttons may
-    # exist but the UI is so confusing i dont know where to find anything" (founder,
-    # 2026-07-31). Search is the fourth spine position. Bare glyph, so the row still fits a
-    # phone. On the Find panel itself it needs no special case: the glyph rule below already
-    # refuses to add a 🔄 whose callback is already in the row, so 🔎 *is* the self button.
-    row.append(_FIND)
+    row: ButtonRow = [_NOW, _RUN, _TUNE, _MAP]
     if self_action:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").
@@ -88,6 +82,42 @@ def nav(self_action: Optional[str] = None) -> ButtonRow:
         if cb not in {a for _l, a in row}:
             row.append(("🔄", cb))
     return row
+
+
+def panel_stamp(
+    plus_id: Optional[str] = None,
+    rendered_at: Optional[float] = None,
+) -> str:
+    """One-line footer every panel can append: absolute time + relative age + id.
+
+    The mission card invented this format (`2026-07-31 19:15:38 UTC · auto-refresh`).
+    Every other panel omitted it (U12) — the operator had no way to tell whether a
+    card was 5 seconds or 5 minutes stale. Centralised here so all panels read the
+    same way, and the cost is one helper export, not a refactor.
+
+    The `plus_id` is an optional panel/handler identifier (e.g. `fleet`, `daemons`)
+    that gets appended for diagnosability — when the operator pastes a screenshot
+    into chat, the id tells which panel without a guess.
+
+    ``rendered_at`` is a unix timestamp for when the payload was produced (e.g. cache
+    ``ts``). Defaults to now → "just now".
+    """
+    from datetime import datetime, timezone
+
+    now = time.time()
+    ts = float(rendered_at) if rendered_at is not None else now
+    iso = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    age_s = max(0, int(now - ts))
+    if age_s < 5:
+        age = "just now"
+    elif age_s < 90:
+        age = f"{age_s}s ago"
+    elif age_s < 3600:
+        age = f"{age_s // 60}m ago"
+    else:
+        age = f"{age_s // 3600}h ago"
+    id_bit = f" · {plus_id}" if plus_id else ""
+    return f"_{iso} · {age}{id_bit}_"
 
 
 def with_nav(rows: Optional[List[ButtonRow]], self_action: Optional[str] = None) -> List[ButtonRow]:
@@ -155,6 +185,7 @@ def compose(
     self_action: Optional[str] = None,
     footer: Iterable[str] = (),
     tail: Optional[Sequence[ButtonRow]] = None,
+    with_legend: bool = True,
 ) -> Tuple[str, List[ButtonRow]]:
     """Build (text, rows) so the text is a legend for the grid, in the same order.
 
@@ -176,6 +207,13 @@ def compose(
         lines.extend(g.legend())
     for f in footer:
         lines.append(f)
+
+    # Severity legend appears at the bottom of every panel. It is opt-out (panels that
+    # already use heavy ⏳/🔴/🟡/⚠️ chrome can disable with with_legend=False) but the
+    # default is on — a panel that never explains its own glyphs is a panel the operator
+    # has to learn by heart, which is the wrong cost.
+    if with_legend:
+        lines.extend(["", f"_{LEGEND}_"])
 
     rows: List[ButtonRow] = []
     for g in live:

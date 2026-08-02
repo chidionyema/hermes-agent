@@ -137,26 +137,38 @@ def _top_blocker(conn, C) -> str:
                 "AND risk_class IN ('money','identity','contract') ORDER BY created_at DESC LIMIT 1"
             ).fetchone()
             if fences:
+                # Full title — same reasoning as the operator-facing decision below:
+                # the operator reads the cause here, not from an inbox inspect two panels
+                # away. Money/identity fences never get clipped on the cockpit card.
                 return (
                     f"APPROVE [{(fences['risk_class'] or '').upper()}] "
-                    f"`{fences['id'][:8]}` {clip(fences['title'], 32)}"
+                    f"`{fences['id'][:8]}` {fences['title']}"
                 )
         except Exception:
             pass
         dec = [d for d in C.decisions_view(conn) if C._is_operator_facing(d)]
         if dec:
-            d = dec[-1]
-            tag = "APPROVE" if d["status"] == "awaiting_approval" else "BLOCKED"
-            risk = (d["risk_class"] or "").upper()
-            risk_bit = f" [{risk}]" if risk in ("MONEY", "IDENTITY") else ""
-            return f"{tag}{risk_bit} `{d['id'][:8]}` {clip(d['title'], 36)}"
+            # Most severe first — never bury money under probe noise (was dec[-1]).
+            money = [
+                d for d in dec
+                if str(_row_val(d, "risk_class") or "").lower()
+                in ("money", "identity", "contract")
+            ]
+            d = money[0] if money else dec[0]
+            tag = "APPROVE" if _row_val(d, "status") == "awaiting_approval" else "BLOCKED"
+            risk = str(_row_val(d, "risk_class") or "").upper()
+            risk_bit = f" [{risk}]" if risk in ("MONEY", "IDENTITY", "CONTRACT") else ""
+            return f"{tag}{risk_bit} `{str(_row_val(d, 'id'))[:8]}` {_row_val(d, 'title')}"
         # Blocked product missions (often quota) — surface on card
         try:
             import flight
 
             for m in flight.list_missions(conn):
                 if m["status"] == "blocked":
-                    return f"MISSION `{m['id'][:8]}` {clip(m['name'], 28)} blocked (quota?)"
+                    # Same rule: full mission name is the operator's signal, not a brand
+                    # label. Mission names are short on purpose; the truncation at 28 was
+                    # the bug, not the data.
+                    return f"MISSION `{m['id'][:8]}` {m['name']} blocked (quota?)"
         except Exception:
             pass
         claude_ok, agy_ok, cb_detail = _cb_bits(C)
@@ -185,11 +197,14 @@ def _product_line(conn, C) -> str:
             if not cur:
                 continue
             st = m["status"].upper()
-            # clip(), not [:28] — the raw slice cut mid-word with no marker, so a clipped
-            # milestone ("M4: Land the acceptance test as") read as a complete sentence.
+            # Full mission name + full milestone title. The old `clip(..., 28)` showed
+            # "M4: Land the acceptance test as…" with no way to know whether the missing
+            # half was "as a real failing test (red)" or "as a regression net" — the kind
+            # of detail that changes the operator's next action. Telegram wraps long lines,
+            # so the message is still scannable.
             return (
-                f"🚀 `{clip(m['name'], 18)}` {st} · "
-                f"M{cur['seq']+1}: {clip(cur['title'], 28)}"
+                f"🚀 `{m['name']}` {st} · "
+                f"M{cur['seq']+1}: {cur['title']}"
             )
     except Exception:
         pass
@@ -208,35 +223,37 @@ def _product_autonomy(conn, C) -> str:
         return "n/a"
 
 
+def _row_val(row, key, default=""):
+    """sqlite3.Row has no .get — using it silently emptied the whole concern ladder."""
+    try:
+        if row is None:
+            return default
+        if isinstance(row, dict):
+            return row.get(key, default)
+        if hasattr(row, "keys") and key in row.keys():
+            return row[key]
+    except Exception:
+        pass
+    return default
+
+
 def _concerns(conn, C, verdict: str) -> List[Tuple[str, str]]:
-    """Everything that currently wants the operator, most severe first.
+    """What needs the operator, most severe first — each item is a one-tap fix.
 
-    This ladder used to live inside `_primary_cta`, which walked all ten rungs, returned the
-    FIRST hit, and threw the rest away — then a fixed nine-button menu was stapled underneath
-    regardless of what was wrong. So the cockpit already knew that the money fence, the dead
-    coordinator and the blocked missions were all outstanding; it just showed you one of them
-    and a menu.
-
-    Returning the whole ladder is what makes the home card severity-driven: each live concern
-    prints its own line and carries its own button, so the fix for anything wrong is one tap
-    from home instead of a navigation problem. `_primary_cta` is now `_concerns()[0]`.
+    Home shows at most two of these. Everything else lives under Run / Tune / Find.
     """
     out: List[Tuple[str, str]] = []
 
     def add(label: str, action: str) -> None:
-        # De-duplicate by action: two rungs can legitimately point at the same panel
-        # (BUDGET → Fuel and dual-CB → Fuel), and the same button twice reads as a bug.
         if not any(a == action for _l, a in out):
             out.append((label, action))
 
     if C.estate_paused():
-        # Exclusive on purpose: nothing is burning, so nothing else is urgent yet.
-        return [("▶️ Resume spend", "estate:resume")]
-    # Daemon / gateway down → restart path (not Prospector)
+        return [("▶️ Resume estate spend", "estate:resume")]
+
+    # Daemon / gateway down
     try:
-        gateway_ok = (
-            C.gateway_alive() if hasattr(C, "gateway_alive") else True
-        )
+        gateway_ok = C.gateway_alive() if hasattr(C, "gateway_alive") else True
         hb = C.get_meta(conn, "last_tick")
         tick_age = int(time.time() - hb["updated_at"]) if hb else None
         daemon_ok = tick_age is not None and tick_age < 200
@@ -248,36 +265,39 @@ def _concerns(conn, C, verdict: str) -> List[Tuple[str, str]]:
         if not (daemon_ok or daemon_proc):
             add("♻️ Restart coord", "estate:restart")
         if not gateway_ok:
-            add("⚙️ Daemons", "estate:daemons")
+            add("⚙️ Fix gateway", "estate:daemons")
     except Exception:
         pass
 
-    # Money/identity fence always wins — code fences deep-link to task card
+    # Money/identity — awaiting_approval OR escalated (escalated money was invisible before)
     try:
         fence = conn.execute(
-            "SELECT id, source FROM tasks WHERE status='awaiting_approval' "
+            "SELECT id, source, status, risk_class, title FROM tasks "
+            "WHERE status IN ('awaiting_approval','escalated') "
             "AND risk_class IN ('money','identity','contract') "
-            "ORDER BY CASE WHEN source='code:telegram' THEN 0 ELSE 1 END, created_at DESC "
+            "ORDER BY CASE WHEN status='awaiting_approval' THEN 0 ELSE 1 END, "
+            "CASE WHEN source='code:telegram' THEN 0 ELSE 1 END, created_at DESC "
             "LIMIT 1"
         ).fetchone()
         if fence:
-            fid = fence["id"] if hasattr(fence, "keys") else fence[0]
-            src = fence["source"] if hasattr(fence, "keys") else (
-                fence[1] if len(fence) > 1 else ""
-            )
+            fid = str(_row_val(fence, "id"))
+            src = str(_row_val(fence, "source"))
+            st = str(_row_val(fence, "status"))
+            risk = str(_row_val(fence, "risk_class") or "").upper()
+            short = fid[:8]
             if src == "code:telegram":
-                add(f"💰 Code fence {str(fid)[:8]}", f"estate:task:{str(fid)[:8]}")
+                add(f"💰 Code fence {short}", f"estate:task:{short}")
             else:
-                add("💰 Approve fence", "estate:inbox")
+                # Both awaiting_approval and escalated money/identity can be approved
+                # (coordinator.approve accepts either). One tap — never a detour to Inbox.
+                add(f"✅ Approve {risk or 'MONEY'} {short}", f"estate:approve:{short}")
     except Exception:
         pass
 
-    # Dual CB → fuel/honesty, not fake ship
     claude_ok, agy_ok, _ = _cb_bits(C)
     if not claude_ok and not agy_ok:
-        add("⛽ Fuel / CB", "estate:system_fuel")
+        add("⛽ Fix fuel / CB", "estate:system_fuel")
 
-    # In-flight coding run
     code = _inflight_code(conn)
     if code:
         tid, st = code
@@ -290,9 +310,16 @@ def _concerns(conn, C, verdict: str) -> List[Tuple[str, str]]:
     try:
         dec = [d for d in C.decisions_view(conn) if C._is_operator_facing(d)]
         if dec:
-            add(f"📥 Decide ({len(dec)})", "estate:inbox")
+            top = dec[0]
+            short = str(_row_val(top, "id"))[:8]
+            st = str(_row_val(top, "status"))
+            if short and st == "awaiting_approval":
+                add(f"✅ Decide {short}", f"estate:approve:{short}")
+            n = len(dec)
+            add(f"📥 {n} waiting" if n > 1 else "📥 1 waiting", "estate:inbox")
     except Exception:
         pass
+
     blocked = _blocked_missions(conn)
     if blocked:
         add(f"🚀 {blocked} blocked", "estate:missions")
@@ -302,29 +329,14 @@ def _concerns(conn, C, verdict: str) -> List[Tuple[str, str]]:
     if "DEGRADED" in verdict or "CB" in verdict:
         add("⚙️ Daemons", "estate:daemons")
 
-    # RSI live fire → surface before busywork
+    # Signal engine down (money rail) — only when health says so, plain words
     try:
-        from gateway.operator_shell.rsi_panel import (
-            HASH_FILE,
-            _last_idle,
-            learning_armed,
-        )
+        from gateway.operator_shell.signal_engine import health
 
-        idle = _last_idle()
-        if learning_armed() and idle and (
-            idle.get("exit") != 0 or idle.get("failed_phases")
-        ):
-            phases = str(idle.get("failed_phases") or "")
-            idle_ts = float(idle.get("_ts") or 0)
-            hash_m = HASH_FILE.stat().st_mtime if HASH_FILE.is_file() else 0.0
-            cleared = (
-                "Phase 0" in phases
-                and hash_m
-                and idle_ts
-                and hash_m > idle_ts
-            )
-            if not cleared:
-                add("🧠 RSI status", "estate:rsi")
+        h = health()
+        v = str(h.get("verdict") or "")
+        if v in ("tcc_denied", "down", "stalled", "unsupervised", "not_installed"):
+            add("💹 Fix trading engine", "estate:signal_engine")
     except Exception:
         pass
 
@@ -334,53 +346,32 @@ def _concerns(conn, C, verdict: str) -> List[Tuple[str, str]]:
 def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
     """The single most severe thing outstanding, or Fleet when nothing is."""
     concerns = _concerns(conn, C, verdict)
-    # Only when truly CLEAR — fleet overview beats Prospector tunnel vision
     return concerns[0] if concerns else ("🚀 Fleet", "estate:fleet")
 
 
-# The surfaces that are always worth one tap, whatever is happening. This is deliberately a
-# fixed grid and not state-driven: the concern rows above it already change with the estate,
-# and if the stable part moved too there would be no position on the card a thumb could learn.
-#
-# Each ROW is one domain, so the position is learnable as well as fixed. The previous order
-# put Fleet (work), Store (money) and Inbox (decisions) side by side in row one and split
-# Daemons from RSI across two rows — nine self-describing tiles, but in an order that taught
-# nothing, so finding one still meant reading all nine.
-#
-#   row 1  money and output — what the estate is FOR
-#   row 2  work in flight   — what it is DOING
-#   row 3  the machine      — what it RUNS ON
-#
-# No legend line above this grid, unlike Run. Run needed one because its buttons are verbs
-# whose scope is ambiguous — it ships two buttons both labelled "♻️ Restart". Every tile here
-# is a unique noun that names its own destination, so a legend would add three lines of text
-# and no information, and this card is the one screen where lines are genuinely scarce:
-# `_MAX_CONCERNS` exists precisely because a fourth full-width row pushes this grid off the
-# first screen on a phone.
+# Quiet day: Pause + spine only. Browse is Map (Atlas), not a home mall.
+# Kept for tests that assert the old domain map — Atlas Rooms still expose these panels.
+# Home no longer renders this grid (founder 2026-08-01: "confusing joke").
 _SURFACES: List[ButtonRow] = [
     [("🛒 Store", "estate:st_status"), ("🗓 Cron", "estate:pd_cron"), ("📥 Inbox", "estate:inbox")],
     [("🚀 Fleet", "estate:fleet"), ("📋 Missions", "estate:missions"), ("🏗 CI", "estate:builds")],
     [("⚙️ Daemons", "estate:daemons"), ("🧠 RSI", "estate:rsi"), ("📸 Changed", "estate:diff")],
 ]
 
-_MAX_CONCERNS = 3
+_MAX_CONCERNS = 2
 
 
 def mission_buttons(
     paused: bool, primary: Tuple[str, str], concerns: Optional[List[Tuple[str, str]]] = None
 ) -> List[ButtonRow]:
-    """Concerns first (one row each), then the fixed surfaces, then the spine.
+    """Home: at most 2 full-width fixes, then estate Pause, then the spine.
 
-    The card is now severity-driven at the top and stable at the bottom. When nothing is
-    wrong the concern rows simply do not render, and the card is the three surface rows plus
-    the spine — which is the quietest the cockpit has ever been on a good day.
-
-    Capped at `_MAX_CONCERNS`: on a phone a fourth full-width row pushes the surface grid off
-    the first screen, and a concern you have to scroll to is not a concern you will act on.
-    The overflow is not lost — it is exactly what the panel each button points at is for.
+    No destination mall. Map / Run / Tune are how you browse and act beyond fires.
     """
     pause_or_resume = (
-        ("▶️ Resume", "estate:resume") if paused else ("⏸ Pause", "estate:pause")
+        ("▶️ Resume estate spend", "estate:resume")
+        if paused
+        else ("⏸ Pause estate spend", "estate:pause")
     )
     try:
         from gateway.operator_shell.delivery import cron_delivery_state
@@ -391,35 +382,18 @@ def mission_buttons(
 
     live = list(concerns or [])
     if not any(a == primary[1] for _l, a in live):
-        live.insert(0, primary)  # nothing outstanding → primary is the Fleet fallback
+        live.insert(0, primary)
+    # Drop the idle Fleet fallback — quiet home is fires-only.
+    if len(live) == 1 and live[0][1] == "estate:fleet":
+        live = []
+
     rows: List[ButtonRow] = [[c] for c in live[:_MAX_CONCERNS]]
 
-    # When cron destination unset — can't-miss dedicated row
     if not cron_ok:
-        rows.append([("🗓 Cron delivery", "estate:setup_cron_topic")])
+        rows.append([("🗓 Fix cron delivery", "estate:setup_cron_topic")])
 
-    # A live concern outranks its own tile in the grid. `_concerns()` legitimately points at
-    # destinations the grid also lists — 🚀 Fleet is both the idle fallback and a tile, and a
-    # blocked-inbox concern is 📥 Inbox — so rendering both put one action on the card twice
-    # under two labels. The concern row is the prominent one and the tile gives way; the
-    # destination stays exactly as reachable. A row that empties out entirely is dropped.
-    claimed = {a for _l, a in rows_actions(rows)}
-    for surface_row in _SURFACES:
-        kept = [b for b in surface_row if b[1] not in claimed]
-        if kept:
-            rows.append(kept)
-    # Pause/Resume halts (or restarts) ALL estate spend. It is also the first button on the
-    # Run panel, but it stays here too: an emergency halt at two taps is an emergency halt
-    # you reach too late.
-    #
-    # Skipped when a concern row already offers it. When the estate is paused, `_concerns()`
-    # returns exactly ("▶️ Resume spend", "estate:resume") — rendering the row as well put the
-    # SAME callback on the card twice, four rows apart, under two different labels.
     if not any(a == pause_or_resume[1] for _l, a in rows_actions(rows)):
         rows.append([pause_or_resume])
-    # Every screen ends with the same spine, so Now / Run / Tune mean the same thing and sit
-    # in the same place on literally every panel. No self_action here: on the home card
-    # "⚡️ Now" already *is* refresh, so passing one rendered estate:refresh twice in one row.
     rows.append(nav())
     return rows
 
@@ -430,69 +404,30 @@ def rows_actions(rows: List[ButtonRow]) -> List[Tuple[str, str]]:
 
 
 def card_headline(verdict: str, detail: str) -> str:
-    """Line 0 of the mission card — and therefore the whole cockpit's only permanent label.
-
-    A separate function because it is the one line with a hard external contract: Telegram's
-    pinned-message banner renders the FIRST line of the pinned message and nothing else. This
-    card is pinned (`telegram.py:6390`) and edited in place (`telegram.py:6369`), so whatever
-    this returns is the only cockpit text visible while the operator scrolls anywhere else in
-    the chat.
-
-    Identity first, state second. The banner is one line and Telegram truncates it, so the
-    order decides what survives the cut: put the verdict first and a long detail eats the
-    word that tells you this is the way in.
-    """
+    """Line 0 of the mission card — Telegram's pinned banner shows only this line."""
     return f"🎛 *Cockpit* · *{verdict}* — {detail}"
 
 
 def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
-    """Compact forever-card — brand-dense, zero theater, honest verdict."""
+    """Phone home: verdict, what to do, spend. Nothing else."""
     C = _coord()
     conn = C.connect()
     try:
         verdict, detail = _verdict(conn, C)
         burn = _burn_today(conn, C)
-        blocker = _top_blocker(conn, C)
-        prod = _product_autonomy(conn, C)
-        product = _product_line(conn, C)
         paused = bool(C.estate_paused())
         concerns = _concerns(conn, C, f"{verdict} — {detail}")
+        # Align headline with the ladder that actually drives buttons.
+        if concerns and not paused and "CLEAR" in verdict:
+            detail = f"{len(concerns)} need you"
+            verdict = "🟡 ACT"
+        elif concerns and "BLOCKED" in verdict:
+            detail = f"{len(concerns)} need you"
         primary = concerns[0] if concerns else ("🚀 Fleet", "estate:fleet")
-        blocked_n = _blocked_missions(conn)
+        blocker = _top_blocker(conn, C)
     finally:
         conn.close()
 
-    try:
-        from gateway.operator_shell.rsi_panel import glance_line
-
-        rsi_line = glance_line()
-    except Exception:
-        armed = os.path.isfile(
-            os.path.expanduser("~/.hermes/meta/OFF_SWITCH")
-        )
-        rsi_line = f"🧠 RSI `{'ARMED' if armed else 'OFF'}`"
-
-    try:
-        from gateway.operator_shell.delivery import cron_delivery_state
-
-        cron = cron_delivery_state()
-    except Exception:
-        cron = {
-            "ok": bool(os.getenv("TELEGRAM_CRON_THREAD_ID", "").strip()),
-            "label": "?",
-            "mode": "unset",
-        }
-
-    try:
-        from gateway.operator_shell.host import glance_line as host_glance
-
-        host_line = host_glance()
-    except Exception:
-        host_line = "🖥 Host: ?"
-
-    # Money rail on the mission card, not two taps away. The 2026-06-24 → 07-31
-    # outage was invisible precisely because nothing on the top card mentioned it;
-    # only a healthy rail is allowed to be quiet.
     try:
         from gateway.operator_shell.signal_engine import glance_line as se_glance, health
 
@@ -501,71 +436,42 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
     except Exception:
         se_line = ""
 
+    try:
+        from gateway.operator_shell.delivery import cron_delivery_state
+
+        cron = cron_delivery_state()
+    except Exception:
+        cron = {"ok": True, "label": "?", "mode": "unset"}
+
     from datetime import datetime, timezone
+
     edit_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    # Line 0 must NAME this thing, because line 0 is the only cockpit text most of the
-    # session ever shows. Telegram's pinned banner across the top of the chat renders the
-    # first line of the pinned message and nothing else — and this card is pinned
-    # (telegram.py:6390) and edited in place (telegram.py:6369), so that banner is the one
-    # piece of permanent chrome in the whole UI. It used to read
-    #     "2026-07-31 19:16:30 UTC · auto-refresh · say now to force"
-    # so the only always-visible label for the estate cockpit identified it as a timestamp:
-    # "how do you even get to the menu?" (founder, 2026-07-31). The door was there, pinned
-    # and working; nothing on screen said so.
-    #
-    # Identity goes FIRST so that the banner's truncation eats the detail, not the label,
-    # and the verdict rides on the same line so the banner is worth reading at a glance.
-    # The timestamp moves to the foot: it exists to prove the card is being refreshed and to
-    # keep each edit textually distinct, and it does both just as well from the bottom.
-    lines = [
-        card_headline(verdict, detail),
-        host_line,
-        f"💰 `{burn}`  ·  📈 {prod}",
-        rsi_line,
-        f"🧱 {blocker}",
-    ]
+
+    lines = [card_headline(verdict, detail)]
     if se_line:
-        lines.insert(2, se_line)
-    if product:
-        lines.append(product)
-    if blocked_n:
-        lines.append(
-            f"🚀 *{blocked_n} blocked mission(s)* — tap *Open missions* "
-            f"(or say `missions`) → resume/abort from the board."
-        )
-    lines.append(f"🧵 cron `{cron.get('label', '?')}`")
-    if not cron.get("ok"):
-        lines.extend(
-            [
-                "",
-                "⚠️ *Cron destination unset*",
-                "Home chat is a *private DM* — Telegram does *not* show a Topics "
-                "toggle on the bot profile (that only exists for groups/forums).",
-                "",
-                "*What works:*",
-                "1. Tap *🗓 Cron delivery* → *Keep cron in this chat* (recommended)",
-                "2. Or later: make a private group → enable Topics → add Otto → "
-                "open a Cron topic → send `/sethome`",
-                "_API proof: createForumTopic → `chat is not a forum` on this DM._",
-            ]
-        )
-    elif cron.get("mode") == "main_dm":
-        lines.append("_Cron stays in this DM (no topic). Mute/filter as you like._")
-    # Say what needs you, in severity order, instead of naming only the top item. The buttons
-    # underneath are these lines in the same order, so the card reads top-to-bottom as
-    # "here is what is wrong / here is the button that fixes it".
+        lines.append(se_line)
+
     if concerns:
-        shown = concerns[:_MAX_CONCERNS]
         lines.append("")
-        lines.append(f"*Needs you ({len(concerns)}):*")
-        lines.extend(f"→ {c[0]}" for c in shown)
-        if len(concerns) > len(shown):
-            lines.append(f"_+{len(concerns) - len(shown)} more_")
+        # One clear primary fire — full title from blocker when it matches.
+        top_label = concerns[0][0]
+        if blocker and blocker != "—":
+            lines.append(f"👉 {blocker}")
+        else:
+            lines.append(f"👉 {top_label}")
+        if len(concerns) > 1:
+            lines.append(f"Also: {concerns[1][0]}")
+        if len(concerns) > _MAX_CONCERNS:
+            lines.append(f"_+{len(concerns) - _MAX_CONCERNS} more in Inbox / Run_")
     else:
-        lines.extend(["", "✅ *Nothing needs you.*"])
-    # Foot, not head — see the note on line 0. Still every-edit-unique, so an edit is never
-    # rejected as "not modified", and still the operator's proof that the card is live rather
-    # than a frozen screenshot of an hour ago.
-    lines.append(f"_{edit_iso} · auto-refresh · say `now` to force_")
+        lines.append("")
+        lines.append("✅ Nothing needs you.")
+        lines.append("_🗺 Map · 🎛 Run · ⚙️ Tune_")
+
+    lines.append(f"💰 Spend `{burn}`")
+    if not cron.get("ok"):
+        lines.append("⚠️ Cron delivery unset — tap *Fix cron delivery*")
+
+    lines.append(f"_{edit_iso}_")
     text = "\n".join(lines)
     return text, paused, mission_buttons(paused, primary, concerns)

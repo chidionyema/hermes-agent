@@ -172,24 +172,92 @@ def render_panel_view() -> PanelView:
 
 
 def handle_estate_action(action: str, request_id: str = "") -> PanelView:
+    # `now` is the literal word the mission card footer tells the operator to say
+    # ("say `now` to force"). Without this alias, typing `now` falls through every
+    # `if action == ...` branch and lands in the unknown-action guard, which prints
+    # `Unknown action \`now\`` — the exact case the founder reported. Resolved here
+    # at the outer entry so the cache check and the pre-flight key both see the
+    # canonical action.
+    if (action or "").strip().lower() == "now":
+        action = "refresh"
+
     """Public entry point: dispatch, and record what happened.
 
     The recording lives HERE rather than inside `_dispatch` because `_dispatch` has dozens of
     return paths and can raise — and a raise is exactly the outcome worth auditing. Wrapping
     the whole call is the only version that cannot drift when someone adds a branch. `record`
     never raises (see `activity.py`), so this wrapper cannot take the cockpit down.
+
+    Pre-flight cache: read-only panels whose probe latency is felt by the operator (st_*,
+    builds) consult ``preflight.cache_get()`` first. A miss returns None and the normal
+    render path runs. A hit returns the cached text/buttons immediately AND triggers a
+    background refresh, so the NEXT tap in the same window is also instant. Mutating
+    actions never use the cache — staleness there would be a real bug.
     """
     from gateway.operator_shell.activity import record
 
     t0 = time.time()
+    # Pre-flight: only read-only actions whose latency matters.
+    # `refresh` is the mission card — the single most-tapped panel (~10× more than any
+    # other), and its cold path is 6s. Cache it for 5s so a re-tap is instant; the
+    # background refresh fires immediately so the next tap is fresh too.
+    if action in ("refresh", "st_status", "st_health", "st_reconcile", "st_money", "builds"):
+        try:
+            from gateway.operator_shell.preflight import cache_get, cache_refresh
+
+            cached = cache_get(action)
+            if cached is not None:
+                cached_text, cached_buttons, fresh = cached
+                # Stale-while-revalidate: serve instantly; only re-probe when past TTL
+                # so a fresh tap does not kick another 60s Stripe/reconcile run.
+                if not fresh:
+                    cache_refresh(action, lambda: _render_for_cache(action))
+                view = PanelView(
+                    text=cached_text,
+                    buttons=cached_buttons,
+                    toast="cached" if fresh else "updating…",
+                )
+                record(action, request_id, view=view, ms=(time.time() - t0) * 1000.0,
+                       source="cache")
+                return view
+        except Exception:
+            pass  # cache miss / error → fall through to live render
+
     try:
         view = _dispatch(action, request_id)
     except Exception as exc:
         record(action, request_id, status="error", error=repr(exc),
                ms=(time.time() - t0) * 1000.0)
         raise
+
+    # Post-render: store the result so the NEXT tap can skip the work.
+    if action in ("refresh", "st_status", "st_health", "st_reconcile", "st_money", "builds"):
+        try:
+            from gateway.operator_shell.preflight import cache_put
+
+            cache_put(action, view.text, view.buttons or [])
+        except Exception:
+            pass
+
     record(action, request_id, view=view, ms=(time.time() - t0) * 1000.0)
     return view
+
+
+def _render_for_cache(action: str) -> Tuple[str, List[ButtonRow]]:
+    """Render-only path used by the pre-flight background refresh."""
+    if action == "refresh":
+        from gateway.operator_shell.mission import render_mission_card
+
+        text, _paused, btns = render_mission_card()
+        return text, btns
+    if action in ("st_status", "st_health", "st_reconcile", "st_money"):
+        from gateway.operator_shell.store_ops import render
+        verb = action[len("st_"):]
+        return render(verb)
+    if action == "builds":
+        from gateway.operator_shell.builds import render_builds
+        return render_builds()
+    return "", []
 
 
 def _dispatch(action: str, request_id: str = "") -> PanelView:
@@ -298,13 +366,58 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
         from gateway.operator_shell.find import render_find
 
         text, buttons = render_find(arg)
+        toast = "Map" if not arg else "Find"
         return _finish(
             PanelView(
                 text=text,
                 buttons=buttons,
-                toast="Find",
+                toast=toast,
                 proof_receipt=_proof(
-                    "find", "done", f"search `{arg or '(help)'}`", request_id=rid
+                    "find", "done", f"search `{arg or '(atlas)'}`", request_id=rid
+                ),
+            )
+        )
+
+    if action == "atlas" or action == "map":
+        from gateway.operator_shell.atlas import render_atlas
+
+        text, buttons = render_atlas()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Map",
+                proof_receipt=_proof("atlas", "done", "Atlas rooms", request_id=rid),
+            )
+        )
+
+    if action == "room":
+        from gateway.operator_shell.atlas import render_room
+
+        text, buttons = render_room(arg or "")
+        label = (arg or "atlas").title()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast=f"Room · {label}",
+                proof_receipt=_proof(
+                    "room", "done", f"Room `{arg or '?'}`", request_id=rid
+                ),
+            )
+        )
+
+    if action == "code_prompt":
+        from gateway.operator_shell.atlas import render_code_prompt
+
+        text, buttons = render_code_prompt()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Assign",
+                proof_receipt=_proof(
+                    "code_prompt", "done", "Assign coding run", request_id=rid
                 ),
             )
         )
@@ -486,6 +599,20 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             )
         )
 
+    if action == "summary":
+        from gateway.operator_shell.summary_card import render_summary_card
+
+        target = arg.strip() if arg else ""
+        text = render_summary_card(target)
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=nav("summary"),
+                toast="Summary Card",
+                proof_receipt=_proof("summary", "done", f"Analyzed: {target[:40]}", request_id=rid),
+            )
+        )
+
     if action in ("diff", "estate_diff"):
         import subprocess
 
@@ -623,334 +750,22 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             )
         )
 
-    if action.startswith("pd_") or action in ("pd_logs",):
-        from gateway.operator_shell.prospector_daemon import (
-            confirm_card as pd_confirm,
-            confirm_set_param,
-            cron_action as pd_cron_action,
-            render_cron as pd_render_cron,
-            render_logs as pd_logs,
-            render_params as pd_render_params,
-            render_prospector_daemon,
-            run_op as pd_run,
-            set_param as pd_set_param,
-            set_paused as pd_set_paused,
-        )
+    from gateway.operator_shell.estate_pd import dispatch as _pd_dispatch
+    from gateway.operator_shell.estate_se import dispatch as _se_dispatch
 
-        unit = arg
-        if not action.startswith("pd_"):
-            pass
-        else:
-            rest = action[len("pd_") :]
+    _pd_view = _pd_dispatch(
+        action, arg, rid,
+        PanelView=PanelView, _finish=_finish, _proof=_proof, _knob_landing=_knob_landing,
+    )
+    if _pd_view is not None:
+        return _pd_view
 
-            # Params panel
-            if rest == "params":
-                text, buttons = pd_render_params()
-                return _finish(
-                    PanelView(
-                        text=text,
-                        buttons=buttons,
-                        toast="Params",
-                        proof_receipt=_proof(
-                            "pd_params", "done", "Prospector params", request_id=rid
-                        ),
-                    )
-                )
-
-            # Cron / outcomes panel
-            if rest == "cron":
-                text, buttons = pd_render_cron()
-                return _finish(
-                    PanelView(
-                        text=text,
-                        buttons=buttons,
-                        toast="Cron",
-                        proof_receipt=_proof(
-                            "pd_cron", "done", "Prospector cron outcomes", request_id=rid
-                        ),
-                    )
-                )
-
-            # Pause / unpause generation (PAUSE file)
-            if rest in ("pause", "unpause"):
-                ok, detail = pd_set_paused(rest == "pause")
-                receipt = _proof(
-                    f"pd_{rest}",
-                    "done" if ok else "failed",
-                    detail,
-                    request_id=rid,
-                    evidence=[detail],
-                )
-                text, buttons = render_prospector_daemon()
-                return _finish(
-                    PanelView(
-                        text=receipt + "\n\n" + text,
-                        buttons=buttons,
-                        toast=("⏸ PAUSE" if rest == "pause" else "▶️ Resume"),
-                        ok=ok,
-                        proof_receipt=receipt,
-                    )
-                )
-
-            # Cron run/pause: pd_cron_run:id / pd_cron_pause:id
-            if rest in ("cron_run", "cron_pause"):
-                op = "run" if rest == "cron_run" else "pause"
-                jid = unit or ""
-                ok, detail = pd_cron_action(op, jid)
-                receipt = _proof(
-                    f"pd_cron_{op}",
-                    "done" if ok else "failed",
-                    f"cron {op} `{jid}`",
-                    request_id=rid,
-                    evidence=[detail],
-                )
-                text, buttons = pd_render_cron()
-                return _finish(
-                    PanelView(
-                        text=receipt + "\n\n" + text,
-                        buttons=buttons,
-                        toast=("✅ cron " + op) if ok else "⚠️ Failed",
-                        ok=ok,
-                        proof_receipt=receipt,
-                    )
-                )
-
-            # Apply param: estate:pd_set_confirm:interval:3600 → arg=interval:3600
-            if rest == "set_confirm":
-                parts_kv = (unit or "").split(":", 1)
-                key = parts_kv[0] if parts_kv else ""
-                val = parts_kv[1] if len(parts_kv) > 1 else ""
-                ok, detail, need_restart = pd_set_param(key, val)
-                evidence = [detail]
-                if ok and need_restart:
-                    rok, rdetail = pd_run("restart", "scheduler")
-                    evidence.append(f"restart: {rdetail}")
-                    ok = ok and rok
-                    detail = detail + " · " + rdetail
-                receipt = _proof(
-                    "pd_set",
-                    "done" if ok else "failed",
-                    f"set `{key}={val}`",
-                    request_id=rid,
-                    evidence=evidence,
-                )
-                # Same as the Signal Engine knobs: land in the group, so the next change is
-                # one tap rather than three.
-                text, buttons = _knob_landing(key, pd_render_params)
-                return _finish(
-                    PanelView(
-                        text=receipt + "\n\n" + text,
-                        buttons=buttons,
-                        toast=("✅ set " + key) if ok else "⚠️ Failed",
-                        ok=ok,
-                        proof_receipt=receipt,
-                    )
-                )
-
-            # Confirm prompt: estate:pd_set:interval:3600 → arg=interval:3600
-            if rest == "set":
-                parts_kv = (unit or "").split(":", 1)
-                key = parts_kv[0] if parts_kv else ""
-                val = parts_kv[1] if len(parts_kv) > 1 else ""
-                text, buttons = confirm_set_param(key, val)
-                return _finish(PanelView(text=text, buttons=buttons, toast="Confirm set"))
-
-            if rest.endswith("_confirm"):
-                op_name = rest[: -len("_confirm")]
-                ok, detail = pd_run(op_name, unit or "scheduler")
-                receipt = _proof(
-                    f"pd_{op_name}",
-                    "done" if ok else "failed",
-                    f"Prospector {op_name} `{unit or 'scheduler'}`",
-                    request_id=rid,
-                    evidence=[detail],
-                )
-                text, buttons = render_prospector_daemon()
-                return _finish(
-                    PanelView(
-                        text=receipt + "\n\n" + text,
-                        buttons=buttons,
-                        toast=("✅ " + op_name) if ok else "⚠️ Failed",
-                        ok=ok,
-                        proof_receipt=receipt,
-                    )
-                )
-            if rest == "logs":
-                text, buttons = pd_logs(unit or "scheduler")
-                return _finish(
-                    PanelView(
-                        text=text,
-                        buttons=buttons,
-                        toast="Logs",
-                        proof_receipt=_proof(
-                            "pd_logs", "done", f"Prospector logs `{unit}`", request_id=rid
-                        ),
-                    )
-                )
-            # confirm prompt for start/stop/restart/run_now
-            text, buttons = pd_confirm(rest, unit or "scheduler")
-            return _finish(PanelView(text=text, buttons=buttons, toast="Confirm"))
-
-    if action in ("signal_engine", "signalengine", "se", "money_rail"):
-        from gateway.operator_shell.signal_engine import render_signal_engine
-
-        text, buttons = render_signal_engine()
-        return _finish(
-            PanelView(
-                text=text,
-                buttons=buttons,
-                toast="Signal Engine",
-                proof_receipt=_proof(
-                    "signal_engine", "done", "Signal Engine status", request_id=rid
-                ),
-            )
-        )
-
-    if action.startswith("se_"):
-        from gateway.operator_shell.signal_engine import (
-            arm_card as se_arm_card,
-            confirm_card as se_confirm,
-            confirm_set_param as se_confirm_set,
-            render_logs as se_logs,
-            render_params as se_render_params,
-            render_signal_engine,
-            run_op as se_run,
-            set_param as se_set_param,
-        )
-
-        rest = action[len("se_") :]
-
-        if rest == "params":
-            text, buttons = se_render_params()
-            return _finish(
-                PanelView(
-                    text=text,
-                    buttons=buttons,
-                    toast="Knobs",
-                    proof_receipt=_proof(
-                        "se_params", "done", "Signal Engine knobs", request_id=rid
-                    ),
-                )
-            )
-
-        if rest == "logs":
-            text, buttons = se_logs()
-            return _finish(
-                PanelView(
-                    text=text,
-                    buttons=buttons,
-                    toast="Logs",
-                    proof_receipt=_proof(
-                        "se_logs", "done", "Signal Engine logs", request_id=rid
-                    ),
-                )
-            )
-
-        # Apply a knob: estate:se_set_confirm:<key>:<value>
-        if rest == "set_confirm":
-            parts_kv = (arg or "").split(":", 1)
-            key = parts_kv[0] if parts_kv else ""
-            val = parts_kv[1] if len(parts_kv) > 1 else ""
-            ok, detail, need_restart = se_set_param(key, val)
-            evidence = [detail]
-            if ok and need_restart:
-                # A knob written to config.yaml is not in effect until the daemon
-                # re-reads it, so the receipt must carry the restart result too —
-                # "set" with a failed restart is a change that never took.
-                rok, rdetail = se_run("restart")
-                evidence.append(f"restart: {rdetail}")
-                ok = ok and rok
-                detail = detail + " · " + rdetail
-            receipt = _proof(
-                "se_set",
-                "done" if ok else "failed",
-                f"set `{key}={val}`",
-                request_id=rid,
-                evidence=evidence,
-            )
-            # Land back in the group the knob came from, not on the read panel. Tuning is
-            # rarely a single change — leverage AND max_positions AND stop_loss before a rail
-            # move — and returning to `se_params` cost 3 taps to reach the very next knob
-            # (group link -> knob -> confirm). From the group it is 1. Falls back to the read
-            # panel if the key is not in any group, so an un-grouped knob still renders.
-            text, buttons = _knob_landing(key, se_render_params)
-            return _finish(
-                PanelView(
-                    text=receipt + "\n\n" + text,
-                    buttons=buttons,
-                    toast=("✅ set " + key) if ok else "⚠️ Failed",
-                    ok=ok,
-                    proof_receipt=receipt,
-                )
-            )
-
-        # A rejected knob (unknown key, value off the allowlist) renders as a card
-        # with no way forward. That is a refusal, so the view must not claim ok —
-        # the adapter styles ok=False differently and the receipt log needs the truth.
-        def _offers_next_step(rows: List[ButtonRow]) -> bool:
-            return any(
-                cb.startswith(("estate:se_set_confirm", "estate:se_arm"))
-                for row in rows
-                for _lbl, cb in row
-            )
-
-        # Second screen for rail knobs: estate:se_arm:<key>:<value>
-        if rest == "arm":
-            parts_kv = (arg or "").split(":", 1)
-            key = parts_kv[0] if parts_kv else ""
-            val = parts_kv[1] if len(parts_kv) > 1 else ""
-            text, buttons = se_arm_card(key, val)
-            ok = _offers_next_step(buttons)
-            return _finish(
-                PanelView(
-                    text=text,
-                    buttons=buttons,
-                    ok=ok,
-                    toast="Arm check" if ok else "⚠️ Rejected",
-                )
-            )
-
-        # First screen for any knob: estate:se_set:<key>:<value>
-        if rest == "set":
-            parts_kv = (arg or "").split(":", 1)
-            key = parts_kv[0] if parts_kv else ""
-            val = parts_kv[1] if len(parts_kv) > 1 else ""
-            text, buttons = se_confirm_set(key, val)
-            ok = _offers_next_step(buttons)
-            return _finish(
-                PanelView(
-                    text=text,
-                    buttons=buttons,
-                    ok=ok,
-                    toast="Confirm set" if ok else "⚠️ Rejected",
-                )
-            )
-
-        # Execute: estate:se_<op>_confirm
-        if rest.endswith("_confirm"):
-            op_name = rest[: -len("_confirm")]
-            ok, detail = se_run(op_name)
-            receipt = _proof(
-                f"se_{op_name}",
-                "done" if ok else "failed",
-                f"Signal Engine {op_name}",
-                request_id=rid,
-                evidence=[detail],
-            )
-            text, buttons = render_signal_engine()
-            return _finish(
-                PanelView(
-                    text=receipt + "\n\n" + text,
-                    buttons=buttons,
-                    toast=("✅ " + op_name) if ok else "⚠️ Failed",
-                    ok=ok,
-                    proof_receipt=receipt,
-                )
-            )
-
-        # Confirm prompt for start/stop/restart/pause/resume/reset
-        text, buttons = se_confirm(rest)
-        return _finish(PanelView(text=text, buttons=buttons, toast="Confirm"))
+    _se_view = _se_dispatch(
+        action, arg, rid,
+        PanelView=PanelView, _finish=_finish, _proof=_proof, _knob_landing=_knob_landing,
+    )
+    if _se_view is not None:
+        return _se_view
 
     if action.startswith("daemon_") or action == "code_assign":
         if action == "code_assign":
@@ -958,8 +773,19 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
 
             body = (arg or "").strip() or None
             if not body:
+                from gateway.operator_shell.atlas import render_code_prompt
+
+                text, buttons = render_code_prompt()
                 return _finish(
-                    PanelView(text="Usage: `assign <task>` / `code <task>`", ok=False)
+                    PanelView(
+                        text=text,
+                        buttons=buttons,
+                        toast="Assign",
+                        ok=True,
+                        proof_receipt=_proof(
+                            "code_assign", "done", "Assign prompt", request_id=rid
+                        ),
+                    )
                 )
             ack, tid, buttons = CR.start_code_run(
                 body, created_by="telegram:estate"
@@ -1000,6 +826,39 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
                     ),
                 )
             )
+
+        # ONE-TAP: estate:daemon_<op>_now:<unit> executes immediately (start/restart/run_now).
+        # Stop/unload still requires confirm — taking a daemon offline without warning is the
+        # one verb that can take the operator panel itself down.
+        if rest.endswith("_now"):
+            _candidate = rest[: -len("_now")]
+            if _candidate in ("start", "restart", "run"):
+                op_name = _candidate
+                label = _resolve_short(unit or "")
+                if not label:
+                    view = render_panel_view()
+                    view.text = f"Unknown daemon `{unit}`\n\n" + view.text
+                    view.ok = False
+                    return _finish(view)
+                ok, detail = d_run(op_name, label)
+                receipt = _proof(
+                    f"daemon_{op_name}",
+                    "done" if ok else "failed",
+                    detail,
+                    request_id=rid,
+                    evidence=[detail],
+                )
+                text, buttons = render_daemons()
+                return _finish(
+                    PanelView(
+                        text=receipt + "\n\n" + text,
+                        buttons=buttons,
+                        toast=("✅ " + op_name) if ok else "⚠️ Failed",
+                        ok=ok,
+                        proof_receipt=receipt,
+                    )
+                )
+
         if rest.endswith("_confirm"):
             op_name = rest[: -len("_confirm")]
             label = _resolve_short(unit or "")
@@ -1286,11 +1145,17 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
         )
 
     if action == "restart":
+        # `Restart coordinator?` was hardcoded; the operator tapping from the mission/daemons
+        # menu could not tell which daemon was about to be SIGKILLed. The confirm card now
+        # says it explicitly, and shows the launchd label the next step will call. Mirrors
+        # the Signal Engine / daemon confirm cards which already name their target.
         return _finish(
             PanelView(
                 text=(
-                    "♻️ *Restart coordinator?*\n\nSIGKILLs the daemon; in-flight executors "
-                    "re-submit next tick. Gateway stays up."
+                    "♻️ *Restart coordinator?*\n\n"
+                    "Kicks `ai.hermes.coordinator` via launchctl.\n"
+                    "SIGKILLs the daemon; in-flight executors re-submit next tick.\n"
+                    "Gateway stays up."
                 ),
                 buttons=[
                     [
@@ -1365,7 +1230,11 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             PanelView(
                 text=msg + "\n" + _proof("fuel", "done", bmsg, request_id=rid),
                 buttons=buttons,
-                toast="Fuel",
+                # Toast MUST match the panel's content state — the operator sees
+                # the toast first and picks the right follow-up action from it.
+                # `Fuel` was a static label that lied about a tripped budget
+                # (U10). Now: TRIPPED → 🔓 Override, OK → `OK $X.XXXX`.
+                toast=("🔓 Override" if not ok else f"OK ${m.get('total_cost', 0):.4f}"),
             )
         )
 

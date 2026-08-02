@@ -123,17 +123,80 @@ def test_the_live_run_panel_keeps_every_group_within_the_cap():
     from gateway.operator_shell.cockpit import render_run
 
     _text, rows = render_run()
-    # Rebuilt as groups, so the panel must still fit the rule its own module defines.
+    # Verbs + spine only — destinations live on Atlas Rooms.
     assert len(rows) <= 12, f"Run grew to {len(rows)} rows — regroup before adding more"
 
 
-# --- the home card grid --------------------------------------------------------------------
+def test_run_is_verbs_only_no_destination_mall():
+    """Run must not re-absorb the home mall under Look/More."""
+    from gateway.operator_shell.cockpit import render_run
+
+    _text, rows = render_run()
+    flat = {cb for row in rows for _l, cb in row}
+    for orphan in (
+        "estate:st_status",
+        "estate:rsi",
+        "estate:builds",
+        "estate:diff",
+        "estate:fleet",
+        "estate:missions",
+    ):
+        assert orphan not in flat, f"Run still carries destination {orphan}"
 
 
-def test_home_grid_rows_are_domains_not_a_flat_list():
-    """Each row is one domain so its position is learnable; 3x3 exactly."""
+def test_atlas_rooms_cover_every_former_home_destination():
+    """Nothing we built is orphaned — old home tiles live under Atlas Rooms."""
+    from gateway.operator_shell.atlas import all_room_destinations, render_atlas
+    from gateway.operator_shell.mission import _SURFACES
+
+    _text, atlas_rows = render_atlas()
+    atlas_cbs = {cb for row in atlas_rows for _l, cb in row}
+    for rid in ("money", "code", "machine", "brain"):
+        assert f"estate:room:{rid}" in atlas_cbs
+
+    room_cbs = {cb for _l, cb in all_room_destinations()}
+    for _l, cb in [b for row in _SURFACES for b in row]:
+        assert cb in room_cbs, f"orphaned panel {cb} — missing from Atlas Rooms"
+
+
+# --- the home card (Elon diet: ≤6 buttons, no destination mall) ----------------------------
+
+
+def test_home_no_longer_ships_a_nine_tile_mall():
+    """Home is fires-only. Quiet day = Pause + spine — browse is Map."""
+    from gateway.operator_shell.mission import mission_buttons
+
+    rows = mission_buttons(False, ("🚀 Fleet", "estate:fleet"), [])
+    flat = [cb for row in rows for _l, cb in row]
+    assert "estate:fleet" not in flat
+    assert "estate:inbox" not in flat
+    assert "estate:status" not in flat
+    assert "estate:st_status" not in flat
+    assert "estate:pause" in flat
+    assert len(flat) <= 6  # pause + optional cron + spine
+
+
+def test_busy_home_caps_at_two_concerns_and_no_mall():
+    from gateway.operator_shell.mission import mission_buttons
+
+    concerns = [(f"c{i}", f"estate:fake{i}") for i in range(5)]
+    rows = mission_buttons(False, concerns[0], concerns)
+    concern_rows = [r for r in rows if len(r) == 1 and r[0][1].startswith("estate:fake")]
+    assert len(concern_rows) <= 2
+    flat = [cb for row in rows for _l, cb in row]
+    assert "estate:st_status" not in flat
+    assert "estate:fleet" not in flat
+    assert len(flat) <= 8  # 2 concerns + optional cron + pause + spine
+
+
+def test_home_grid_catalog_still_documents_domains():
+    """_SURFACES remains as the Atlas orphan-guard catalog — not rendered on home."""
     assert len(_SURFACES) == 3
-    assert all(len(row) == 3 for row in _SURFACES), "a ragged grid has no learnable positions"
+    assert [cb for _l, cb in _SURFACES[0]] == [
+        "estate:st_status",
+        "estate:pd_cron",
+        "estate:inbox",
+    ]
 
 
 def test_home_grid_has_no_duplicate_destinations():
@@ -142,12 +205,6 @@ def test_home_grid_has_no_duplicate_destinations():
 
 
 # --- the door ------------------------------------------------------------------------------
-# Telegram's pinned-message banner renders the FIRST line of the pinned message and nothing
-# else. The mission card is pinned (telegram.py:6390) and edited in place (telegram.py:6369),
-# so line 0 is the only cockpit text on screen while the operator is anywhere else in the
-# chat. It used to be the refresh timestamp — "2026-07-31 19:16:30 UTC · auto-refresh · say
-# now to force" — so the estate cockpit's one permanent label identified it as a clock, and
-# the buttons read as unreachable ("how do you even get to the menu?", founder 2026-07-31).
 
 
 def test_the_pinned_banner_names_the_cockpit():
@@ -157,8 +214,6 @@ def test_the_pinned_banner_names_the_cockpit():
 
 
 def test_the_banner_leads_with_identity_not_state():
-    """Telegram truncates the banner. Verdict-first means a long detail eats the one word
-    that tells the operator this is the way in, so the order is the whole point."""
     from gateway.operator_shell.mission import card_headline
 
     line = card_headline("🔴 HALTED", "x" * 200)
@@ -166,7 +221,6 @@ def test_the_banner_leads_with_identity_not_state():
 
 
 def test_the_banner_still_carries_the_live_verdict():
-    """Identity alone would make it a label worth ignoring. It has to be worth reading."""
     from gateway.operator_shell.mission import card_headline
 
     line = card_headline("🟢 OK", "nothing needs you")
@@ -174,19 +228,8 @@ def test_the_banner_still_carries_the_live_verdict():
 
 
 def test_menu_and_cockpit_reach_the_panel():
-    """The words people type when they cannot find the buttons. Telegram filters the "/" list
-    by name, so a door called only `panel` is invisible to someone hunting for a menu."""
     from hermes_cli.commands import resolve_command
 
     for word in ("menu", "cockpit", "panel", "control", "mission"):
         cmd = resolve_command(word)
         assert cmd is not None and cmd.name == "panel", f"/{word} does not open the cockpit"
-
-
-def test_home_grid_money_row_leads():
-    """Row one is what the estate is FOR. Regression: Fleet/Store/Inbox used to share it."""
-    assert [cb for _l, cb in _SURFACES[0]] == [
-        "estate:st_status",
-        "estate:pd_cron",
-        "estate:inbox",
-    ]

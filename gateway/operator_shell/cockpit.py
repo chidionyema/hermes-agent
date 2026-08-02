@@ -25,9 +25,9 @@ all 29 allowlisted values are reachable. Nothing was removed to get there.
 
 from __future__ import annotations
 
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import Group, compose, nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -413,79 +413,169 @@ def _tri(state: Optional[bool], yes: str, no: str) -> str:
 
 
 def render_run() -> Tuple[str, List[ButtonRow]]:
-    """The verbs, state-aware — only the transitions that are actually available."""
+    """The verbs, state-aware — only the transitions that are actually available.
+
+    Organised as labelled groups. Destinations live on Map (Atlas rooms), not here.
+    """
     paused = _estate_paused()
     se_up = _se_running()
     pd_paused = _pd_paused()
 
-    lines = [
-        "🎛 *Run* — the actions. Nothing here changes configuration.",
-        "",
-        f"💸 estate spend {_tri(paused, '`PAUSED`', '`live`')}",
-        f"💹 signal engine {_tri(se_up, '`running`', '`stopped`')}",
-        f"🔭 prospector {_tri(pd_paused, '`PAUSED`', '`live`')}",
-        "",
-    ]
+    groups: List[Group] = []
 
-    rows: List[ButtonRow] = []
-
-    # Estate spend — its own row. It is the one control that halts everything at once.
+    # Estate spend — its own group. It is the one control that halts everything at once.
     if paused is False:
-        rows.append([("⏸ Pause all spend", "estate:pause")])
+        estate_rows = [[("⏸ Pause estate spend", "estate:pause")]]
     elif paused is True:
-        rows.append([("▶️ Resume all spend", "estate:resume")])
+        estate_rows = [[("▶️ Resume estate spend", "estate:resume")]]
     else:
         # Probe failed. Offer both rather than guessing — a wrong guess here either
         # silently keeps burning or silently halts the estate.
-        rows.append([("⏸ Pause all", "estate:pause"), ("▶️ Resume all", "estate:resume")])
+        estate_rows = [[
+            ("⏸ Pause estate spend", "estate:pause"),
+            ("▶️ Resume estate spend", "estate:resume"),
+        ]]
+    groups.append(Group(
+        "💸 Whole estate", estate_rows,
+        status=_tri(paused, "`PAUSED`", "`live`"),
+        note="halts every spender at once",
+    ))
 
     # Signal engine — start and stop are mutually exclusive, restart is always valid.
+    # One-tap: start/restart execute immediately (reversible). Stop still confirms.
     se_row: ButtonRow = []
     if se_up is False:
-        se_row.append(("▶️ Start engine", "estate:se_start"))
+        se_row.append(("▶️ Start engine", "estate:se_start_now"))
     elif se_up is True:
         se_row.append(("⏹ Stop engine", "estate:se_stop"))
     else:
         se_row.append(("💹 Engine", "estate:signal_engine"))
-    se_row.append(("♻️ Restart", "estate:se_restart"))
-    rows.append(se_row)
+    se_row.append(("♻️ Restart", "estate:se_restart_now"))
+    groups.append(Group(
+        "💹 Signal engine", [se_row],
+        status=_tri(se_up, "`running`", "`stopped`"),
+    ))
 
     # Prospector.
-    pd_row: ButtonRow = [("⚡️ Run Prospector now", "estate:run_prospector")]
-    rows.append(pd_row)
+    pd_rows: List[ButtonRow] = [[("⚡️ Run Prospector now", "estate:pd_run_now:scheduler")]]
     if pd_paused is True:
         # estate:pd_unpause, NOT estate:pd_run_now — pd_run_now triggers a tick and leaves the
         # PAUSE file in place, so the daemon would go straight back to sleep. `prospector_daemon`
         # itself labels pd_unpause "▶️ Clear PAUSE" (prospector_daemon.py:459).
-        rows.append([("▶️ Clear PAUSE", "estate:pd_unpause"), ("♻️ Restart", "estate:pd_restart:scheduler")])
+        pd_rows.append([
+            ("▶️ Clear Prospector PAUSE", "estate:pd_unpause"),
+            ("♻️ Restart", "estate:pd_restart_now:scheduler"),
+        ])
     else:
-        rows.append([("⏸ Arm PAUSE", "estate:pd_pause"), ("♻️ Restart", "estate:pd_restart:scheduler")])
+        pd_rows.append([
+            ("⏸ Pause Prospector", "estate:pd_pause"),
+            ("♻️ Restart", "estate:pd_restart_now:scheduler"),
+        ])
+    groups.append(Group(
+        "🔭 Prospector", pd_rows,
+        status=_tri(pd_paused, "`PAUSED`", "`live`"),
+    ))
 
     # Estate daemons — the restart verbs that used to sit two taps deep behind ⚙️ Daemons.
-    rows.append([
-        ("♻️ Coordinator", "estate:daemon_restart:coordinator"),
-        ("♻️ Gateway", "estate:daemon_restart:gateway"),
-    ])
-    rows.append([
-        ("▶️ Run watchdog", "estate:daemon_run_now:watchdog"),
-        ("▶️ Run TIE review", "estate:daemon_run_now:tie-review"),
-    ])
-    # ⛽ Fuel and 📊 Status move off the home card to make room for the concern rows; they are
-    # one tap from here instead. 🖥 Host is the interesting one: `grep -rn 'estate:host"'`
-    # across every panel module returns NOTHING. The host panel — 331 lines of keep-awake,
-    # power and TCC controls — had no inbound button anywhere in the cockpit and was reachable
-    # only by typing the right phrase. That is why the hop probe never found it.
-    rows.append([
-        ("⚙️ All daemons", "estate:daemons"),
-        ("📊 Status", "estate:status"),
-    ])
-    rows.append([
-        ("⛽ Fuel / CB", "estate:system_fuel"),
-        ("🖥 Host", "estate:host"),
-    ])
-    rows.append([("📜 Activity", "estate:activity")])
-    rows.append(nav("run"))
-    return "\n".join(lines), rows
+    # One-tap: restart/run_now all execute immediately. Stop/start still go through confirm
+    # (stop is destructive; start is idempotent but confirms so the operator sees what landed).
+    groups.append(Group("⚙️ Daemons", [
+        [
+            ("♻️ Coordinator", "estate:daemon_restart_now:coordinator"),
+            ("♻️ Gateway", "estate:daemon_restart_now:gateway"),
+        ],
+        [
+            ("▶️ Run watchdog", "estate:daemon_run_now:watchdog"),
+            ("▶️ Run TIE review", "estate:daemon_run_now:tie-review"),
+        ],
+    ]))
+
+    # 🖥 Host is the interesting one: `grep -rn 'estate:host"'` across every panel module
+    # returns NOTHING besides this row. The host panel — 331 lines of keep-awake, power and
+    # TCC controls — had no inbound button anywhere in the cockpit and was reachable only by
+    # typing the right phrase. That is why the hop probe never found it.
+    return compose(
+        [
+            "🎛 *Run* — the verbs. Nothing here is a destination.",
+            "_Browse: 🗺 Map (Money · Code · Machine · Brain)._",
+        ],
+        groups,
+        self_action="run",
+    )
+
+
+def _group_failures_by_root_cause(
+    rows: List[Dict[str, Any]],
+    failures: List[Tuple[str, int]],
+) -> List[Tuple[str, List[Tuple[str, int]]]]:
+    """Cluster failed actions by likely shared cause.
+
+    Heuristic: failures within a 30-second window whose action name shares a prefix (the
+    part before the first `:`) are treated as one event — typically one botched prompt
+    suggestion or one round-trip from a misbehaving caller that re-fires. Each cluster
+    gets a single header line; the individual labels stay as sub-bullets so nothing is
+    hidden, only collapsed. Unrelated failures (different prefix, different window) stay
+    alone, exactly as before.
+    """
+    from datetime import datetime
+
+    def _ts(r: Dict[str, Any]) -> float:
+        iso = str(r.get("iso") or "")
+        try:
+            return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+        except Exception:
+            return 0.0
+
+    def _prefix(label: str) -> str:
+        return label.split(":", 1)[0] if ":" in label else label
+
+    failed_rows = [
+        r for r in rows
+        if str(r.get("status")) in ("failed", "error") or str(r.get("outcome")) == "failed"
+    ]
+    if not failed_rows:
+        return [(lab, [(lab, n)]) for lab, n in failures]
+
+    # Group by (prefix, 30-second bucket)
+    clusters: Dict[Tuple[str, int], List[Dict[str, Any]]] = {}
+    for r in failed_rows:
+        lab = (str(r.get("action") or "?")
+               + (":" + str(r.get("arg") or "") if r.get("arg") else ""))
+        pref = _prefix(lab)
+        bucket = int(_ts(r) // 30)
+        clusters.setdefault((pref, bucket), []).append(r)
+
+    # Map each failure label to its cluster
+    out: List[Tuple[str, List[Tuple[str, int]]]] = []
+    seen_labels: set = set()
+    for (pref, _bucket), members in clusters.items():
+        if len(members) < 2:
+            continue  # single-failure clusters don't dedup
+        labels_in_cluster = [
+            (str(m.get("action") or "?")
+             + (":" + str(m.get("arg") or "") if m.get("arg") else ""))
+            for m in members
+        ]
+        # Take only labels that are in the failures list
+        labels_in_cluster = [l for l in labels_in_cluster if l in {f[0] for f in failures}]
+        if len(labels_in_cluster) < 2:
+            continue
+        # Header: prefix + earliest timestamp
+        earliest = min((_ts(m) for m in members), default=0.0)
+        earliest_iso = ""
+        if earliest:
+            earliest_iso = datetime.fromtimestamp(earliest).strftime("%H:%M:%S")
+        out.append((
+            f"{pref} cluster @ {earliest_iso}" if earliest_iso else f"{pref} cluster",
+            [(l, 1) for l in labels_in_cluster],
+        ))
+        seen_labels.update(labels_in_cluster)
+
+    # Add the remaining un-grouped failures in their original order
+    for lab, n in failures:
+        if lab not in seen_labels:
+            out.append((lab, [(lab, n)]))
+    return out
 
 
 def render_activity(days: int = 7) -> Tuple[str, List[ButtonRow]]:
@@ -499,29 +589,54 @@ def render_activity(days: int = 7) -> Tuple[str, List[ButtonRow]]:
 
     r = act.rollup(days)
     rows_all = r["rows"]
+    # Rows written by a probe or a test run, suppressed from every ranking below. Always
+    # stated, never silently dropped: on the day attribution shipped, 489 of 545 rows in the
+    # live file were synthetic, and a panel that quietly filtered 90% of its input while
+    # printing confident totals is exactly how you come to trust a number you should not.
+    synth = int(r.get("synthetic") or 0)
+    synth_line = f"_+{synth} from probes/tests, not counted._" if synth else ""
 
     lines = [f"📜 *Activity* — last {days} days", ""]
     if not rows_all:
         lines += [
-            "_Nothing recorded yet._",
+            "_No operator taps recorded yet._",
             "",
             "Recording starts at the dispatcher, so this fills up as soon as the gateway "
             "running this code serves its first tap.",
         ]
+        if synth_line:
+            # The distinction that makes the empty state honest: "nothing happened" and
+            # "everything here was a probe" look identical without it.
+            lines += ["", synth_line]
         # No standalone Run row: nav() already carries 🎛 Run, and the same action twice on
         # one screen reads as a bug.
+        lines += ["", panel_stamp("activity")]
         return "\n".join(lines), [nav("activity")]
 
     fail_n = r["failure_total"]
     pct = (fail_n / r["total"] * 100.0) if r["total"] else 0.0
     lines.append(f"{r['total']} actions · {r['distinct']} distinct · *{fail_n} failed* ({pct:.0f}%)")
+    if synth_line:
+        lines.append(synth_line)
     lines.append("")
 
+    # De-dup by root cause: if several failed actions share a 30-second window with the same
+    # action prefix (e.g. 6 se_set:* from one botched prompt-suggestion), collapse into one
+    # row so the operator sees ONE bug, not six noisy lines.
     lines.append("*Failed*")
     if r["failures"]:
-        for lab, n in r["failures"]:
-            tot = dict(r["top"]).get(lab)
-            lines.append(f"🔴 `{lab}` — {n}×" + (f" of {tot}" if tot else ""))
+        groups = _group_failures_by_root_cause(rows_all, r["failures"])
+        for group_label, items in groups:
+            if len(items) == 1:
+                lab, n = items[0]
+                tot = dict(r["top"]).get(lab)
+                lines.append(f"🔴 `{lab}` — {n}×" + (f" of {tot}" if tot else ""))
+            else:
+                lines.append(f"🔴 *{group_label}* — {len(items)} actions, {sum(n for _l, n in items)}× total")
+                for lab, n in items[:4]:
+                    lines.append(f"  ↳ `{lab}` {n}×")
+                if len(items) > 4:
+                    lines.append(f"  ↳ _+{len(items)-4} more_")
     else:
         lines.append("✅ none")
     lines.append("")
@@ -552,4 +667,6 @@ def render_activity(days: int = 7) -> Tuple[str, List[ButtonRow]]:
     ]
     buttons: List[ButtonRow] = [windows] if windows else []
     buttons.append(nav(f"activity:{days}"))
+    lines.append("")
+    lines.append(panel_stamp("activity"))
     return "\n".join(lines), buttons

@@ -5120,6 +5120,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception:
             logger.debug("operator_shell notify fanout patch skipped", exc_info=True)
 
+        # Pre-warm slow estate panels (Store status, builds, mission card) so the
+        # first phone tap is not a 60s+ cold probe sitting on "⏳ Loading…".
+        try:
+            from gateway.operator_shell.preflight import warmup_slow_panels
+            warmup_slow_panels()
+        except Exception:
+            logger.debug("operator_shell preflight warmup skipped", exc_info=True)
+
         # Register declarative shell hooks from cli-config.yaml.  Gateway
         # has no TTY, so consent has to come from one of the three opt-in
         # channels (--accept-hooks on launch, HERMES_ACCEPT_HOOKS env var,
@@ -7324,6 +7332,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     return await self._handle_inbox_command(event)
                 if _cmd_def_inner.name == "fleet":
                     return await self._handle_fleet_command(event)
+                if _cmd_def_inner.name == "brief":
+                    return await self._handle_brief_command(event)
+                if _cmd_def_inner.name == "missions":
+                    return await self._handle_missions_command(event)
                 if _cmd_def_inner.name == "revert":
                     return await self._handle_revert_command(event)
                 if _cmd_def_inner.name == "cron":
@@ -7580,6 +7592,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "help":
             return await self._handle_help_command(event)
 
+        if canonical == "summary":
+            return await self._handle_summary_command(event)
+
         if canonical == "start":
             logger.info("Ignoring /start platform ping for session %s", _quick_key)
             return ""
@@ -7709,6 +7724,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if canonical == "fleet":
             return await self._handle_fleet_command(event)
+
+        if canonical == "brief":
+            return await self._handle_brief_command(event)
+
+        if canonical == "missions":
+            return await self._handle_missions_command(event)
 
         if canonical == "revert":
             return await self._handle_revert_command(event)

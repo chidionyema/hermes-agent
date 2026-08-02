@@ -35,10 +35,27 @@ _PATTERNS = [
         re.I),
      "resume", "", "Resume spend"),
     # Mission / status / sitrep
+    # Spine: Now / Run / Tune — bare one-word navigation (the panel_chrome nav bar)
     (re.compile(
-        r"^\s*(what'?s\s+on\s+fire|on\s+fire|status|mission|cockpit|panel|"
-        r"health|are\s+we\s+(ok|good|clear)|all\s+good|everything\s+ok|"
-        r"how'?s\s+the\s+(estate|ship|system))\s*\??\s*$", re.I),
+        r"^\s*(now|home|dashboard|main)\s*\??\s*$", re.I),
+     "refresh", "", "Mission card (Now)"),
+    (re.compile(
+        r"^\s*(run|execute|actions?)\s*\??\s*$", re.I),
+     "run", "", "Run — the verb panel"),
+    (re.compile(
+        r"^\s*(tune|tuning|settings?|config|configure|knobs?|parameters?)\s*\??\s*$", re.I),
+     "tune", "", "Tune — the 29-knob panel"),
+    # Estate status summary — the discoverable "status" door (P1-4). Bare `status`
+    # must NOT land on the mission card; that card is `now` / `mission` / `panel`.
+    (re.compile(
+        r"^\s*(status|estate\s+status|status\s+summary|"
+        r"how'?s\s+the\s+(estate|ship|system)|"
+        r"estate\s+overview)\s*\??\s*$", re.I),
+     "status", "", "Estate status"),
+    (re.compile(
+        r"^\s*(what'?s\s+on\s+fire|on\s+fire|mission|cockpit|panel|"
+        r"health|are\s+we\s+(ok|good|clear)|all\s+good|everything\s+ok)\s*\??\s*$",
+        re.I),
      "refresh", "", "Mission card"),
     (re.compile(
         r"^\s*(brief|briefing|sitrep|sit[- ]?rep|rundown|catch\s+me\s+up|"
@@ -250,12 +267,29 @@ _PATTERNS = [
     # Find. The answer to "I don't know where anything is" — anchored above code_assign so
     # "find the spend cap" is a lookup, not a coding task.
     (re.compile(r"^\s*(?:find|search|lookup|look\s+up)\s+(.+?)\s*\??\s*$", re.I),
-     "find", "{g1}", "Find anything"),
+     "find", "{g1}", "Map — rooms + search"),
     (re.compile(
         r"^\s*(?:where\s+(?:is|are|do\s+i\s+find)|how\s+do\s+i)\s+(.+?)\s*\??\s*$", re.I),
-     "find", "{g1}", "Find anything"),
-    (re.compile(r"^\s*(?:find|search|menu|help|commands?)\s*\??\s*$", re.I),
-     "find", "", "Find anything"),
+     "find", "{g1}", "Map — rooms + search"),
+    (re.compile(r"^\s*(?:find|search|menu|help|commands?|map)\s*\??\s*$", re.I),
+     "find", "", "Map — rooms + search"),
+    # Atlas / Rooms — job map behind empty Find
+    (re.compile(
+        r"^\s*(atlas|rooms?|map|where\s+is\s+everything)\s*\??\s*$", re.I),
+     "atlas", "", "Atlas"),
+    (re.compile(
+        r"^\s*(money\s+room|room\s+money)\s*\??\s*$", re.I),
+     "room", "money", "Money room"),
+    (re.compile(
+        r"^\s*(code\s+room|room\s+code|sdlc|software\s+lifecycle|"
+        r"code\s+estate)\s*\??\s*$", re.I),
+     "room", "code", "Code room — SDLC"),
+    (re.compile(
+        r"^\s*(machine\s+room|room\s+machine)\s*\??\s*$", re.I),
+     "room", "machine", "Machine room"),
+    (re.compile(
+        r"^\s*(brain\s+room|room\s+brain)\s*\??\s*$", re.I),
+     "room", "brain", "Brain room"),
     # Brain / model. Anchored above code_assign because that `cc|code` prefix is broad.
     (re.compile(
         r"^\s*(?:which\s+|what\s+)?(?:model|brain|llm)"
@@ -272,6 +306,10 @@ _PATTERNS = [
     (re.compile(
         r"^\s*(?:assign|code|cc)\s*[:\-]?\s+(.+)$", re.I | re.DOTALL),
      "code_assign", "{g1}", "Assign code"),
+    # Summary Card — Pythagorean + Gematria + anagram analysis
+    (re.compile(
+        r"^\s*(?:summary|analyze)\s+(.+)$", re.I | re.DOTALL),
+     "summary", "{g1}", "Summary card"),
 ]
 
 

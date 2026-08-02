@@ -9,12 +9,11 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
-import subprocess
 import time
 from pathlib import Path
 from typing import List, Tuple
 
-from gateway.operator_shell.panel_chrome import clip, nav
+from gateway.operator_shell.panel_chrome import clip, nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -52,18 +51,38 @@ def _daemon_faults() -> list:
     return faults
 
 
-def _count_cron() -> Tuple[int, int, int]:
-    """(ok, total, failing) for hermes cron jobs."""
+def _load_jobs() -> list:
     if not JOBS_PATH.is_file():
-        return 0, 0, 0
+        return []
     try:
         data = json.loads(JOBS_PATH.read_text())
-        jobs = data if isinstance(data, list) else data.get("jobs", [])
-        ok = sum(1 for j in jobs if j.get("last_status") == "ok" and j.get("enabled", True))
-        failing = sum(1 for j in jobs if j.get("last_status") not in (None, "ok") and j.get("enabled", True))
-        return ok, len(jobs), failing
+        return data if isinstance(data, list) else data.get("jobs", [])
     except Exception:
+        return []
+
+
+def _count_cron(jobs: list | None = None) -> Tuple[int, int, int]:
+    """(ok, total, failing) for hermes cron jobs — enabled only for the headline counts."""
+    jobs = jobs if jobs is not None else _load_jobs()
+    if not jobs:
         return 0, 0, 0
+    ok = sum(1 for j in jobs if j.get("last_status") == "ok" and j.get("enabled", True))
+    failing = sum(
+        1 for j in jobs if j.get("last_status") not in (None, "ok") and j.get("enabled", True)
+    )
+    return ok, len(jobs), failing
+
+
+def _cron_orphans(jobs: list | None = None) -> list:
+    """Disabled jobs that last failed — invisible when include_disabled=False on /cron."""
+    jobs = jobs if jobs is not None else _load_jobs()
+    orphans = []
+    for j in jobs:
+        if j.get("enabled", True):
+            continue
+        if j.get("last_status") not in (None, "ok"):
+            orphans.append(j)
+    return orphans
 
 
 def _count_missions(conn) -> Tuple[int, int, int]:
@@ -133,10 +152,12 @@ def _spend_today() -> Tuple[float, float]:
 
 def render_status_summary() -> Tuple[str, List[ButtonRow]]:
     """One-tap status card: daemons · cron · missions · spend · active tasks."""
+    jobs = _load_jobs()
     daemon_ok, daemon_total = _count_daemons()
-    cron_ok, cron_total, cron_fail = _count_cron()
+    cron_ok, cron_total, cron_fail = _count_cron(jobs)
+    orphans = _cron_orphans(jobs)
     used, cap = _spend_today()
-    
+
     # Connect to coordinator DB
     missions_done = missions_total = missions_blocked = 0
     active = []
@@ -152,7 +173,10 @@ def render_status_summary() -> Tuple[str, List[ButtonRow]]:
         pass
 
     daemon_emoji = "🟢" if daemon_ok >= 3 else ("🟡" if daemon_ok >= 1 else "🔴")
-    cron_emoji = "🟢" if cron_fail == 0 else ("🟡" if cron_fail <= 2 else "🔴")
+    cron_emoji = (
+        "🔴" if cron_fail > 2 or orphans
+        else ("🟡" if cron_fail > 0 else "🟢")
+    )
     mission_emoji = "🟢" if missions_blocked == 0 else ("🟡" if missions_blocked <= 1 else "🔴")
 
     lines = [
@@ -164,6 +188,18 @@ def render_status_summary() -> Tuple[str, List[ButtonRow]]:
         _spend_gauge(used, cap),
         "",
     ]
+
+    if orphans:
+        lines.append("*Cron orphans (disabled · last error):*")
+        for j in orphans[:5]:
+            jid = str(j.get("id") or j.get("job_id") or "?")[:10]
+            name = clip(j.get("name") or "(unnamed)", 36)
+            err = clip(str(j.get("last_error") or j.get("paused_reason") or "error"), 48)
+            lines.append(f"  🔴 `{jid}` {name}")
+            lines.append(f"     _{err}_")
+        if len(orphans) > 5:
+            lines.append(f"  _…+{len(orphans) - 5} more — `/cron list --all`_")
+        lines.append("")
 
     if escalated:
         lines.append("*Escalated:*")
@@ -181,6 +217,8 @@ def render_status_summary() -> Tuple[str, List[ButtonRow]]:
             age_str = f"{age}s" if age < 90 else f"{age // 60}m"
             lines.append(f"  ⚙️ {clip(t['title'])} [{age_str}]")
         lines.append("")
+
+    lines.append(panel_stamp("status"))
 
     buttons: List[ButtonRow] = [
         [("🚀 Fleet", "estate:fleet"), ("🗓 Cron", "estate:pd_cron")],

@@ -4349,16 +4349,41 @@ class TelegramAdapter(BasePlatformAdapter):
                 # loading and nothing happens" (founder, 2026-07-31). Leaving the old buttons
                 # up costs a re-tap of a stale action at worst; removing them costs the whole
                 # cockpit until someone remembers to type /panel.
-                loading_text = "⏳ *Loading…*"
-                previous_markup = getattr(query.message, "reply_markup", None)
-                try:
-                    await query.edit_message_text(
-                        text=self.format_message(loading_text),
-                        parse_mode=ParseMode.MARKDOWN_V2,
-                        reply_markup=previous_markup,
-                    )
-                except Exception:
-                    pass
+                #
+                # Slow probes (Store / builds) can take a minute cold — opaque "Loading…"
+                # reads as hung. Name the work and the ETA so the operator knows to wait.
+                #
+                # Never overwrite the pinned mission card with Loading for a non-mission
+                # panel — that card is the cockpit home. Toast already acked the tap; the
+                # result arrives as a separate message (see pin race fix below).
+                _SLOW_ESTATE = {
+                    "st_status": "⏳ *Probing store…*\n\n_First load can take ~1 min._",
+                    "st_health": "⏳ *Probing store health…*\n\n_Can take 1–2 min._",
+                    "st_reconcile": "⏳ *Reconciling buyers…*\n\n_Can take up to ~4 min._",
+                    "st_money": "⏳ *Proving money paths…*\n\n_Can take several minutes._",
+                    "builds": "⏳ *Fetching builds…*\n\n_Usually under 15s._",
+                }
+                _PIN_ACTIONS = {"refresh", "now", "mission", ""}
+                from gateway.operator_shell.proof import load_mission_card as _load_mc
+
+                _card = _load_mc() or {}
+                _msg_mid = getattr(query.message, "message_id", None)
+                _on_mission = (
+                    str(_card.get("chat_id") or "") == str(query.message.chat_id)
+                    and str(_card.get("message_id") or "") == str(_msg_mid or "")
+                )
+                _will_pin = action in _PIN_ACTIONS
+                if not (_on_mission and not _will_pin):
+                    loading_text = _SLOW_ESTATE.get(action, "⏳ *Loading…*")
+                    previous_markup = getattr(query.message, "reply_markup", None)
+                    try:
+                        await query.edit_message_text(
+                            text=self.format_message(loading_text),
+                            parse_mode=ParseMode.MARKDOWN_V2,
+                            reply_markup=previous_markup,
+                        )
+                    except Exception:
+                        pass
 
                 view = await asyncio.to_thread(handle_estate_action, action, rid)
 
@@ -4371,43 +4396,89 @@ class TelegramAdapter(BasePlatformAdapter):
                     view = await self._operator_queue_prospector(view)
 
                 markup = self._panel_keyboard_from_view(view)
-                try:
-                    edited = await query.edit_message_text(
-                        text=self.format_message(view.text),
-                        parse_mode=ParseMode.MARKDOWN_V2,
-                        reply_markup=markup,
-                    )
-                    if getattr(view, "pin_edit", False) and edited is not None:
-                        mid = getattr(edited, "message_id", None) or getattr(
-                            query.message, "message_id", None
-                        )
-                        if mid:
-                            save_mission_card(
-                                str(query.message.chat_id),
-                                str(mid),
-                                str(query_thread_id) if query_thread_id else None,
-                            )
-                            try:
-                                await self._bot.pin_chat_message(
-                                    chat_id=query.message.chat_id,
-                                    message_id=int(mid),
-                                    disable_notification=True,
-                                )
-                            except Exception:
-                                pass
-                except Exception:
+
+                # Pin race fix: the mission card is a single pinned window. Non-mission
+                # panels (Store, Fleet, Status, …) must not permanently overwrite it —
+                # otherwise concurrent taps and background refreshes fight one message_id.
+                # If this tap is on the pinned mission card and the result is not a
+                # pin_edit view, restore the mission card and deliver the panel as a
+                # new ephemeral message.
+                from gateway.operator_shell.proof import load_mission_card
+
+                card = load_mission_card() or {}
+                msg_mid = getattr(query.message, "message_id", None)
+                is_mission_msg = (
+                    str(card.get("chat_id") or "") == str(query.message.chat_id)
+                    and str(card.get("message_id") or "") == str(msg_mid or "")
+                )
+                pin_this = bool(getattr(view, "pin_edit", False))
+
+                if is_mission_msg and not pin_this:
+                    # Restore the pinned mission card, then send the panel separately.
                     try:
-                        sent = await self._send_message_with_thread_fallback(
+                        from gateway.operator_shell.estate import render_panel_view
+
+                        mission = await asyncio.to_thread(render_panel_view)
+                        await query.edit_message_text(
+                            text=self.format_message(mission.text),
+                            parse_mode=ParseMode.MARKDOWN_V2,
+                            reply_markup=self._panel_keyboard_from_view(mission),
+                        )
+                    except Exception:
+                        # If restore fails, fall through to in-place edit below so the
+                        # operator still sees *something* other than Loading.
+                        is_mission_msg = False
+
+                if is_mission_msg and not pin_this:
+                    try:
+                        await self._send_message_with_thread_fallback(
                             chat_id=str(query.message.chat_id),
                             text=self.format_message(view.text),
                             parse_mode=ParseMode.MARKDOWN_V2,
                             reply_markup=markup,
                         )
-                        mid = getattr(sent, "message_id", None)
-                        if mid and getattr(view, "pin_edit", False):
-                            save_mission_card(str(query.message.chat_id), str(mid))
                     except Exception:
-                        pass
+                        logger.exception(
+                            "[%s] estate callback: could not send ephemeral panel", self.name
+                        )
+                else:
+                    try:
+                        edited = await query.edit_message_text(
+                            text=self.format_message(view.text),
+                            parse_mode=ParseMode.MARKDOWN_V2,
+                            reply_markup=markup,
+                        )
+                        if pin_this and edited is not None:
+                            mid = getattr(edited, "message_id", None) or getattr(
+                                query.message, "message_id", None
+                            )
+                            if mid:
+                                save_mission_card(
+                                    str(query.message.chat_id),
+                                    str(mid),
+                                    str(query_thread_id) if query_thread_id else None,
+                                )
+                                try:
+                                    await self._bot.pin_chat_message(
+                                        chat_id=query.message.chat_id,
+                                        message_id=int(mid),
+                                        disable_notification=True,
+                                    )
+                                except Exception:
+                                    pass
+                    except Exception:
+                        try:
+                            sent = await self._send_message_with_thread_fallback(
+                                chat_id=str(query.message.chat_id),
+                                text=self.format_message(view.text),
+                                parse_mode=ParseMode.MARKDOWN_V2,
+                                reply_markup=markup,
+                            )
+                            mid = getattr(sent, "message_id", None)
+                            if mid and pin_this:
+                                save_mission_card(str(query.message.chat_id), str(mid))
+                        except Exception:
+                            pass
             except Exception as exc:
                 logger.error("[%s] estate callback query failed: %s", self.name, exc, exc_info=True)
                 # Two things must happen here, and neither did before.
@@ -6479,7 +6550,7 @@ class TelegramAdapter(BasePlatformAdapter):
             card.get("chat_id") == chat_id
             and card.get("message_id")
             and self._bot
-            and getattr(view, "pin_edit", True)
+            and getattr(view, "pin_edit", False)
         ):
             try:
                 await self._bot.edit_message_text(

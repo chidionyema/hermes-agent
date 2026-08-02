@@ -8,6 +8,7 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 # Keep in sync with ~/.hermes/scripts/set-cockpit-menu.py (chat-scoped wins).
 OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     "panel",
+    "status",
     "inbox",
     "fleet",
     "brief",
@@ -16,7 +17,6 @@ OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     "notify",
     "revert",
     "missions",
-    "audit",
     "help",
     "sethome",
 )

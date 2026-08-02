@@ -30,7 +30,7 @@ from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
-from gateway.operator_shell.panel_chrome import nav
+from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
@@ -94,6 +94,7 @@ def render(verb: str, extra: Optional[List[str]] = None) -> Tuple[str, List[Butt
     text = f"{_icon(rc)} *{title}*\n\n```text\n{out[:1500]}\n```"
     if rc == 3:
         text += "\n_Unproven — a check could not run. Not the same as healthy._"
+    text += f"\n\n{panel_stamp(f'st_{verb}')}"
     return text, _BUTTONS
 
 
