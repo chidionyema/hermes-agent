@@ -363,39 +363,28 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
     lines.append("_Gateway start fenced. Prospect gen → Prospect daemons._")
     lines.append(panel_stamp("daemons"))
 
+    # Cap: 8 buttons total. The spine (nav) below contributes 5 (Home · Actions · SDLC ·
+    # Browse · 🔄 daemons), leaving 3 action slots. The previous 16-button grid crammed
+    # restart/start/stop/logs/run_now across every daemon onto one screen — most of those
+    # verbs live on the Run verbs panel (cockpit.py `⚙️ Daemons` group) and run via direct
+    # callback. What stays HERE is the recovery path for the three KeepAlive jobs that
+    # take the operator panel itself down when they crash: coord (start / restart) and
+    # gateway (bounce; fenced, so this is the only phone-reachable door). Oneshots
+    # (watch / RSI / Progress / TIE) and other cross-panel links are surfaced from Run —
+    # dropping them here is a navigation change, not a feature loss.
     buttons: List[ButtonRow] = [
         [
             ("♻️ Restart coord", "estate:daemon_restart:coordinator"),
             ("▶️ Start coord", "estate:daemon_start:coordinator"),
         ],
         [
-            ("▶️ Run watch", "estate:daemon_run_now:watchdog"),
-            ("♻️ RSI", "estate:daemon_restart:rsi"),
-            ("♻️ Progress", "estate:daemon_restart:progress"),
-        ],
-        [
-            ("📜 Coord logs", "estate:daemon_logs:coordinator"),
-            ("📜 Watch logs", "estate:daemon_logs:watchdog"),
-        ],
-        [
-            ("⏹ Stop coord", "estate:daemon_stop:coordinator"),
             ("♻️ Bounce gateway", "estate:daemon_restart:gateway"),
-        ],
-        [
-            ("⚙️ Prospect daemons", "estate:prospector_daemon"),
-            ("💹 Signal Engine", "estate:signal_engine"),
         ],
         nav("daemons"),
     ]
-    # TIE if installed
-    if (_plist_dir() / "com.tie.ai-review.plist").is_file():
-        buttons.insert(
-            3,
-            [
-                ("▶️ Run TIE review", "estate:daemon_run_now:tie-review"),
-                ("📜 TIE logs", "estate:daemon_logs:tie-review"),
-            ],
-        )
+    assert sum(len(r) for r in buttons) <= 8, (
+        f"daemons panel exceeded 8-button cap: {sum(len(r) for r in buttons)} buttons"
+    )
     return "\n".join(lines), buttons
 
 
