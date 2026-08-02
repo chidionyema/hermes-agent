@@ -9187,6 +9187,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             }
             await self.hooks.emit("agent:start", hook_ctx)
 
+            # Start typing indicator immediately so the user knows Otto is working.
+            # Stops below after _run_agent completes.
+            try:
+                _typing_adapter = self.adapters.get(source.platform)
+                if _typing_adapter and hasattr(_typing_adapter, "send_typing"):
+                    await _typing_adapter.send_typing(source.chat_id)
+            except Exception:
+                pass
+
             # Run the agent
             agent_result = await self._run_agent(
                 message=message_text,
