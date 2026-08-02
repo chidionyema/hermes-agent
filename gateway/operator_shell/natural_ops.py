@@ -114,6 +114,14 @@ _PATTERNS = [
     (re.compile(
         r"^\s*(restart|bounce)\s+(the\s+)?gateway\s*$", re.I),
      "daemon_restart", "gateway", "Bounce gateway (confirm)"),
+    # One word to remember when Otto is unresponsive. "stuck", "restart otto",
+    # "otto is frozen", "fix otto", "hung" — all trigger a gateway restart.
+    (re.compile(
+        r"^\s*(restart|bounce|fix|kick)\s+otto\s*$", re.I),
+     "daemon_restart", "gateway", "Restart Otto (confirm)"),
+    (re.compile(
+        r"^\s*(?:otto\s+)?(?:is\s+)?(stuck|hung|frozen|unresponsive|dead|broken)\s*$", re.I),
+     "daemon_restart", "gateway", "Restart Otto (confirm)"),
     (re.compile(
         r"^\s*restart\s+(the\s+)?(coord|coordinator)\s*$", re.I),
      "daemon_restart", "coordinator", "Restart coordinator"),
