@@ -290,15 +290,22 @@ _PATTERNS = [
      "help", "", "Help — what Otto can do"),
     # Atlas / Rooms — job map behind empty Find
     (re.compile(
-        r"^\s*(atlas|rooms?|map|where\s+is\s+everything)\s*\??\s*$", re.I),
-     "atlas", "", "Atlas"),
+        r"^\s*(atlas|map|where\s+is\s+everything)\s*\??\s*$", re.I),
+     "find", "", "Browse — Atlas rooms"),
+    (re.compile(
+        r"^\s*rooms?\s*\??\s*$", re.I),
+     "find", "", "Browse — rooms"),
     (re.compile(
         r"^\s*(money\s+room|room\s+money)\s*\??\s*$", re.I),
      "room", "money", "Money room"),
+    # SDLC pipeline (must be before the room:code entry)
     (re.compile(
-        r"^\s*(code\s+room|room\s+code|sdlc|software\s+lifecycle|"
+        r"^\s*(sdlc|pipeline)\s*\??\s*$", re.I),
+     "sdlc", "", "SDLC pipeline"),
+    (re.compile(
+        r"^\s*(code\s+room|room\s+code|software\s+lifecycle|"
         r"code\s+estate)\s*\??\s*$", re.I),
-     "room", "code", "Code room — SDLC"),
+     "sdlc", "", "SDLC pipeline"),
     (re.compile(
         r"^\s*(machine\s+room|room\s+machine)\s*\??\s*$", re.I),
      "room", "machine", "Machine room"),

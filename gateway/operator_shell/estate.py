@@ -375,6 +375,19 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             )
         )
 
+    if action == "sdlc":
+        from gateway.operator_shell.sdlc import render_sdlc
+
+        text, buttons = render_sdlc()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="SDLC",
+                proof_receipt=_proof("sdlc", "done", "SDLC pipeline", request_id=rid),
+            )
+        )
+
     if action == "find":
         from gateway.operator_shell.find import render_find
 

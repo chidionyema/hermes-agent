@@ -35,11 +35,12 @@ ButtonRow = List[Tuple[str, str]]
 # 5 buttons but only 3 rows, and visually the tightest group on the panel.
 MAX_GROUP_ROWS = 3
 
-_NOW = ("⚡️ Now", "estate:refresh")
-_RUN = ("🎛 Run", "estate:run")
+_NOW = ("🏠 Home", "estate:refresh")
+_RUN = ("⚡ Actions", "estate:run")
+_SDLC = ("💻 SDLC", "estate:sdlc")
 _TUNE = ("⚙️ Tune", "estate:tune")
 # Callback stays estate:find for compatibility; glyph is Map — empty opens Atlas.
-_MAP = ("🗺", "estate:find")
+_MAP = ("🗺 Browse", "estate:find")
 
 # Severity legend — one row, glued to the bottom of every panel via compose().
 # The "?" prefix marks it as a definition, not a status, so it never collides with a
@@ -62,15 +63,16 @@ VERDICT_GLYPHS = {
 def nav(self_action: Optional[str] = None) -> ButtonRow:
     """The one navigation row — the cockpit's spine. Always last, always this order.
 
-        ⚡️ Now   fires (concerns, approve, estate pause)
-        🎛 Run   verbs (start, stop, restart, run now)
+        🏠 Home   fires (concerns, approve, estate pause)
+        ⚡ Actions   verbs (start, stop, restart, run now)
+        💻 SDLC   pipeline (Assign → Board → Fleet → Review → Ship → Learn)
         ⚙️ Tune  knobs (leverage, caps, batch, cadence, brain)
-        🗺 Map   orient (Atlas rooms empty; type a word to search)
+        🗺 Browse   orient (Atlas rooms empty; type a word to search)
 
     `self_action` re-renders the CURRENT panel as bare 🔄. On Map itself the 🗺 glyph
     already re-opens Atlas, so no duplicate 🔄 is added.
     """
-    row: ButtonRow = [_NOW, _RUN, _TUNE, _MAP]
+    row: ButtonRow = [_NOW, _RUN, _SDLC, _MAP]
     if self_action:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").

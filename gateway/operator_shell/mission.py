@@ -364,7 +364,7 @@ _MAX_CONCERNS = 2
 def mission_buttons(
     paused: bool, primary: Tuple[str, str], concerns: Optional[List[Tuple[str, str]]] = None
 ) -> List[ButtonRow]:
-    """Home: at most 2 full-width fixes, then estate Pause, then the spine.
+    """Home: at most 2 full-width fixes, then daemon controls, quick actions, SDLC, then the spine.
 
     No destination mall. Map / Run / Tune are how you browse and act beyond fires.
     """
@@ -392,6 +392,22 @@ def mission_buttons(
     if not cron_ok:
         rows.append([("🗓 Fix cron delivery", "estate:setup_cron_topic")])
 
+    # ── SDLC pipeline button ──
+    rows.append([("💻 Full SDLC pipeline", "estate:sdlc")])
+
+    # ── Daemon controls row ──
+    rows.append([
+        ("♻️ Restart GW", "estate:daemon_restart_now:gateway"),
+        ("🔄 Restart Coord", "estate:restart"),
+    ])
+
+    # ── Quick actions row ──
+    rows.append([
+        ("📊 Status", "estate:status"),
+        ("📝 Assign", "estate:code_prompt"),
+        ("❓ Help", "estate:help"),
+    ])
+
     if not any(a == pause_or_resume[1] for _l, a in rows_actions(rows)):
         rows.append([pause_or_resume])
     rows.append(nav())
@@ -405,12 +421,87 @@ def rows_actions(rows: List[ButtonRow]) -> List[Tuple[str, str]]:
 
 def card_headline(verdict: str, detail: str) -> str:
     """Line 0 of the mission card — Telegram's pinned banner shows only this line."""
-    return f"🎛 *Cockpit* · *{verdict}* — {detail}"
+    return f"🏠 *Otto* · *{verdict}* — {detail}"
+
+
+def _inflight_section(conn, C) -> str:
+    """In-flight work summary: code runs + blocked missions."""
+    lines = []
+    # Code runs
+    try:
+        code = _inflight_code(conn)
+        if code:
+            tid, st = code
+            lines.append(f"💻 Code `{tid[:8]}` — {st}")
+        else:
+            # Check for any code tasks even if not the most recent
+            rows = conn.execute(
+                "SELECT id, status FROM tasks WHERE source='code:telegram' "
+                "AND status IN ('open','diagnosed','executing','verifying','awaiting_approval') "
+                "ORDER BY created_at DESC LIMIT 3"
+            ).fetchall()
+            if rows:
+                for r in rows[:2]:
+                    rid = r["id"] if hasattr(r, "keys") else r[0]
+                    st = r["status"] if hasattr(r, "keys") else r[1]
+                    lines.append(f"💻 Code `{str(rid)[:8]}` — {st}")
+    except Exception:
+        pass
+    # Blocked missions
+    try:
+        blocked = _blocked_missions(conn)
+        if blocked:
+            lines.append(f"🚀 {blocked} mission(s) blocked")
+    except Exception:
+        pass
+    if not lines:
+        return "💤 No in-flight work"
+    return "\n".join(lines)
+
+
+def _render_unavailable_card() -> Tuple[str, bool, List[ButtonRow]]:
+    """Minimal card when the estate coordinator is unavailable."""
+    from datetime import datetime, timezone
+
+    edit_iso = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    lines = [
+        "🏠 *Otto* · *🔴 UNKNOWN* — estate unavailable",
+        "",
+        "⚠️ Estate bridge down — coordinator not reachable.",
+        "Gateway chat still works.",
+        "",
+        "*⚙️ In-Flight*",
+        "💤 No in-flight work",
+        "",
+        "💻 *SDLC* — [Full pipeline](estate:sdlc)",
+        f"💰 Spend `n/a`",
+        f"_{edit_iso}_",
+    ]
+    text = "\n".join(lines)
+    buttons: List[ButtonRow] = [
+        [("💻 Full SDLC pipeline", "estate:sdlc")],
+        [
+            ("♻️ Restart GW", "estate:daemon_restart_now:gateway"),
+            ("🔄 Restart Coord", "estate:restart"),
+        ],
+        [
+            ("📊 Status", "estate:status"),
+            ("📝 Assign", "estate:code_prompt"),
+            ("❓ Help", "estate:help"),
+        ],
+        nav(),
+    ]
+    return text, False, buttons
 
 
 def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
-    """Phone home: verdict, what to do, spend. Nothing else."""
-    C = _coord()
+    """Phone home: verdict, what to do, spend, in-flight work, SDLC, daemon controls."""
+    try:
+        C = _coord()
+    except Exception:
+        # Estate unavailable — return a minimal card with all required buttons
+        return _render_unavailable_card()
+
     conn = C.connect()
     try:
         verdict, detail = _verdict(conn, C)
@@ -425,6 +516,7 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
             detail = f"{len(concerns)} need you"
         primary = concerns[0] if concerns else ("🚀 Fleet", "estate:fleet")
         blocker = _top_blocker(conn, C)
+        inflight = _inflight_section(conn, C)
     finally:
         conn.close()
 
@@ -466,7 +558,16 @@ def render_mission_card() -> Tuple[str, bool, List[ButtonRow]]:
     else:
         lines.append("")
         lines.append("✅ Nothing needs you.")
-        lines.append("_🗺 Map · 🎛 Run · ⚙️ Tune_")
+        lines.append("_🗺 Browse · ⚡ Actions · 💻 SDLC · ⚙️ Tune_")
+
+    # In-flight work section
+    lines.append("")
+    lines.append("*⚙️ In-Flight*")
+    lines.append(inflight)
+
+    # SDLC summary line
+    lines.append("")
+    lines.append("💻 *SDLC* — [Full pipeline](estate:sdlc)")
 
     lines.append(f"💰 Spend `{burn}`")
     if not cron.get("ok"):
