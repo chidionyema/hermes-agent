@@ -53,7 +53,7 @@ _PATTERNS = [
         r"estate\s+overview)\s*\??\s*$", re.I),
      "status", "", "Estate status"),
     (re.compile(
-        r"^\s*(what'?s\s+on\s+fire|on\s+fire|mission|cockpit|panel|"
+        r"^\s*(what'?s\s+on\s+fire|on\s+fire|mission|cockpit|panel|otto|"
         r"health|are\s+we\s+(ok|good|clear)|all\s+good|everything\s+ok)\s*\??\s*$",
         re.I),
      "refresh", "", "Mission card"),
@@ -113,15 +113,15 @@ _PATTERNS = [
      "daemons", "", "Daemons"),
     (re.compile(
         r"^\s*(restart|bounce)\s+(the\s+)?gateway\s*$", re.I),
-     "daemon_restart", "gateway", "Bounce gateway (confirm)"),
+     "daemon_restart_now", "gateway", "Restart gateway (one-tap)"),
     # One word to remember when Otto is unresponsive. "stuck", "restart otto",
-    # "otto is frozen", "fix otto", "hung" — all trigger a gateway restart.
+    # "otto is frozen", "fix otto", "hung" — all one-tap gateway restart.
     (re.compile(
         r"^\s*(restart|bounce|fix|kick)\s+otto\s*$", re.I),
-     "daemon_restart", "gateway", "Restart Otto (confirm)"),
+     "daemon_restart_now", "gateway", "Restart gateway (one-tap)"),
     (re.compile(
         r"^\s*(?:otto\s+)?(?:is\s+)?(stuck|hung|frozen|unresponsive|dead|broken)\s*$", re.I),
-     "daemon_restart", "gateway", "Restart Otto (confirm)"),
+     "daemon_restart_now", "gateway", "Restart gateway (one-tap)"),
     (re.compile(
         r"^\s*restart\s+(the\s+)?(coord|coordinator)\s*$", re.I),
      "daemon_restart", "coordinator", "Restart coordinator"),

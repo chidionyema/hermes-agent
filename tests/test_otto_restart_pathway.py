@@ -51,8 +51,10 @@ class TestNaturalRestart:
         from gateway.operator_shell.natural_ops import match_natural_op
         result = match_natural_op(text)
         assert result is not None, f"\"{text}\" must match a natural op"
-        assert result.action == expected_action, (
-            f"\"{text}\" should trigger {expected_action}, got {result.action}"
+        # daemon_restart and daemon_restart_now are both valid —
+        # the _now variant is one-tap (no confirmation).
+        assert result.action in (expected_action, expected_action + "_now"), (
+            f"\"{text}\" should trigger {expected_action}[_now], got {result.action}"
         )
         assert result.args == expected_context, (
             f"\"{text}\" should have context {expected_context}, got {result.args}"
@@ -120,6 +122,11 @@ class TestNaturalRestart:
 class TestCockpitEntry:
     """One word gets you to the panel where every action is a button."""
 
+    def test_otto(self):
+        from gateway.operator_shell.natural_ops import match_natural_op
+        result = match_natural_op("otto")
+        assert result is not None, "bare 'otto' must bring up the cockpit"
+
     def test_cockpit_reachable(self):
         from gateway.operator_shell.natural_ops import match_natural_op
         result = match_natural_op("cockpit")
@@ -148,7 +155,7 @@ class TestFreeChatNeverRestarts:
         # Free chat may match non-restart ops like "find" or "refresh".
         # Those are fine. It must NOT match daemon_restart.
         if result is not None:
-            assert result.action != "daemon_restart", (
+            assert not result.action.startswith("daemon_restart"), (
                 f"\"{text}\" must NOT trigger a gateway restart"
             )
 
