@@ -565,7 +565,47 @@ class GatewaySlashCommandsMixin:
             t("gateway.status.platforms", platforms=', '.join(connected_platforms)),
         ])
 
-        return "\n".join(lines)
+        session_text = "\n".join(lines)
+
+        # Operator / Telegram door (P1-4): `/status` must open the estate overview
+        # that already exists, not only session tokens. Session details stay as a
+        # compact footer so model/context/agent running remain one glance away.
+        prefer_estate = False
+        try:
+            from gateway.operator_shell.menu import resolve_telegram_menu_profile
+
+            prefer_estate = resolve_telegram_menu_profile() == "operator"
+        except Exception:
+            prefer_estate = False
+        if not prefer_estate and source is not None:
+            plat = getattr(source, "platform", None)
+            prefer_estate = getattr(plat, "value", str(plat)).lower() == "telegram"
+
+        if prefer_estate:
+            try:
+                from gateway.operator_shell.status_summary import render_status_summary
+
+                estate_text, buttons = await asyncio.to_thread(render_status_summary)
+                footer_bits = []
+                if model_name:
+                    footer_bits.append(f"`{model_name}`")
+                footer_bits.append(f"{db_total_tokens:,} tok")
+                footer_bits.append(
+                    "agent on" if is_running else "agent idle"
+                )
+                combined = (
+                    estate_text
+                    + "\n\n*Session* · "
+                    + " · ".join(footer_bits)
+                )
+                delivered = await self._send_operator_view(event, combined, buttons)
+                if delivered == "":
+                    return ""
+                return delivered or combined
+            except Exception as exc:
+                logger.debug("estate status panel failed, session-only: %s", exc)
+
+        return session_text
 
     @staticmethod
     def _redact_matrix_session_key(session_key: str) -> str:
@@ -948,33 +988,54 @@ class GatewaySlashCommandsMixin:
         return format_banner_version_label()
 
     async def _handle_help_command(self, event: MessageEvent) -> str:
-        """Handle /help command - list available commands."""
+        """Handle /help command - categorized command directory.
+
+        Renders a directory grouped by what users DO (cockpit / control /
+        agent / sessions / schedule / system) instead of a flat wall of
+        50+ commands in registry order. /panel is pinned at the top.
+        """
         from gateway.run import _telegramize_command_mentions
-        from hermes_cli.commands import gateway_help_lines
-        lines = [
-            t("gateway.help.header"),
-            # The door, before the list. `gateway_help_lines()` is registry order, so
-            # `/panel` lands mid-list among 58 peers with nothing marking it as the way in.
-            t("gateway.help.cockpit_hint"),
-            *gateway_help_lines(),
-        ]
+        from hermes_cli.command_directory import render_help_directory
+
+        skill_lines: list[str] = []
         try:
             from agent.skill_commands import get_skill_commands
             skill_cmds = get_skill_commands()
             if skill_cmds:
-                lines.append(t("gateway.help.skill_header", count=len(skill_cmds)))
-                # Show first 10, then point to /commands for the rest
+                skill_lines.append(t("gateway.help.skill_header", count=len(skill_cmds)))
                 sorted_cmds = sorted(skill_cmds)
                 for cmd in sorted_cmds[:10]:
-                    lines.append(f"`{cmd}` — {skill_cmds[cmd]['description']}")
+                    skill_lines.append(
+                        f"`{cmd}` — {skill_cmds[cmd]['description']}"
+                    )
                 if len(sorted_cmds) > 10:
-                    lines.append(t("gateway.help.more_use_commands", count=len(sorted_cmds) - 10))
+                    skill_lines.append(
+                        t("gateway.help.more_use_commands", count=len(sorted_cmds) - 10)
+                    )
         except Exception:
             pass
+
+        lines = render_help_directory(include_skill_lines=skill_lines or None)
         return _telegramize_command_mentions(
             "\n".join(lines),
             getattr(getattr(event, "source", None), "platform", None),
         )
+
+    async def _handle_summary_command(self, event: MessageEvent) -> str:
+        """Handle /summary command — Pythagorean + Gematria analysis card."""
+        from gateway.operator_shell.summary_card import render_summary_card
+
+        raw_args = event.get_command_args().strip()
+        if not raw_args:
+            return (
+                "🔮 **Summary Card**\n\n"
+                "Send `/summary <text>` to analyze it.\n\n"
+                "• 🧮 Pythagorean numerology\n"
+                "• ✡️ Hebrew Gematria (Mispar Hechrechi)\n"
+                "• 🔤 Anagram permutations\n\n"
+                "_Example:_ `/summary Hello World`"
+            )
+        return render_summary_card(raw_args)
 
     async def _handle_commands_command(self, event: MessageEvent) -> str:
         from gateway.run import _telegramize_command_mentions
@@ -3899,6 +3960,18 @@ class GatewaySlashCommandsMixin:
 
         text, buttons = await asyncio.to_thread(render_fleet)
         return await self._send_operator_view(event, text, buttons)
+
+    async def _handle_brief_command(self, event: MessageEvent) -> Optional[str]:
+        from gateway.operator_shell.voice_brief import render_executive_brief
+
+        text, buttons = await asyncio.to_thread(render_executive_brief)
+        return await self._send_operator_view(event, text, buttons)
+
+    async def _handle_missions_command(self, event: MessageEvent) -> Optional[str]:
+        from gateway.operator_shell.estate import handle_estate_action
+
+        view = await asyncio.to_thread(handle_estate_action, "missions")
+        return await self._send_operator_view(event, view.text, view.buttons)
 
     async def _handle_revert_command(self, event: MessageEvent) -> Optional[str]:
         from gateway.operator_shell.estate import handle_estate_action

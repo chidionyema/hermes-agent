@@ -109,7 +109,12 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="[text | pause | resume | clear | status]"),
     CommandDef("subgoal", "Add or manage extra criteria on the active goal", "Session",
                args_hint="[text | remove N | clear]"),
-    CommandDef("status", "Show session, model, token, and context info", "Session"),
+    CommandDef(
+        "status",
+        "Estate overview — daemons, cron, spend (+ session)",
+        "Session",
+        aliases=("estatestatus", "estate-status"),
+    ),
     CommandDef("whoami", "Show your slash command access (admin / user)", "Info"),
     CommandDef("profile", "Show active profile name and home directory", "Info"),
     CommandDef("sethome", "Set this chat as the home channel", "Session",
@@ -125,6 +130,10 @@ COMMAND_REGISTRY: list[CommandDef] = [
                gateway_only=True, aliases=("decisions",)),
     CommandDef("fleet", "Project tiles: prospector / signal / TIE / haworks", "Session",
                gateway_only=True, aliases=("portfolio",)),
+    CommandDef("brief", "5-line executive sitrep", "Session",
+               gateway_only=True, aliases=("sitrep",)),
+    CommandDef("missions", "Autopilot mission board", "Session",
+               gateway_only=True, aliases=("missionboard", "mission-board")),
     CommandDef("resume", "Resume a previously-named session", "Session",
                args_hint="[name]"),
 
@@ -227,6 +236,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
     CommandDef("commands", "Browse all commands and skills (paginated)", "Info",
                gateway_only=True, args_hint="[page]"),
     CommandDef("help", "Show available commands", "Info"),
+    CommandDef("summary", "Analyze text — Pythagorean, Gematria, anagrams", "Info",
+               args_hint="<text>", gateway_only=True),
     CommandDef("restart", "Gracefully restart the gateway after draining active runs", "Session",
                gateway_only=True),
     CommandDef("usage", "Show token usage and rate limits for the current session", "Info"),
@@ -372,8 +383,10 @@ ACTIVE_SESSION_BYPASS_COMMANDS: frozenset[str] = frozenset(
         "cron",
         "deny",
         "fleet",
+        "brief",
         "help",
         "inbox",
+        "missions",
         "new",
         "notify",
         "panel",
@@ -1124,7 +1137,20 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 # "Slack-via-/hermes" decision, not a silent clamp.
 #   - credits: the billing/top-up surface; reached via /hermes credits on Slack.
 #   - debug: the log/report upload surface; reached via /hermes debug on Slack.
-_SLACK_VIA_HERMES_ONLY = frozenset({"credits", "debug"})
+#   - summary: text analysis (Pythagorean / Gematria / anagrams) — niche.
+#   - usage: token-usage readout — niche, niche for a slack slash.
+#   - insights: usage analytics — niche.
+#   - platform: platform pause/resume — admin-only edge case.
+#   - restart: gateway restart — admin-only edge case.
+#   - update: self-update — admin-only edge case.
+#   - version: version readout — niche, /hermes version is fine.
+#   - commands: paginated browser — niche when /help exists.
+#   - reload-skills: admin-only filesystem rescan; niche on Slack.
+# Note: /help stays a native Slack slash — it's the user-facing directory.
+_SLACK_VIA_HERMES_ONLY = frozenset({
+    "credits", "debug", "summary", "usage", "insights",
+    "platform", "restart", "update", "version", "commands", "reload-skills",
+})
 
 
 def _sanitize_slack_name(raw: str) -> str:
