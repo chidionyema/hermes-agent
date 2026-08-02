@@ -362,6 +362,19 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             )
         )
 
+    if action == "help":
+        from gateway.operator_shell.help_card import render_help
+
+        text, buttons = render_help()
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Help",
+                proof_receipt=_proof("help", "done", "help directory", request_id=rid),
+            )
+        )
+
     if action == "find":
         from gateway.operator_shell.find import render_find
 

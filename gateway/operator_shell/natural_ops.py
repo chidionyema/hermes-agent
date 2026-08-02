@@ -279,8 +279,15 @@ _PATTERNS = [
     (re.compile(
         r"^\s*(?:where\s+(?:is|are|do\s+i\s+find)|how\s+do\s+i)\s+(.+?)\s*\??\s*$", re.I),
      "find", "{g1}", "Map — rooms + search"),
-    (re.compile(r"^\s*(?:find|search|menu|help|commands?|map)\s*\??\s*$", re.I),
+    (re.compile(r"^\s*(?:find|search|menu|commands?|map)\s*\??\s*$", re.I),
      "find", "", "Map — rooms + search"),
+    # Simple help — what Otto can do, with the one word to trigger each.
+    (re.compile(
+        r"^\s*(help|what\s+(can|could)\s+you\s+(do|help\s+with)|"
+        r"what\s+are\s+you\s+(capable\s+of|able\s+to\s+do)|capabilities|"
+        r"what\s+do\s+you\s+do|how\s+do\s+I\s+use\s+you|"
+        r"how\s+(can|do)\s+I\s+get\s+help)\s*\??\s*$", re.I),
+     "help", "", "Help — what Otto can do"),
     # Atlas / Rooms — job map behind empty Find
     (re.compile(
         r"^\s*(atlas|rooms?|map|where\s+is\s+everything)\s*\??\s*$", re.I),
