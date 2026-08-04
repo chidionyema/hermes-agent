@@ -4469,6 +4469,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         for session_key in stuck_keys:
             try:
+                if getattr(self, "session_store", None) is None:
+                    continue
                 entry = self.session_store._entries.get(session_key)
                 if entry and not entry.suspended:
                     entry.suspended = True
@@ -4483,7 +4485,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if suspended:
             try:
-                self.session_store._save()
+                if getattr(self, "session_store", None) is None:
+                    pass
+                else:
+                    self.session_store._save()
             except Exception:
                 pass
 
@@ -4855,8 +4860,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         window = _auto_continue_freshness_window()
         try:
-            with self.session_store._lock:  # noqa: SLF001 — snapshot under lock
-                self.session_store._ensure_loaded_locked()  # noqa: SLF001
+            _ss = getattr(self, "session_store", None)
+            if _ss is None:
+                return []
+            with _ss._lock:  # noqa: SLF001 — snapshot under lock
+                _ss._ensure_loaded_locked()  # noqa: SLF001
                 candidates = [
                     entry for entry in self.session_store._entries.values()  # noqa: SLF001
                     if entry.resume_pending
