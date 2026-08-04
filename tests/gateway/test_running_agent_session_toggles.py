@@ -136,6 +136,19 @@ async def test_verbose_dispatches_mid_run(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_summary_dispatches_mid_run():
+    """/summary mid-run returns the summary instead of the busy rejection."""
+    runner = _make_runner()
+    runner._handle_summary_command = AsyncMock(return_value="Current conversation summary")
+
+    result = await runner._handle_message(_make_event("/summary"))
+
+    runner._handle_summary_command.assert_awaited_once()
+    assert result == "Current conversation summary"
+    assert "can't run mid-turn" not in result
+
+
+@pytest.mark.asyncio
 async def test_fast_rejected_mid_run():
     """/fast mid-run must hit the busy catch-all — config-only, next message."""
     runner = _make_runner()
