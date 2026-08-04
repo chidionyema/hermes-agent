@@ -392,8 +392,10 @@ def mission_buttons(
     if not cron_ok:
         rows.append([("🗓 Fix cron delivery", "estate:setup_cron_topic")])
 
-    # ── SDLC pipeline button ──
-    rows.append([("💻 Full SDLC pipeline", "estate:sdlc")])
+    # NOTE: SDLC button removed from the action rows — the SPINE
+    # (panel_chrome.nav()) carries 'estate:sdlc' as the third spine button,
+    # and the mission card appends the spine via with_nav(). A dedicated
+    # row here would render estate:sdlc twice.
 
     # ── Daemon controls row ──
     rows.append([

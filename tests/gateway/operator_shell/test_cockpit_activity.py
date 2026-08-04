@@ -26,7 +26,7 @@ from gateway.operator_shell.panel_chrome import nav
 
 # Four positions: Now · Run · Tune · Map. Empty Map = Atlas; typed Map = search.
 # On the Map panel itself the 🗺 glyph re-opens Atlas — no duplicate 🔄.
-SPINE = ["estate:refresh", "estate:run", "estate:tune", "estate:find"]
+SPINE = ["estate:refresh", "estate:run", "estate:sdlc", "estate:find"]
 
 
 def _callbacks(rows):
@@ -38,7 +38,7 @@ def _dupes(rows):
     return sorted({cb for cb in cbs if cbs.count(cb) > 1})
 
 
-@pytest.mark.parametrize("self_action", ["refresh", "run", "tune", "estate:run"])
+@pytest.mark.parametrize("self_action", ["refresh", "run", "sdlc", "estate:run"])
 def test_nav_omits_the_refresh_glyph_on_a_spine_panel(self_action):
     """On Run, the spine's own 🎛 Run already re-renders Run. A 🔄 beside it is the same
     callback twice — the caller must not have to know that, so nav decides."""

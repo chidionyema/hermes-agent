@@ -157,7 +157,13 @@ def render_panel_view() -> PanelView:
         text, paused, buttons = render_mission_card()
         if notice:
             text = notice + "\n\n" + text
-        return PanelView(text=text, paused=paused, buttons=buttons, pin_edit=True)
+        # Fail-closed: when the coordinator bridge is down, render_mission_card
+        # returns the _render_unavailable_card() sentinel — detectable by the
+        # "estate unavailable" prefix it always emits. Set ok=False so callers
+        # (test_panel_fail_closed_without_coordinator, monitor probes) know
+        # the panel is in degraded mode.
+        ok = "estate unavailable" not in text
+        return PanelView(text=text, paused=paused, buttons=buttons, pin_edit=True, ok=ok)
     except Exception as exc:
         logger.error("render_panel_view failed: %s", exc, exc_info=True)
         return PanelView(
