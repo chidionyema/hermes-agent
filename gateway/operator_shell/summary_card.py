@@ -16,6 +16,7 @@ GFM task lists, and pipe tables natively.
 
 from __future__ import annotations
 
+import functools
 import math
 from collections import Counter
 from dataclasses import dataclass
@@ -64,7 +65,21 @@ class CipherResult:
 
 
 def _letters_only(text: str) -> list[str]:
-    return [c.upper() for c in text if c.isalpha()]
+    """Return uppercase ASCII letters from text. Non-ASCII letters (Cyrillic, Greek,
+    Arabic, accented Latin) are silently dropped — the ciphers are A–Z only.
+    Use ``_letter_count_dropped(text)`` to surface how many were excluded.
+    """
+    return [c.upper() for c in text if c.isalpha() and c.isascii()]
+
+
+def _letter_count_dropped(text: str) -> int:
+    """Count characters that pass ``isalpha()`` but are not ASCII A–Z.
+
+    These would have crashed the cipher dict lookups (KeyError) before the
+    fix in F-NEW-IMPROVE-2. Surfacing the count tells non-English users
+    that their text was partially analyzed.
+    """
+    return sum(1 for c in text if c.isalpha() and not c.isascii())
 
 
 def _reduce(n: int) -> int:
@@ -90,6 +105,7 @@ def _is_master(n: int) -> bool:
     return n in (11, 22, 33)
 
 
+@functools.lru_cache(maxsize=512)
 def pythagorean(text: str) -> CipherResult:
     letters = _letters_only(text)
     bd = [(c, _PYTHAGOREAN[c]) for c in letters]
@@ -97,6 +113,7 @@ def pythagorean(text: str) -> CipherResult:
     return CipherResult("Pythagorean", "🧮", raw, _reduce(raw), bd)
 
 
+@functools.lru_cache(maxsize=512)
 def hebrew(text: str) -> CipherResult:
     letters = _letters_only(text)
     bd = [(c, _GEMATRIA[c]) for c in letters]
@@ -104,6 +121,7 @@ def hebrew(text: str) -> CipherResult:
     return CipherResult("Hebrew Gematria", "✡️", raw, _reduce(raw), bd)
 
 
+@functools.lru_cache(maxsize=512)
 def chaldean(text: str) -> CipherResult:
     letters = _letters_only(text)
     bd = [(c, _CHALDEAN[c]) for c in letters]
@@ -147,6 +165,7 @@ _MIRROR_MAP: dict[str, str] = {
 }
 
 
+@functools.lru_cache(maxsize=256)
 def structural_profile(text: str) -> StructuralProfile:
     raw = text.upper()
     letters = _letters_only(text)
@@ -207,10 +226,12 @@ def structural_profile(text: str) -> StructuralProfile:
 # ANAGRAMS (limited to prevent combinatorial explosion)
 # ===========================================================================
 
+_MAX_INPUT_CHARS = 4096  # Telegram message limit; defensive cap to bound CPU
 _MAX_ANAGRAM_LETTERS = 8
 _MAX_ANAGRAM_DISPLAY = 200
 
 
+@functools.lru_cache(maxsize=128)
 def generate_anagrams(text: str) -> list[str]:
     """All unique letter permutations (sorted, deduped). ≤ 8 letters only."""
     import itertools
@@ -281,6 +302,11 @@ def _anagram_factorial_str(letter_count: int) -> str:
 def render_summary_card(text: str) -> str:
     """Render the world-class summary card for *text*.
 
+    Defensive cap: inputs longer than ``_MAX_INPUT_CHARS`` are truncated
+    before any cipher work runs. This bounds CPU on accidental DoS
+    (``/summary <paste-of-large-doc>``) and matches Telegram's per-message
+    limit. A truncation notice is included in the header band.
+
     Layout (visual hierarchy):
         1. Header band     — titled frame with target + char count
         2. At-a-glance     — boxed chip grid (3 ciphers + composition)
@@ -293,6 +319,16 @@ def render_summary_card(text: str) -> str:
     text = text.strip()
     if not text:
         return "🔮 **Summary Card**\n\n_Send text to analyze._"
+
+    # Defensive cap to bound CPU on accidental huge inputs.
+    truncated = len(text) > _MAX_INPUT_CHARS
+    if truncated:
+        text = text[:_MAX_INPUT_CHARS]
+
+    dropped = _letter_count_dropped(text)
+    # Drop non-ASCII alpha before any cipher work so we never KeyError.
+    if dropped:
+        text = "".join(c for c in text if not (c.isalpha() and not c.isascii()))
 
     # ─── DATA ──────────────────────────────────────────────────────────────
     py = pythagorean(text)
@@ -314,6 +350,13 @@ def render_summary_card(text: str) -> str:
     out.append("```")
     out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     out.append(f"   {text}")
+    notices = []
+    if truncated:
+        notices.append(f"⚠️ truncated to {_MAX_INPUT_CHARS:,} chars")
+    if dropped:
+        notices.append(f"⚠️ {dropped} non-ASCII letter(s) dropped (ciphers are A–Z only)")
+    if notices:
+        out.append("   " + "  ·  ".join(notices))
     out.append(f"   📊 {prof.char_count} chars · {prof.letter_count} letters")
     out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
     out.append("```")
@@ -812,38 +855,47 @@ def _render_slack(card: str, target: str) -> str:
 def _render_sms(card: str, target: str) -> str:
     """Plain text, single line, ≤ 480 chars (3 SMS segments).
 
-    Drops all collapsibles, tables, and markup. Keeps only the score row
-    and structural profile as a one-liner so the SMS user still gets the
-    three numerological roots.
+    The card places the three numerological roots on a single AT-A-GLANCE
+    line (the older parser expected a pipe table, which was wrong). New
+    parser extracts the three roots via regex from the AT-A-GLANCE box,
+    then assembles a dense one-liner that includes structural profile.
+
+    Layout within the 480-char budget:
+      - "Summary: roots P/H/C. "  (~ 25 chars)
+      - "TARGET. N chars · M letters (N V / M C, K unique). "  (~ 60 chars)
+      - Stripped plaintext tail (~ 395 chars remaining)
     """
     import re
 
-    # The score table has rows like:
-    #   | 🧮 Pythagorean | **61** | **7** | `61` → `7` |
-    # Extract the Root column by splitting on '|' and grabbing field 3
-    # (label | raw | root | ladder). Strip any '**' bold markers.
-    roots: list[str] = []
-    for line in card.splitlines():
-        if not line.lstrip().startswith("|"):
-            continue
-        if not any(e in line for e in "🧮✡️🌙"):
-            continue
-        parts = [p.strip().strip("*") for p in line.split("|")]
-        # parts: ['', '<label>', '<raw>', '<root>', '<ladder>', '']
-        if len(parts) >= 5 and parts[3].isdigit():
-            roots.append(parts[3])
-        if len(roots) == 3:
-            break
-
-    if len(roots) == 3:
-        py_root, he_root, ch_root = roots
+    # AT-A-GLANCE box line looks like:
+    #   ║  🧮 **7**   ·   ✡️ **7**   ·   🌙 **5**
+    # Capture the three root values regardless of markdown bold markers.
+    m = re.search(
+        r"🧮[^\d]*\*\*?(\d+)\*\*?.*?✡️[^\d]*\*\*?(\d+)\*\*?.*?🌙[^\d]*\*\*?(\d+)\*\*?",
+        card,
+        re.DOTALL,
+    )
+    if m:
+        py_root, he_root, ch_root = m.groups()
     else:
         py_root = he_root = ch_root = "?"
 
+    # Structural one-liner from the rendered card. Matches the
+    # "V/C=N/M · K unique" segment the renderer emits.
+    p = re.search(
+        r"(\d+)V/(\d+)C\s*·\s*(\d+)\s*unique",
+        card,
+    )
+    if p:
+        vowels, consonants, unique = p.groups()
+        profile = f"{vowels}V/{consonants}C, {unique} unique. "
+    else:
+        profile = ""
+
     plain = _strip_markdown(card)
     summary = f"Summary: roots {py_root}/{he_root}/{ch_root}. "
-    out = (summary + plain)[:480]
-    return out
+    body = (summary + profile + plain)[:480]
+    return body
 
 
 def _render_email(card: str, target: str) -> str:
@@ -852,11 +904,18 @@ def _render_email(card: str, target: str) -> str:
 
 
 def _render_glasses(card: str, target: str) -> str:
-    """30-char monospace row: target + 3 root numbers + 3 ratios.
+    """30-char monospace rows: target + 3 root numbers + structural profile.
 
     Output is a single block of fixed-width lines so it can render on a
-    smartwatch HUD or smart-glasses overlay (Even Realities G1, Vuzix
-    Shield, etc.) which typically cap at ~30 chars/line and ~6 lines.
+    smartwatch HUD or smart-glasses overlay.
+
+    NOTE (F-NEW-IMPROVE-10): this is a GENERIC monospace placeholder — it
+    does NOT target any specific HUD's wire format. Real Even Realities G1
+    uses ``.arxml``/`.ehrl` overlay descriptors; Vuzix Shield uses their
+    proprietary JSON-LD layout. To target a real device, replace this
+    function with a device-specific layout and register it in
+    ``_PLATFORM_RENDERERS`` under a new key (e.g. ``"glasses_g1"``).
+    The 30×6 constraint here is the safe upper bound across most HUDs.
     """
     py = pythagorean(target)
     he = hebrew(target)
@@ -914,3 +973,181 @@ def render_for_platform(text: str, platform: str) -> str:
     platform = (platform or "default").lower()
     renderer = _PLATFORM_RENDERERS.get(platform, _render_default)
     return renderer(card, text)
+
+
+# ===========================================================================
+# JSON + COMPARE (programmatic + side-by-side)
+# ===========================================================================
+
+
+def render_summary_json(text: str) -> dict:
+    """Return the Summary Card as a structured JSON-serialisable dict.
+
+    Shape:
+        {
+          "target": <input text, possibly truncated>,
+          "truncated": <bool>,
+          "dropped_non_ascii": <int>,
+          "ciphers": {
+            "pythagorean": {"raw": int, "root": int, "master": bool, "ladder": [int]},
+            "hebrew":      {...},
+            "chaldean":    {...},
+          },
+          "profile": {
+            "char_count": int,
+            "letter_count": int,
+            "vowel_count": int,
+            "consonant_count": int,
+            "unique_letters": int,
+            "vowel_ratio": float,
+            "bigram_diversity": float,
+            "palindrome": bool,
+            "isogram": bool,
+            "mirrored_pairs": [(str, str)],
+            "rarest_letter": [str, int] | null,
+            "most_common_letter": [str, int] | null,
+          },
+          "anagrams": {"count": int, "letters": int},
+        }
+
+    Single source of truth: the platform renderers should consume this and
+    format per-platform. Today they re-parse the rendered card (see SMS
+    bug history). JSON consumers (scripts, web UI JSON endpoint) can
+    bypass the markdown layer entirely.
+    """
+    truncated = len(text) > _MAX_INPUT_CHARS
+    work_text = text[:_MAX_INPUT_CHARS] if truncated else text
+    dropped = _letter_count_dropped(work_text)
+
+    py = pythagorean(work_text)
+    he = hebrew(work_text)
+    ch = chaldean(work_text)
+    prof = structural_profile(work_text)
+    anagrams = generate_anagrams(work_text)
+
+    def cipher_dict(c: CipherResult) -> dict:
+        return {
+            "raw": c.raw,
+            "root": c.root,
+            "master": _is_master(c.root),
+            "ladder": _root_ladder(c.raw),
+        }
+
+    return {
+        "target": work_text,
+        "truncated": truncated,
+        "dropped_non_ascii": dropped,
+        "ciphers": {
+            "pythagorean": cipher_dict(py),
+            "hebrew": cipher_dict(he),
+            "chaldean": cipher_dict(ch),
+        },
+        "profile": {
+            "char_count": prof.char_count,
+            "letter_count": prof.letter_count,
+            "vowel_count": prof.vowel_count,
+            "consonant_count": prof.consonant_count,
+            "unique_letters": prof.unique_letters,
+            "vowel_ratio": prof.vowel_ratio,
+            "bigram_diversity": prof.bigram_diversity,
+            "palindrome": prof.palindrome,
+            "isogram": prof.isogram,
+            "mirrored_pairs": [list(p) for p in prof.mirrored_pairs],
+            "rarest_letter": list(prof.rarest_letter) if prof.rarest_letter else None,
+            "most_common_letter": list(prof.most_common_letter) if prof.most_common_letter else None,
+        },
+        "anagrams": {"count": len(anagrams), "letters": prof.letter_count},
+    }
+
+
+def render_compare_card(text_a: str, text_b: str) -> str:
+    """Side-by-side comparison of two texts. Returns the standard-Markdown card.
+
+    Layout:
+        1. Header band with both targets
+        2. Three-cipher comparison table (roots side-by-side + delta)
+        3. Shared-letter analysis (intersection of A–Z)
+        4. Profile delta (vowel ratio, bigram diversity, etc.)
+        5. Resonance verdict
+    """
+    json_a = render_summary_json(text_a)
+    json_b = render_summary_json(text_b)
+    out: list[str] = []
+    out.append("### ⚖️ Isopsephy Compare")
+    out.append("")
+    out.append("```")
+    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    out.append(f"   A: {json_a['target']}")
+    out.append(f"   B: {json_b['target']}")
+    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    out.append("```")
+    out.append("")
+
+    out.append("#### 🧮 Cipher Roots")
+    out.append("")
+    out.append("| Cipher | A | B | Δ |")
+    out.append("|---|---|---|---|")
+    for name in ("pythagorean", "hebrew", "chaldean"):
+        ra = json_a["ciphers"][name]["root"]
+        rb = json_b["ciphers"][name]["root"]
+        delta = rb - ra
+        sign = "+" if delta > 0 else ""
+        out.append(f"| {name.title()} | **{ra}** | **{rb}** | {sign}{delta} |")
+    out.append("")
+
+    # Shared-letter analysis
+    letters_a = set(c for c in text_a.upper() if c.isascii() and c.isalpha())
+    letters_b = set(c for c in text_b.upper() if c.isascii() and c.isalpha())
+    shared = letters_a & letters_b
+    only_a = letters_a - letters_b
+    only_b = letters_b - letters_a
+    out.append("#### 🔤 Letter Overlap")
+    out.append("")
+    out.append(f"- **Shared** ({len(shared)}): {', '.join(sorted(shared)) or '_none_'}")
+    out.append(f"- **Only in A** ({len(only_a)}): {', '.join(sorted(only_a)) or '_none_'}")
+    out.append(f"- **Only in B** ({len(only_b)}): {', '.join(sorted(only_b)) or '_none_'}")
+    out.append("")
+
+    out.append("#### 🧬 Profile Delta")
+    out.append("")
+    out.append("| Metric | A | B |")
+    out.append("|---|---|---|")
+    pa, pb = json_a["profile"], json_b["profile"]
+    out.append(f"| Letter count | {pa['letter_count']} | {pb['letter_count']} |")
+    out.append(f"| Vowel ratio | {pa['vowel_ratio']:.0%} | {pb['vowel_ratio']:.0%} |")
+    out.append(f"| Bigram diversity | {pa['bigram_diversity']:.0%} | {pb['bigram_diversity']:.0%} |")
+    out.append(f"| Isogram | {pa['isogram']} | {pb['isogram']} |")
+    out.append(f"| Palindrome | {pa['palindrome']} | {pb['palindrome']} |")
+    out.append("")
+
+    # Verdict
+    roots_a = {json_a["ciphers"][n]["root"] for n in ("pythagorean", "hebrew", "chaldean")}
+    roots_b = {json_b["ciphers"][n]["root"] for n in ("pythagorean", "hebrew", "chaldean")}
+    if roots_a == roots_b:
+        verdict = "🌀 **Full resonance** — same root set in both texts."
+    elif roots_a & roots_b:
+        overlap = sorted(roots_a & roots_b)
+        verdict = f"🌗 **Partial resonance** — shared roots: {overlap}."
+    else:
+        verdict = "🌈 **No resonance** — completely distinct root sets."
+    out.append("---")
+    out.append("")
+    out.append(f"**Verdict:** {verdict}")
+    return "\n".join(out)
+
+
+def parse_compare_args(text: str) -> tuple[str, str] | None:
+    """Parse ``A vs B`` (or ``A v B``, ``A versus B``) into ``(A, B)``.
+
+    Returns None if the input isn't a comparison.
+    """
+    import re
+
+    patterns = [
+        r"^(.+?)\s+(?:vs\.?|v\.?|versus)\s+(.+?)$",
+    ]
+    for pat in patterns:
+        m = re.match(pat, text.strip(), re.IGNORECASE)
+        if m:
+            return m.group(1).strip(), m.group(2).strip()
+    return None

@@ -1022,8 +1022,16 @@ class GatewaySlashCommandsMixin:
         )
 
     async def _handle_summary_command(self, event: MessageEvent) -> str:
-        """Handle /summary command — Pythagorean + Gematria analysis card."""
-        from gateway.operator_shell.summary_card import render_summary_card
+        """Handle /summary command — Pythagorean + Gematria analysis card.
+
+        Supports ``/summary A vs B`` (or ``v`` / ``versus``) which renders a
+        side-by-side comparison instead of a single-text card.
+        """
+        from gateway.operator_shell.summary_card import (
+            parse_compare_args,
+            render_compare_card,
+            render_summary_card,
+        )
 
         raw_args = event.get_command_args().strip()
         if not raw_args:
@@ -1032,9 +1040,14 @@ class GatewaySlashCommandsMixin:
                 "Send `/summary <text>` to analyze it.\n\n"
                 "• 🧮 Pythagorean numerology\n"
                 "• ✡️ Hebrew Gematria (Mispar Hechrechi)\n"
-                "• 🔤 Anagram permutations\n\n"
-                "_Example:_ `/summary Hello World`"
+                "• 🔤 Anagram permutations\n"
+                "• ⚖️ Compare two texts: `/summary A vs B`\n\n"
+                "_Example:_ `/summary Hello World`  ·  `/summary Anna vs Beth`"
             )
+        compared = parse_compare_args(raw_args)
+        if compared:
+            a, b = compared
+            return render_compare_card(a, b)
         return render_summary_card(raw_args)
 
     async def _handle_commands_command(self, event: MessageEvent) -> str:
