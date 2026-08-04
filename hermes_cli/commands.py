@@ -397,7 +397,6 @@ ACTIVE_SESSION_BYPASS_COMMANDS: frozenset[str] = frozenset(
         "status",
         "steer",
         "stop",
-        "summary",
         "update",
         "version",
     }
