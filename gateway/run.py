@@ -7318,6 +7318,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _cmd_def_inner and _cmd_def_inner.name in _DEDICATED_HANDLERS:
                 if _cmd_def_inner.name == "help":
                     return await self._handle_help_command(event)
+                if _cmd_def_inner.name == "summary":
+                    return await self._handle_summary_command(event)
                 if _cmd_def_inner.name == "commands":
                     return await self._handle_commands_command(event)
                 if _cmd_def_inner.name == "profile":
