@@ -197,7 +197,7 @@ def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
             "",
             panel_stamp("find"),
         ])
-        return {m.group(1)}, with_nav(None, "find")
+        return text, with_nav(None, "find")
 
     lines = [f"🔎 *{query}* — {len(hits)} match{'' if len(hits) == 1 else 'es'}", ""]
     buttons: List[ButtonRow] = []

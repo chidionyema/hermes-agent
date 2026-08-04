@@ -21,8 +21,8 @@ def test_empty_find_is_map_atlas():
 
 def test_spine_map_glyph():
     labels = [l for l, _cb in nav()]
-    assert "🗺" in labels
-    assert "🔎" not in labels
+    assert any("🗺" in l for l in labels)
+    assert all("🔎" not in l for l in labels)
 
 
 def test_typed_find_still_searches():
