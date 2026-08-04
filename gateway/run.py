@@ -5412,12 +5412,19 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Pick up edits without waiting for an unrelated restart. hermes_agent is installed
         # editable, so a restart always loads the working tree — what was missing is anything
         # that *causes* one when the tree changes. See gateway/source_watch.py.
-        if connected_count > 0:
-            try:
-                from gateway.source_watch import start_watcher
-                start_watcher()
-            except Exception as e:
-                logger.warning("Source watch unavailable: %s", e)
+        #
+        # NOTE: source-watch is started unconditionally (when supervised + enabled),
+        # NOT gated on `connected_count > 0`. The earlier gate caused a 4-hour silent
+        # window 2026-08-04 17:12–21:19 when Telegram's 30s connect-timeout left
+        # `connected_count=0` at startup; the watcher was skipped, and even after
+        # Telegram reconnected 44s later, no code path re-started the watcher. Fix:
+        # start it unconditionally — `is_supervised()` inside `start_watcher()` is the
+        # real gate (won't fire in an unsupervised terminal run).
+        try:
+            from gateway.source_watch import start_watcher
+            start_watcher()
+        except Exception as e:
+            logger.warning("Source watch unavailable: %s", e)
 
         # Build initial channel directory for send_message name resolution
         try:
