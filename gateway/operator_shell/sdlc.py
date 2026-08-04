@@ -93,11 +93,21 @@ def _builds_snapshot() -> str:
     """CI/builds snapshot. Graceful on any failure."""
     try:
         import subprocess, json, os
-        # Try gh CLI for recent workflow runs
+        # Try gh CLI for recent workflow runs.
+        # Narrow env: don't leak secrets to the gh subprocess. We only need
+        # PATH, HOME, and the GH token if the user has one configured.
+        _gh_env = {
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "HOME": os.environ.get("HOME", ""),
+            "GH_NO_UPDATE_NOTIFIER": "1",
+        }
+        for var in ("GH_TOKEN", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "XDG_DATA_HOME"):
+            if var in os.environ:
+                _gh_env[var] = os.environ[var]
         result = subprocess.run(
             ["gh", "run", "list", "--limit", "3", "--json", "status,displayTitle,headBranch"],
             capture_output=True, text=True, timeout=15,
-            env={**os.environ, "GH_NO_UPDATE_NOTIFIER": "1"},
+            env=_gh_env,
         )
         if result.returncode == 0:
             data = json.loads(result.stdout)
