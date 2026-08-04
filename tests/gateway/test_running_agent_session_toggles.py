@@ -201,3 +201,21 @@ async def test_btw_dispatches_mid_run():
     runner._handle_background_command.assert_awaited_once()
     assert result is not None
     assert "can't run mid-turn" not in result
+
+
+def test_summary_in_active_session_bypass_commands():
+    """Module-load invariant: 'summary' must be in ACTIVE_SESSION_BYPASS_COMMANDS.
+
+    This protects against 'polish' commits that strip the bypass entry
+    while claiming unrelated cleanup. Without this guard, a future commit
+    could revert the frozenset entry while keeping the explicit branch,
+    or vice versa, and the regression test would still pass on one of
+    the two paths — but the runtime invariant would silently rot.
+    """
+    from hermes_cli.commands import ACTIVE_SESSION_BYPASS_COMMANDS
+
+    assert "summary" in ACTIVE_SESSION_BYPASS_COMMANDS, (
+        "'summary' was removed from ACTIVE_SESSION_BYPASS_COMMANDS — "
+        "/summary will hit the running-agent catch-all and return "
+        "'can't run mid-turn'."
+    )
