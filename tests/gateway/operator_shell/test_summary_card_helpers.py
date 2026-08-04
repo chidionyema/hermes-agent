@@ -12,13 +12,19 @@ from gateway.operator_shell.summary_card import (
     _MAX_INPUT_CHARS,
     _anagram_factorial_str,
     _breakdown_table,
+    _contribution_bar,
+    _element_emoji,
     _escape_markdownv2,
+    _input_transformations,
     _ladder_diagram,
     _letter_count_dropped,
+    _letter_contribution,
     _letters_only,
+    _math_derivation,
     _md_to_html,
     _md_to_mrkdwn,
     _ratio_bar,
+    _reduction_equation,
     _render_sms,
     _score_chip,
     _strip_markdown,
@@ -374,3 +380,154 @@ def test_render_compare_card_resonance_verdict():
     # WORLD and WORLD have identical roots — they trivially resonate
     out = render_compare_card("WORLD", "WORLD")
     assert "Full resonance" in out
+
+
+# ── Input transformation log (UI improvement) ───────────────────────────
+
+
+def test_input_transformations_trims_whitespace():
+    notes = _input_transformations("  hello  ", was_truncated=False, dropped=0)
+    assert any("Trimmed" in n and "2 leading" in n and "2 trailing" in n for n in notes)
+
+
+def test_input_transformations_uppercases():
+    notes = _input_transformations("hello", was_truncated=False, dropped=0)
+    assert any("Normalised 5 letter(s) to uppercase" in n for n in notes)
+
+
+def test_input_transformations_truncation():
+    notes = _input_transformations("A" * 5000, was_truncated=True, dropped=0)
+    assert any("Truncated" in n for n in notes)
+
+
+def test_input_transformations_drops_unicode():
+    notes = _input_transformations("café", was_truncated=False, dropped=1)
+    assert any("non-ASCII" in n for n in notes)
+
+
+def test_input_transformations_clean_input_no_notes():
+    """Already-normalised input: no transformations applied, no notes."""
+    notes = _input_transformations("HELLO", was_truncated=False, dropped=0)
+    assert notes == []
+
+
+def test_render_summary_card_logs_trimming():
+    out = render_summary_card("  hello  ")
+    assert "Trimmed" in out
+    assert "whitespace" in out
+
+
+# ── Math derivation helpers (UI improvement) ─────────────────────────────
+
+
+def test_reduction_equation_single_step():
+    # 25 → 2+5 = 7 (equation form)
+    out = _reduction_equation([25, 7])
+    assert "2+5" in out
+    assert "=7" in out or "=`7`" in out
+
+
+def test_reduction_equation_multi_step():
+    out = _reduction_equation([196, 16, 7])
+    # Two chained reductions
+    assert "1+9+6" in out
+    assert "1+6" in out
+
+
+def test_reduction_equation_master_preserved():
+    """11/22/33 are masters; ladder stops, equation must mark it."""
+    out = _reduction_equation([29, 11])
+    assert "master" in out
+    assert "11" in out
+    assert "stop" in out
+
+
+def test_reduction_equation_trivial_root():
+    out = _reduction_equation([7])
+    # single-step ladder — wrapped format
+    assert "7" in out
+    assert "single" in out or "_" in out  # markdown italic
+
+
+def test_element_emoji_water():
+    assert _element_emoji(3) == "💧"
+    assert _element_emoji(7) == "💧"
+
+
+def test_element_emoji_fire():
+    assert _element_emoji(1) == "🔥"
+    assert _element_emoji(9) == "🔥"
+
+
+def test_element_emoji_earth():
+    assert _element_emoji(2) == "🌍"
+    assert _element_emoji(6) == "🌍"
+
+
+def test_element_emoji_air():
+    assert _element_emoji(4) == "💨"
+    assert _element_emoji(8) == "💨"
+
+
+def test_element_emoji_masters():
+    assert _element_emoji(11) == "⚡"
+    assert _element_emoji(22) == "🌟"
+    assert _element_emoji(33) == "✨"
+
+
+def test_letter_contribution_top_n():
+    # HELLO: L appears twice → 3+3=6 contribution; H appears once → 8
+    contrib = _letter_contribution(
+        [("H", 8), ("E", 5), ("L", 3), ("L", 3), ("O", 6)],
+        top=5,
+    )
+    assert contrib[0] == ("H", 8)  # highest total
+    assert ("L", 6) in contrib  # 2 × 3
+
+
+def test_letter_contribution_empty():
+    assert _letter_contribution([], top=5) == []
+
+
+def test_contribution_bar_full():
+    assert _contribution_bar(10, 10, width=10) == "█" * 10
+
+
+def test_contribution_bar_zero():
+    """Zero-value contribution renders at least one filled block (presence marker)."""
+    bar = _contribution_bar(0, 10, width=10)
+    assert bar.count("█") >= 1  # never fully empty
+    assert bar.count("░") >= 1  # never fully filled
+
+
+def test_math_derivation_shows_step_by_step():
+    out = _math_derivation(
+        "HELLO",
+        type("C", (), {"name": "Pythagorean", "raw": 25, "root": 7, "breakdown": [("H", 8), ("E", 5), ("L", 3), ("L", 3), ("O", 6)]})(),
+        type("C", (), {"name": "Hebrew", "raw": 133, "root": 7, "breakdown": [("H", 8), ("E", 5), ("L", 30), ("L", 30), ("O", 60)]})(),
+        type("C", (), {"name": "Chaldean", "raw": 23, "root": 5, "breakdown": [("H", 5), ("E", 5), ("L", 3), ("L", 3), ("O", 7)]})(),
+        type("P", (), {"char_count": 5, "letter_count": 5, "vowel_count": 2, "consonant_count": 3, "unique_letters": 4, "bigram_diversity": 1.0, "palindrome": False, "isogram": False, "mirrored_pairs": [], "rarest_letter": ("H", 1), "most_common_letter": ("L", 2), "digit_count": 0, "space_count": 0, "vowel_ratio": 0.4})(),
+    )
+    assert "8+5+3+3+6" in out  # Pythagorean sum
+    assert "8+5+30+30+60" in out  # Hebrew sum
+    assert "5+5+3+3+7" in out   # Chaldean sum
+    assert "Vowels" in out
+    assert "Consonants" in out
+    assert "Bigrams" in out
+
+
+def test_render_summary_card_includes_math_derivation():
+    out = render_summary_card("HELLO")
+    assert "Math Derivation" in out
+    # The derivation section shows the explicit sums
+    assert "8+5+3+3+6" in out
+
+
+def test_render_summary_card_includes_element_emojis():
+    out = render_summary_card("HELLO")
+    assert "💧" in out or "🔥" in out or "🌍" in out or "💨" in out
+
+
+def test_render_summary_card_logs_truncation_for_huge_input():
+    out = render_summary_card("A" * (_MAX_INPUT_CHARS + 100))
+    assert "Truncated" in out

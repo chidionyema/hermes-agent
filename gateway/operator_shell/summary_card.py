@@ -291,6 +291,239 @@ def _ladder_diagram(ladder: list[int]) -> str:
     return " → ".join(parts)
 
 
+def _reduction_equation(ladder: list[int]) -> str:
+    """Show the reduction as a chain of digit-sum equations.
+
+    Example: ``61 → 6+1=7`` (single step)
+             ``196 → 1+9+6=16 → 1+6=7`` (two steps)
+             ``44 → 4+4=8`` (note: 44 is NOT a master; reduced to 8)
+    Master numbers (11/22/33) appear with a stop marker: ``29 → 2+9=11 (master, stop)``.
+    """
+    if len(ladder) < 2:
+        return f"`{ladder[0]}` _(single step)_"
+    parts: list[str] = []
+    for i in range(len(ladder) - 1):
+        n = ladder[i]
+        digits = "+".join(str(d) for d in str(n))
+        nxt = ladder[i + 1]
+        if _is_master(nxt) and i == len(ladder) - 2:
+            parts.append(f"`{digits}`=`{nxt}` (master, stop)")
+        else:
+            parts.append(f"`{digits}`=`{nxt}`")
+    return " → ".join(parts)
+
+
+def _element_emoji(root: int) -> str:
+    """Numerology element association (Western tradition, 1–9 cycle).
+
+    1, 5, 9 → Fire 🔥
+    2, 6     → Earth 🌍
+    3, 7     → Water 💧
+    4, 8     → Air 💨
+    Masters 11/22/33 → their own glyphs
+    """
+    elements = {
+        1: "🔥", 2: "🌍", 3: "💧", 4: "💨",
+        5: "🔥", 6: "🌍", 7: "💧", 8: "💨", 9: "🔥",
+        11: "⚡", 22: "🌟", 33: "✨",
+    }
+    return elements.get(root, "·")
+
+
+def _letter_contribution(breakdown: list[tuple[str, int]], top: int = 5) -> list[tuple[str, int]]:
+    """Top-N letter contributions sorted by total value (value × count).
+
+    Returns ``[(letter, total_contribution), ...]``.
+    """
+    if not breakdown:
+        return []
+    counter: Counter[str] = Counter()
+    values: dict[str, int] = {}
+    for letter, val in breakdown:
+        counter[letter] += 1
+        values[letter] = val
+    contrib = [(letter, counter[letter] * values[letter]) for letter in counter]
+    contrib.sort(key=lambda kv: (-kv[1], kv[0]))
+    return contrib[:top]
+
+
+def _contribution_bar(value: int, max_value: int, width: int = 10) -> str:
+    """Mini-bar showing a letter's share of the cipher sum."""
+    if max_value <= 0:
+        return "░" * width
+    filled = max(1, round(value / max_value * width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def _input_transformations(text: str, was_truncated: bool, dropped: int) -> list[str]:
+    """Human-readable list of every transformation applied to *text*.
+
+    Surfaces every normalisation step so the user can audit the math
+    (e.g. "5 letters dropped from 'café' → cipher sees only C, A, F").
+    """
+    notes: list[str] = []
+    original = text
+    work = text
+
+    # Whitespace stripping
+    if work != work.strip():
+        leading = len(work) - len(work.lstrip())
+        trailing = len(work) - len(work.rstrip())
+        parts = []
+        if leading:
+            parts.append(f"{leading} leading")
+        if trailing:
+            parts.append(f"{trailing} trailing")
+        notes.append(f"Trimmed {' + '.join(parts)} whitespace")
+        work = work.strip()
+
+    # Truncation
+    if was_truncated:
+        notes.append(
+            f"Truncated input to first {_MAX_INPUT_CHARS:,} chars "
+            f"(was {len(original):,} → {len(work):,})"
+        )
+
+    # Non-ASCII drop
+    if dropped:
+        notes.append(
+            f"Dropped {dropped} non-ASCII letter(s) — ciphers are A–Z only "
+            f"(see _letter_count_dropped)"
+        )
+
+    # Case normalisation
+    if work != work.upper() and any(c.isalpha() for c in work):
+        # Count letters that were lowercased
+        n_lower = sum(1 for c in work if c.islower() and c.isalpha())
+        if n_lower:
+            notes.append(f"Normalised {n_lower} letter(s) to uppercase")
+
+    return notes
+
+
+def _math_derivation(
+    text: str,
+    py: CipherResult,
+    he: CipherResult,
+    ch: CipherResult,
+    prof: StructuralProfile,
+) -> str:
+    """Step-by-step math for every cipher + structural calcs.
+
+    Format per cipher:
+        emoji Name (text)
+          letter_values = "H(8) E(5) L(3) L(3) O(6)"
+          sum_step      = "8+5+3+3+6 = 25"
+          reduction     = "25 → 2+5 = 7"
+          result        = "**7**"
+
+    Plus a structural section showing how V/C ratio, bigram count,
+    Atbash pairs, and isogram/palindrome detection were derived.
+    """
+    out: list[str] = []
+    letters = _letters_only(text)
+
+    # Per-letter contribution data, shared across ciphers
+    contrib = _letter_contribution(
+        [(c, _PYTHAGOREAN[c]) for c in letters], top=5
+    )
+    max_contrib = contrib[0][1] if contrib else 1
+
+    def _per_letter(cipher_dict: dict[str, int]) -> str:
+        if not letters:
+            return "_no letters_"
+        return " ".join(f"`{c}`({cipher_dict.get(c, '?')})" for c in letters)
+
+    def _sum_step(breakdown: list[tuple[str, int]]) -> str:
+        if not breakdown:
+            return "_no letters_"
+        parts = "+".join(str(v) for _, v in breakdown)
+        total = sum(v for _, v in breakdown)
+        return f"`{parts}` = **{total}**"
+
+    def _reduction_block(c: CipherResult) -> str:
+        ladder = _root_ladder(c.raw)
+        # Build the equation chain from the ladder (excluding the final root
+        # which is rendered separately for emphasis).
+        if len(ladder) >= 2:
+            steps: list[str] = []
+            for i in range(len(ladder) - 1):
+                n = ladder[i]
+                digits = "+".join(str(d) for d in str(n))
+                nxt = ladder[i + 1]
+                if _is_master(n) and i == len(ladder) - 2:
+                    steps.append(f"`{digits}`=`{n}` (master, stop)")
+                else:
+                    steps.append(f"`{digits}`=`{nxt}`")
+            chain = " → ".join(steps)
+            return f"`{c.raw}` → {chain} → **{c.root}**"
+        return f"`{c.raw}` (single step) → **{c.root}**"
+
+    out.append("#### 🧮 Math Derivation")
+    out.append("_Every number on this card, traced back to its source._")
+    out.append("")
+
+    # ── CIPHERS ──
+    for cipher_name, c, lookup in (
+        ("Pythagorean", py, _PYTHAGOREAN),
+        ("Hebrew Gematria", he, _GEMATRIA),
+        ("Chaldean", ch, _CHALDEAN),
+    ):
+        emoji = {"Pythagorean": "🧮", "Hebrew Gematria": "✡️", "Chaldean": "🌙"}[cipher_name]
+        out.append(f"**{emoji} {cipher_name}** — `{text}`")
+        out.append(f"  • Per-letter: {_per_letter(lookup)}")
+        out.append(f"  • Sum:       {_sum_step(c.breakdown)}")
+        out.append(f"  • Reduction: {_reduction_block(c)}")
+        out.append("")
+
+    # ── STRUCTURAL ──
+    out.append("**🧬 Structural derivation**")
+    out.append(f"  • Letters filtered to A–Z: {len(letters)} ({' '.join(letters) or '_none_'})")
+    vowel_list = [c for c in letters if c in VOWELS]
+    consonant_list = [c for c in letters if c.isalpha() and c not in VOWELS]
+    out.append(
+        f"  • Vowels ({len(vowel_list)}): {' '.join(vowel_list) or '_none_'}  ·  "
+        f"Consonants ({len(consonant_list)}): {' '.join(consonant_list) or '_none_'}"
+    )
+    if contrib:
+        bars = "  ".join(
+            f"`{letter}`×{value // max(1, _PYTHAGOREAN.get(letter, 1))} "
+            f"`{_contribution_bar(value, max_contrib)}` {value}"
+            for letter, value in contrib
+        )
+        out.append(f"  • Top contributors (Pythagorean): {bars}")
+
+    # Bigram derivation
+    bigrams = ["".join(p) for p in zip(letters, letters[1:])]
+    if bigrams:
+        bg_counter = Counter(bigrams)
+        unique_bg = len(set(bigrams))
+        bg_div = unique_bg / len(bigrams)
+        bg_lines = [f"  • Bigrams: {' → '.join(bigrams)}"]
+        bg_lines.append(
+            f"  • Diversity: {unique_bg} unique / {len(bigrams)} total = **{bg_div:.0%}**"
+        )
+        if len(bg_counter.most_common(5)) > 0:
+            top = ", ".join(f"`{bg}`×{n}" for bg, n in bg_counter.most_common(5))
+            bg_lines.append(f"  • Top bigrams: {top}")
+        out.extend(bg_lines)
+
+    # Atbash derivation
+    if prof.mirrored_pairs:
+        pairs_str = " · ".join(f"`{a}`↔`{z}`" for a, z in prof.mirrored_pairs)
+        out.append(f"  • Atbash mirror pairs: {pairs_str}")
+    else:
+        out.append("  • Atbash mirror pairs: _none present_")
+
+    # Boolean properties with derivation
+    iso = "yes" if prof.isogram else f"no (repeated: {sorted(c for c, n in Counter(letters).items() if n > 1)})"
+    pal = "yes" if prof.palindrome else "no"
+    out.append(f"  • Isogram: {iso}")
+    out.append(f"  • Palindrome: {pal}")
+    out.append("")
+    return "\n".join(out)
+
+
 def _anagram_factorial_str(letter_count: int) -> str:
     n = count_permutations(letter_count)
     if n <= 1_000_000:
@@ -316,6 +549,9 @@ def render_summary_card(text: str) -> str:
         6. Profile         — table of structural composition
         7. Detailed        — collapsibles with full math
     """
+    # Preserve the original for the input-transformation audit log; downstream
+    # operations work on the normalised copy.
+    original_text = text
     text = text.strip()
     if not text:
         return "🔮 **Summary Card**\n\n_Send text to analyze._"
@@ -482,6 +718,14 @@ def render_summary_card(text: str) -> str:
     out.append(f"| Letters | **{prof.letter_count}** |")
     out.append(f"| Unique letters | **{prof.unique_letters}** of 26 |")
     out.append(
+        f"| Element association (Pyth) | "
+        f"{_element_emoji(py.root)} root **{py.root}** |"
+    )
+    out.append(f"| Element association (Heb) | "
+              f"{_element_emoji(he.root)} root **{he.root}** |")
+    out.append(f"| Element association (Chal) | "
+              f"{_element_emoji(ch.root)} root **{ch.root}** |")
+    out.append(
         f"| Vowel ratio | `{_ratio_bar(prof.vowel_ratio)}` "
         f"**{prof.vowel_ratio * 100:.0f}%** "
         f"({prof.vowel_count} V / {prof.consonant_count} C) |"
@@ -504,6 +748,25 @@ def render_summary_card(text: str) -> str:
             f"| Most common | `{prof.most_common_letter[0]}` "
             f"×{prof.most_common_letter[1]} |"
         )
+    out.append("")
+
+    # ─── 6b. INPUT TRANSFORMATION LOG ─────────────────────────────
+    transformations = _input_transformations(original_text, truncated, dropped)
+    if transformations:
+        out.append("#### 🔧 Input Transformations")
+        out.append("_Every normalisation applied before ciphers ran._")
+        out.append("")
+        for t in transformations:
+            out.append(f"- {t}")
+        out.append("")
+
+    # ─── 6c. MATH DERIVATION (collapsible, expanded by default) ──────
+    out.append("<details open>")
+    out.append("<summary>🧮 Math Derivation — step-by-step, every number</summary>")
+    out.append("")
+    out.append(_math_derivation(text, py, he, ch, prof))
+    out.append("")
+    out.append("</details>")
     out.append("")
 
     # ─── 7. DETAILED BREAKDOWNS (collapsibles) ────────────────────────────

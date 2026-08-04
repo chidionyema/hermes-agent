@@ -308,5 +308,7 @@ class TestMarkdownStructure:
 
     def test_no_unbalanced_details_tags(self):
         out = render_summary_card("Hello World")
-        assert out.count("<details>") == out.count("</details>")
+        # Both <details> and <details open> count as openings
+        openings = out.count("<details>") + out.count("<details ")
+        assert openings == out.count("</details>")
         assert out.count("<summary>") == out.count("</summary>")
