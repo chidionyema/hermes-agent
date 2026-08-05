@@ -1,14 +1,22 @@
-"""OpenAI-compatible shim that forwards Hermes requests to `copilot --acp`.
+"""OpenAI-compatible shim that forwards Hermes requests to an ACP agent.
 
-This adapter lets Hermes treat the GitHub Copilot ACP server as a chat-style
-backend. Each request starts a short-lived ACP session, sends the formatted
-conversation as a single prompt, collects text chunks, and converts the result
-back into the minimal shape Hermes expects from an OpenAI client.
+This adapter lets Hermes treat an Agent Client Protocol server as a chat-style
+backend. Each request sends the formatted conversation as a single prompt,
+collects text chunks, and converts the result back into the minimal shape Hermes
+expects from an OpenAI client.
+
+It was written for `copilot --acp` and that remains the default in every
+respect. It also drives Claude Code via @agentclientprotocol/claude-agent-acp,
+which needs two things Copilot does not — real MCP tools instead of the prose
+<tool_call> contract, and a session held open across prompts. Both are opt-in
+and off by default; see _resolve_flavor / _resolve_mcp_servers /
+_session_reuse_enabled below and ~/.hermes/docs/CLAUDE_CLI_BRAIN.md.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import re
@@ -23,6 +31,8 @@ from typing import Any
 
 from agent.file_safety import get_read_block_error, is_write_denied
 from agent.redact import redact_sensitive_text
+
+logger = logging.getLogger(__name__)
 
 ACP_MARKER_BASE_URL = "acp://copilot"
 _DEFAULT_TIMEOUT_SECONDS = 900.0
@@ -61,11 +71,105 @@ def _resolve_command() -> str:
     )
 
 
-def _resolve_args() -> list[str]:
-    raw = os.getenv("HERMES_COPILOT_ACP_ARGS", "").strip()
-    if not raw:
-        return ["--acp", "--stdio"]
-    return shlex.split(raw)
+def _resolve_args(flavor: str | None = None) -> list[str]:
+    raw = os.getenv("HERMES_COPILOT_ACP_ARGS", "")
+    if raw.strip():
+        return shlex.split(raw)
+    if raw:
+        # Explicitly set to whitespace — the caller means "no arguments". This
+        # is the only way to express that, and claude-agent-acp needs it: it
+        # speaks ACP on stdio with no flags and rejects `--acp --stdio`.
+        return []
+    if flavor == _FLAVOR_CLAUDE:
+        return []
+    return ["--acp", "--stdio"]
+
+
+# ── ACP flavor ────────────────────────────────────────────────────────────
+# This module was written for `copilot --acp`, which honours the prose
+# tool-call contract in _format_messages_as_prompt (describe the OpenAI tools
+# array, ask for <tool_call>{...}</tool_call> blocks, regex them back out).
+#
+# Claude Code, driven through @agentclientprotocol/claude-agent-acp, cannot use
+# that contract — measured 2026-08-05, see ~/.hermes/docs/CLAUDE_CLI_BRAIN.md:
+#   * it checks its real tool list and refuses to fabricate a call for a tool it
+#     does not have, and
+#   * when it does call a tool the call arrives as an ACP session/update event,
+#     never as assistant text, so _extract_tool_calls_from_text can never see it.
+# For that flavor the prose contract is not merely useless, it is harmful: it
+# spends tokens asking for output the agent will refuse to produce. Tools reach
+# it the real way instead — as MCP servers passed to session/new.
+_FLAVOR_COPILOT = "copilot"
+_FLAVOR_CLAUDE = "claude"
+
+
+def _resolve_flavor(command: str) -> str:
+    """Which ACP agent are we driving? Explicit env wins, else infer from argv0."""
+    raw = os.getenv("HERMES_ACP_FLAVOR", "").strip().lower()
+    if raw in (_FLAVOR_CLAUDE, _FLAVOR_COPILOT):
+        return raw
+    return _FLAVOR_CLAUDE if "claude" in Path(command).name.lower() else _FLAVOR_COPILOT
+
+
+def _hermes_mcp_server() -> dict[str, Any]:
+    """Hermes' own tools, as an ACP mcpServers entry.
+
+    `--accept-hooks` / HERMES_ACCEPT_HOOKS matters: without it the server can
+    block on a hook prompt, and an ACP child has no TTY to answer it on.
+    """
+    return {
+        "name": "hermes",
+        "command": os.getenv("HERMES_MCP_COMMAND", "").strip()
+        or str(Path.home() / ".local" / "bin" / "hermes"),
+        "args": ["mcp", "serve", "--accept-hooks"],
+        "env": [{"name": "HERMES_ACCEPT_HOOKS", "value": "1"}],
+    }
+
+
+def _resolve_mcp_servers() -> list[dict[str, Any]]:
+    """MCP servers to hand the ACP agent at session/new.
+
+    Default is [] — unchanged from the copilot-only behaviour. Opt in with
+    HERMES_ACP_MCP_HERMES=1 (Hermes' own `hermes mcp serve`, 10 tools) or supply
+    a full JSON array in HERMES_ACP_MCP_SERVERS.
+    """
+    raw = os.getenv("HERMES_ACP_MCP_SERVERS", "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            logger.warning(
+                "HERMES_ACP_MCP_SERVERS is not valid JSON — ignoring it and "
+                "starting the ACP session with no MCP servers."
+            )
+            return []
+        if isinstance(parsed, list):
+            return [s for s in parsed if isinstance(s, dict)]
+        logger.warning(
+            "HERMES_ACP_MCP_SERVERS must be a JSON array of server objects, got %s "
+            "— ignoring.", type(parsed).__name__,
+        )
+        return []
+    if os.getenv("HERMES_ACP_MCP_HERMES", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return [_hermes_mcp_server()]
+    return []
+
+
+def _session_reuse_enabled() -> bool:
+    """Keep one ACP process + session alive across prompts?
+
+    Off by default (the copilot path has always been spawn-per-prompt). It is
+    effectively REQUIRED for the claude flavor with MCP: registration is
+    asynchronous and took ~30s to complete in measurement, so a spawn-per-prompt
+    client would pay that cost on every turn and would intermittently run with no
+    tools at all.
+    """
+    raw = os.getenv("HERMES_ACP_REUSE_SESSION", "").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    return False
 
 
 def _resolve_home_dir() -> str:
@@ -130,15 +234,30 @@ def _format_messages_as_prompt(
     model: str | None = None,
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any = None,
+    flavor: str = _FLAVOR_COPILOT,
 ) -> str:
-    sections: list[str] = [
-        "You are being used as the active ACP agent backend for Hermes.",
-        "Use ACP capabilities to complete tasks.",
-        "IMPORTANT: If you take an action with a tool, you MUST output tool calls using <tool_call>{...}</tool_call> blocks with JSON exactly in OpenAI function-call shape.",
-        "If no tool is needed, answer normally.",
-    ]
+    native_tools = flavor == _FLAVOR_CLAUDE
+    if native_tools:
+        # No prose tool contract: this agent executes its own tools and reports
+        # them over ACP, so asking for <tool_call> blocks buys nothing and it
+        # will (correctly) refuse to fake calls for tools it does not hold.
+        sections: list[str] = [
+            "You are being used as the active ACP agent backend for Hermes.",
+            "Use your own tools directly to complete the task, then answer.",
+            "Do not describe or simulate tool calls in your reply text — run them.",
+        ]
+    else:
+        sections = [
+            "You are being used as the active ACP agent backend for Hermes.",
+            "Use ACP capabilities to complete tasks.",
+            "IMPORTANT: If you take an action with a tool, you MUST output tool calls using <tool_call>{...}</tool_call> blocks with JSON exactly in OpenAI function-call shape.",
+            "If no tool is needed, answer normally.",
+        ]
     if model:
         sections.append(f"Hermes requested model hint: {model}")
+
+    if native_tools:
+        tools = None
 
     if isinstance(tools, list) and tools:
         tool_specs: list[dict[str, Any]] = []
@@ -344,18 +463,34 @@ class CopilotACPClient:
         self.base_url = base_url or ACP_MARKER_BASE_URL
         self._default_headers = dict(default_headers or {})
         self._acp_command = acp_command or command or _resolve_command()
-        self._acp_args = list(acp_args or args or _resolve_args())
+        # Flavor first: it decides the default argv (claude-agent-acp takes no
+        # flags, `copilot` needs --acp --stdio) and the prompt contract.
+        self._acp_flavor = _resolve_flavor(self._acp_command)
+        _explicit_args = acp_args if acp_args is not None else args
+        self._acp_args = list(
+            _explicit_args if _explicit_args is not None else _resolve_args(self._acp_flavor)
+        )
         self._acp_cwd = str(Path(acp_cwd or os.getcwd()).resolve())
+        self._mcp_servers = _resolve_mcp_servers()
+        self._reuse_session = _session_reuse_enabled()
         self.chat = _ACPChatNamespace(self)
         self.is_closed = False
         self._active_process: subprocess.Popen[str] | None = None
         self._active_process_lock = threading.Lock()
+        # An ACP session is inherently sequential — one prompt at a time — so a
+        # reused session has to serialise turns rather than interleave them.
+        self._live_lock = threading.Lock()
+        # Live transport, only populated when _reuse_session is on. Holding the
+        # process AND the sessionId is the point: MCP registration is async and
+        # measured at ~30s, so a fresh session per prompt would keep paying it.
+        self._live: SimpleNamespace | None = None
 
     def close(self) -> None:
         proc: subprocess.Popen[str] | None
         with self._active_process_lock:
             proc = self._active_process
             self._active_process = None
+        self._live = None
         self.is_closed = True
         if proc is None:
             return
@@ -383,6 +518,7 @@ class CopilotACPClient:
             model=model,
             tools=tools,
             tool_choice=tool_choice,
+            flavor=self._acp_flavor,
         )
         # Normalise timeout: run_agent.py may pass an httpx.Timeout object
         # (used natively by the OpenAI SDK) rather than a plain float.
@@ -429,6 +565,30 @@ class CopilotACPClient:
         )
 
     def _run_prompt(self, prompt_text: str, *, timeout_seconds: float) -> tuple[str, str]:
+        if not self._reuse_session:
+            return self._run_prompt_locked(prompt_text, timeout_seconds=timeout_seconds)
+        with self._live_lock:
+            return self._run_prompt_locked(prompt_text, timeout_seconds=timeout_seconds)
+
+    def _live_transport(self) -> SimpleNamespace | None:
+        """The cached process+session, or None if it is gone or was never kept."""
+        live = self._live
+        if live is None:
+            return None
+        if live.process.poll() is not None:
+            logger.info(
+                "ACP session %s ended (rc=%s) — a new one will be started.",
+                live.session_id, live.process.returncode,
+            )
+            self._live = None
+            return None
+        return live
+
+    def _run_prompt_locked(self, prompt_text: str, *, timeout_seconds: float) -> tuple[str, str]:
+        live = self._live_transport() if self._reuse_session else None
+        if live is not None:
+            return self._prompt_on(live, prompt_text, timeout_seconds=timeout_seconds)
+
         try:
             proc = subprocess.Popen(
                 [self._acp_command] + self._acp_args,
@@ -477,67 +637,23 @@ class CopilotACPClient:
         out_thread.start()
         err_thread.start()
 
-        next_id = 0
+        transport = SimpleNamespace(
+            process=proc,
+            inbox=inbox,
+            stderr_tail=stderr_tail,
+            next_id=0,
+            session_id="",
+        )
 
         def _request(method: str, params: dict[str, Any], *, text_parts: list[str] | None = None, reasoning_parts: list[str] | None = None) -> Any:
-            nonlocal next_id
-            next_id += 1
-            request_id = next_id
-            payload = {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "method": method,
-                "params": params,
-            }
-            proc.stdin.write(json.dumps(payload) + "\n")
-            proc.stdin.flush()
-
-            deadline = time.monotonic() + timeout_seconds
-            while time.monotonic() < deadline:
-                if proc.poll() is not None:
-                    break
-                try:
-                    msg = inbox.get(timeout=0.1)
-                except queue.Empty:
-                    continue
-
-                if self._handle_server_message(
-                    msg,
-                    process=proc,
-                    cwd=self._acp_cwd,
-                    text_parts=text_parts,
-                    reasoning_parts=reasoning_parts,
-                ):
-                    continue
-
-                if msg.get("id") != request_id:
-                    continue
-                if "error" in msg:
-                    err = msg.get("error") or {}
-                    raise RuntimeError(
-                        f"Copilot ACP {method} failed: {err.get('message') or err}"
-                    )
-                return msg.get("result")
-
-            stderr_text = "\n".join(stderr_tail).strip()
-            if proc.poll() is not None and stderr_text:
-                if _is_gh_copilot_deprecation_message(stderr_text):
-                    raise RuntimeError(
-                        "Hermes ACP mode requires the NEW GitHub Copilot CLI "
-                        "(github.com/github/copilot-cli), but the binary it just "
-                        "spawned is the deprecated `gh copilot` extension.\n\n"
-                        "Install the new CLI:\n"
-                        "  npm install -g @github/copilot\n"
-                        "  # then verify with: copilot --help\n\n"
-                        "If `copilot` already resolves to the new CLI but you still see this,\n"
-                        "point Hermes at it explicitly:\n"
-                        "  export HERMES_COPILOT_ACP_COMMAND=/path/to/new/copilot\n\n"
-                        "Alternative: use the `copilot` provider (no ACP, hits the Copilot API\n"
-                        "directly with a Copilot subscription token) via `hermes setup`.\n\n"
-                        f"Original error:\n{stderr_text}"
-                    )
-                raise RuntimeError(f"Copilot ACP process exited early: {stderr_text}")
-            raise TimeoutError(f"Timed out waiting for Copilot ACP response to {method}.")
+            return self._request_on(
+                transport,
+                method,
+                params,
+                timeout_seconds=timeout_seconds,
+                text_parts=text_parts,
+                reasoning_parts=reasoning_parts,
+            )
 
         try:
             _request(
@@ -561,19 +677,49 @@ class CopilotACPClient:
                 "session/new",
                 {
                     "cwd": self._acp_cwd,
-                    "mcpServers": [],
+                    "mcpServers": self._mcp_servers,
                 },
             ) or {}
             session_id = str(session.get("sessionId") or "").strip()
             if not session_id:
                 raise RuntimeError("Copilot ACP did not return a sessionId.")
+            transport.session_id = session_id
+            if self._mcp_servers:
+                logger.info(
+                    "ACP session %s started with %d MCP server(s): %s. Registration is "
+                    "asynchronous — tools may not be visible on the first turn.",
+                    session_id,
+                    len(self._mcp_servers),
+                    ", ".join(str(s.get("name") or "?") for s in self._mcp_servers),
+                )
 
-            text_parts: list[str] = []
-            reasoning_parts: list[str] = []
-            _request(
+            result = self._prompt_on(transport, prompt_text, timeout_seconds=timeout_seconds)
+        except BaseException:
+            self.close()
+            raise
+
+        if self._reuse_session:
+            self._live = transport
+        else:
+            self.close()
+        return result
+
+    def _prompt_on(
+        self,
+        transport: SimpleNamespace,
+        prompt_text: str,
+        *,
+        timeout_seconds: float,
+    ) -> tuple[str, str]:
+        """Send one session/prompt on an already-initialised transport."""
+        text_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        try:
+            self._request_on(
+                transport,
                 "session/prompt",
                 {
-                    "sessionId": session_id,
+                    "sessionId": transport.session_id,
                     "prompt": [
                         {
                             "type": "text",
@@ -581,12 +727,91 @@ class CopilotACPClient:
                         }
                     ],
                 },
+                timeout_seconds=timeout_seconds,
                 text_parts=text_parts,
                 reasoning_parts=reasoning_parts,
             )
-            return "".join(text_parts), "".join(reasoning_parts)
-        finally:
-            self.close()
+        except BaseException:
+            # A failed turn may have left the session unusable; drop it so the
+            # next call starts clean rather than prompting into a dead pipe.
+            if self._live is transport:
+                self.close()
+            raise
+        return "".join(text_parts), "".join(reasoning_parts)
+
+    def _request_on(
+        self,
+        transport: SimpleNamespace,
+        method: str,
+        params: dict[str, Any],
+        *,
+        timeout_seconds: float,
+        text_parts: list[str] | None = None,
+        reasoning_parts: list[str] | None = None,
+    ) -> Any:
+        proc: subprocess.Popen[str] = transport.process
+        inbox: queue.Queue[dict[str, Any]] = transport.inbox
+        stderr_tail: deque[str] = transport.stderr_tail
+        if proc.stdin is None:
+            raise RuntimeError("Copilot ACP process has no stdin.")
+
+        transport.next_id += 1
+        request_id = int(transport.next_id)
+        payload = {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "method": method,
+            "params": params,
+        }
+        proc.stdin.write(json.dumps(payload) + "\n")
+        proc.stdin.flush()
+
+        deadline = time.monotonic() + timeout_seconds
+        while time.monotonic() < deadline:
+            if proc.poll() is not None:
+                break
+            try:
+                msg = inbox.get(timeout=0.1)
+            except queue.Empty:
+                continue
+
+            if self._handle_server_message(
+                msg,
+                process=proc,
+                cwd=self._acp_cwd,
+                text_parts=text_parts,
+                reasoning_parts=reasoning_parts,
+            ):
+                continue
+
+            if msg.get("id") != request_id:
+                continue
+            if "error" in msg:
+                err = msg.get("error") or {}
+                raise RuntimeError(
+                    f"Copilot ACP {method} failed: {err.get('message') or err}"
+                )
+            return msg.get("result")
+
+        stderr_text = "\n".join(stderr_tail).strip()
+        if proc.poll() is not None and stderr_text:
+            if _is_gh_copilot_deprecation_message(stderr_text):
+                raise RuntimeError(
+                    "Hermes ACP mode requires the NEW GitHub Copilot CLI "
+                    "(github.com/github/copilot-cli), but the binary it just "
+                    "spawned is the deprecated `gh copilot` extension.\n\n"
+                    "Install the new CLI:\n"
+                    "  npm install -g @github/copilot\n"
+                    "  # then verify with: copilot --help\n\n"
+                    "If `copilot` already resolves to the new CLI but you still see this,\n"
+                    "point Hermes at it explicitly:\n"
+                    "  export HERMES_COPILOT_ACP_COMMAND=/path/to/new/copilot\n\n"
+                    "Alternative: use the `copilot` provider (no ACP, hits the Copilot API\n"
+                    "directly with a Copilot subscription token) via `hermes setup`.\n\n"
+                    f"Original error:\n{stderr_text}"
+                )
+            raise RuntimeError(f"Copilot ACP process exited early: {stderr_text}")
+        raise TimeoutError(f"Timed out waiting for Copilot ACP response to {method}.")
 
     def _handle_server_message(
         self,
