@@ -91,8 +91,11 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
         "",
         "*Pipeline state:*",
         f"• Policies: {policy_count} active · {injection_count} injections · {firings_count} firings",
-        f"• Regression: 110 pass / 15 fail (auto-fixed)",
-        f"• Gap-finding: 6 gaps (0 uncovered, 6 weak coverage)",
+        # Removed 2026-08-05: two hardcoded lines ("Regression: 110 pass / 15 fail",
+        # "Gap-finding: 6 gaps") were rendered here as if they were live telemetry.
+        # They were placeholder-free f-strings — constants, measured nothing, and had
+        # not been true since whenever they were typed. Do not re-add a status line
+        # here without a value read from a file or a probe at render time.
         f"• Cron: {cron_healthy} jobs healthy",
         f"• Change outcomes: {outcomes_count} data points",
         "",
