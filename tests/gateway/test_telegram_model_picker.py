@@ -70,8 +70,15 @@ class TestTelegramModelPicker:
 
         assert result.success is True
         assert_markdown_v2(sent["parse_mode"])
-        assert "provider\\_one" in sent["text"]
-        assert "`model_1`" in sent["text"]
+        # Behavior invariant: provider name + current model both appear in
+        # the rendered output. They are now inside a `text` code fence so
+        # markdown_v2 does not escape underscores — the semantics (the name
+        # is visible) is what matters, not the byte-level escape.
+        assert "provider_one" in sent["text"]
+        assert "model_1" in sent["text"]
+        # The new presentation uses the text-mode-ui 5-element grammar.
+        assert "```text" in sent["text"]
+        assert "━━━━" in sent["text"]
 
     @pytest.mark.asyncio
     async def test_back_button_escapes_dynamic_provider_label(self):

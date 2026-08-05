@@ -3535,14 +3535,22 @@ class TelegramAdapter(BasePlatformAdapter):
             keyboard = self._build_provider_keyboard(providers)
 
             provider_label = get_label(current_provider)
-            text = self.format_message(
-                (
+            try:
+                from gateway.text_mode_cards import render_model_picker_card
+                _card = render_model_picker_card(
+                    current_model=current_model,
+                    current_provider_label=provider_label,
+                    providers=providers,
+                    is_session_only=True,
+                )
+            except Exception:
+                _card = (
                     f"⚙ *Model Configuration*\n\n"
                     f"Current model: `{current_model or 'unknown'}`\n"
                     f"Provider: {provider_label}\n\n"
                     f"Select a provider:"
                 )
-            )
+            text = self.format_message(_card)
 
             thread_id = metadata.get("thread_id") if metadata else None
             reply_to_id = self._reply_to_message_id_for_send(None, metadata, reply_to_mode=self._reply_to_mode)

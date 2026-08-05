@@ -467,6 +467,43 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             )
         )
 
+    if action == "agent_model":
+        # 🤖 Agent & Model door — the /panel user-shaped category for
+        # behavior switches. Uses the text-mode-ui 5-element grammar so the
+        # picker reads as a card, not a list.
+        from gateway.text_mode_cards import render_agent_model_panel
+        from gateway.operator_shell.brain import current
+
+        model, provider = current()
+        try:
+            from hermes_cli.providers import get_label
+
+            provider_label = get_label(provider)
+        except Exception:
+            provider_label = provider or "?"
+
+        switches = [
+            {"slug": "agent_model", "label": "⚙️ Model", "available": True},
+            {"slug": "personality", "label": "🎭 Personality", "available": True},
+            {"slug": "reasoning", "label": "🧠 Reasoning", "available": True},
+            {"slug": "busy", "label": "🛎 Busy mode", "available": True},
+        ]
+        text, buttons = render_agent_model_panel(
+            current_model=model,
+            current_provider_label=provider_label,
+            switches=switches,
+        )
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Agent & Model",
+                proof_receipt=_proof(
+                    "agent_model", "done", "Agent & Model door", request_id=rid
+                ),
+            )
+        )
+
     if action == "brain_set":
         from gateway.operator_shell.brain import render_brain, set_model
 

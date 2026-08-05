@@ -3946,6 +3946,18 @@ class GatewaySlashCommandsMixin:
                 return view.text + f"\n\n_(buttons unavailable: {exc})_"
         return view.text
 
+    async def _handle_agent_model_command(self, event: MessageEvent) -> Optional[str]:
+        """Handle /agent_model — the 🤖 Agent & Model door.
+
+        Surfaces the user-shaped category of behavior switches (model,
+        personality, reasoning, busy mode) using the text-mode-ui 5-element
+        grammar. Same surface as the 'agent_model' /panel action.
+        """
+        from gateway.operator_shell.estate import handle_estate_action
+
+        view = await asyncio.to_thread(handle_estate_action, "agent_model")
+        return await self._send_operator_view(event, view.text, view.buttons)
+
     async def _send_operator_view(self, event: MessageEvent, text: str, buttons) -> Optional[str]:
         """Send text+buttons via telegram panel helper, else plain text."""
         from gateway.operator_shell.estate import PanelView
