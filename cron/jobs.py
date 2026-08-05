@@ -1069,6 +1069,34 @@ def get_due_jobs() -> List[Dict[str, Any]]:
         return _get_due_jobs_locked()
 
 
+def _record_missed_run(
+    job: Dict[str, Any], scheduled_for: str, late_by: float, grace: float, recovered: bool
+) -> None:
+    """Make a skipped scheduled run visible.
+
+    A missed run left no trace anywhere in job state: last_status stayed at whatever the
+    previous successful run wrote, so a job could miss four consecutive days and still
+    report "ok". This is the single most common way a feature on this estate went dark
+    without failing.
+
+    Best-effort — the alert must never be able to break scheduling.
+    """
+    try:
+        alerts = HERMES_DIR / "logs" / "alerts" / "missed_runs.jsonl"
+        alerts.parent.mkdir(parents=True, exist_ok=True)
+        with open(alerts, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({
+                "at": _hermes_now().isoformat(),
+                "job": job.get("name", job.get("id")),
+                "scheduled_for": scheduled_for,
+                "late_by_s": int(late_by),
+                "grace_s": int(grace),
+                "action": "ran_late" if recovered else "skipped",
+            }) + "\n")
+    except Exception:  # noqa: BLE001 — observation must never break the observed
+        logger.debug("missed-run alert failed", exc_info=True)
+
+
 def _get_due_jobs_locked() -> List[Dict[str, Any]]:
     """Inner implementation of get_due_jobs(); must be called with _jobs_lock held."""
     now = _hermes_now()
@@ -1130,9 +1158,33 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
             # (gateway was down and missed the window). Fast-forward to
             # the next future occurrence instead of firing a stale run.
             grace = _compute_grace_seconds(schedule)
-            if kind in {"cron", "interval"} and (now - next_run_dt).total_seconds() > grace:
+            late_by = (now - next_run_dt).total_seconds()
+            if kind in {"cron", "interval"} and late_by > grace:
                 # Job is past its catch-up grace window — this is a stale missed run.
                 # Grace scales with schedule period: daily=2h, hourly=30m, 10min=5m.
+                #
+                # On a laptop this fires constantly and used to be invisible. Measured
+                # 2026-08-05: estate-inventory-audit is `0 6 * * *`; the machine slept
+                # 04:19–08:01 on 08-02 (and across 06:00 again on 08-03 and 08-04), so
+                # each wake found the run 2h+ stale and dropped it. Four consecutive days
+                # skipped while last_status stayed "ok" and last_run_at stayed 08-01. The
+                # only trace was a logger.info nobody reads.
+                #
+                # Two changes: a skip is now RECORDED on the job and alerted, so it can
+                # never be silent again; and a job may opt into `catch_up`, which runs it
+                # late rather than not at all. Catch-up is opt-in because a late run is
+                # wrong for some jobs (a 06:00 briefing delivered at 14:00 is noise) and
+                # right for others (a daily audit is worth having at any hour).
+                if job.get("catch_up"):
+                    logger.info(
+                        "Job '%s' missed its window by %ds (grace=%ds) — running late "
+                        "because catch_up is set.",
+                        job.get("name", job["id"]), int(late_by), grace,
+                    )
+                    _record_missed_run(job, next_run, late_by, grace, recovered=True)
+                    due.append(job)
+                    continue
+
                 new_next = compute_next_run(schedule, now.isoformat())
                 if new_next:
                     logger.info(
@@ -1143,10 +1195,13 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                         grace,
                         new_next,
                     )
+                    _record_missed_run(job, next_run, late_by, grace, recovered=False)
                     # Update the job in storage
                     for rj in raw_jobs:
                         if rj["id"] == job["id"]:
                             rj["next_run_at"] = new_next
+                            rj["missed_runs"] = (rj.get("missed_runs") or 0) + 1
+                            rj["last_missed_at"] = now.isoformat()
                             needs_save = True
                             break
                     continue  # Skip this run

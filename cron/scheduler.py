@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 
 # fcntl is Unix-only; on Windows use msvcrt for file locking
 try:
@@ -889,6 +890,76 @@ def _get_script_timeout() -> int:
     return _DEFAULT_SCRIPT_TIMEOUT
 
 
+_RECEIPTS_PATH = os.path.join("state", "capability_receipts.jsonl")
+
+# Churn that proves nothing about a job doing its work.
+_RECEIPT_SKIP_DIRS = {".git", "__pycache__", "node_modules", ".venv", "venv", ".pytest_cache"}
+_RECEIPT_SKIP_FILES = {
+    os.path.join("cron", "jobs.json"),  # the scheduler's own bookkeeping, written every run
+    _RECEIPTS_PATH,                     # this file
+}
+
+
+def _scan_produced(since: float) -> tuple[list[str], list[str]]:
+    """Files under HERMES_HOME modified since *since*, split into (artifacts, logs).
+
+    Attribution is by time window, not by process, so a job running concurrently with
+    another can be credited with its neighbour's writes. That is a real weakness and the
+    reason each receipt records ``attribution: "window"`` — it is still strictly more
+    evidence than an exit code, which is what the estate had before and which reported
+    green straight through a three-day outage.
+    """
+    home = _get_hermes_home()
+    artifacts: list[str] = []
+    logs: list[str] = []
+    for root, dirs, files in os.walk(home):
+        dirs[:] = [d for d in dirs if d not in _RECEIPT_SKIP_DIRS]
+        for fn in files:
+            full = os.path.join(root, fn)
+            try:
+                if os.path.getmtime(full) <= since:
+                    continue
+            except OSError:
+                continue
+            rel = os.path.relpath(full, home)
+            if rel in _RECEIPT_SKIP_FILES:
+                continue
+            (logs if rel.startswith("logs" + os.sep) else artifacts).append(rel)
+    return sorted(artifacts), sorted(logs)
+
+
+def _write_receipt(script_path: str, started: float, exit_code: int, stdout: str) -> None:
+    """Record what a cron job PRODUCED, not merely that it ran.
+
+    Every health signal on this estate measured liveness. On 2026-08-05 the coordinator
+    heartbeated for 3d 4.5h while doing no work, and 18 of 28 capabilities had no way to
+    answer "did it work" at all. A receipt per run makes production measurable by
+    construction, so the answer stops depending on a hand-maintained registry that rots.
+
+    Best-effort by design: observing a job must never be able to fail it.
+    """
+    try:
+        artifacts, logs = _scan_produced(started)
+        rec = {
+            "script": os.path.basename(script_path),
+            "started_at": started,
+            "ended_at": time.time(),
+            "duration_s": round(time.time() - started, 2),
+            "exit_code": exit_code,
+            "stdout_bytes": len(stdout or ""),
+            "artifact_count": len(artifacts),
+            "artifacts": artifacts[:40],
+            "log_count": len(logs),
+            "attribution": "window",
+        }
+        path = _get_hermes_home() / _RECEIPTS_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a") as fh:
+            fh.write(json.dumps(rec) + "\n")
+    except Exception:  # noqa: BLE001 — observation must never break the observed
+        logger.debug("capability receipt write failed", exc_info=True)
+
+
 def _run_job_script(script_path: str) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
 
@@ -967,6 +1038,11 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
     else:
         argv = [sys.executable, str(path)]
 
+    # Receipts are keyed on this timestamp: anything under HERMES_HOME touched after it
+    # is what this run produced. Taken before the spawn so nothing the job writes early
+    # is missed.
+    _started = time.time()
+
     try:
         popen_kwargs = {"creationflags": windows_hide_flags()} if sys.platform == "win32" else {}
         result = subprocess.run(
@@ -979,6 +1055,7 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
         )
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()
+        _write_receipt(str(path), _started, result.returncode, stdout)
 
         # Redact secrets from both stdout and stderr before any return path.
         try:
@@ -999,8 +1076,13 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
         return True, stdout
 
     except subprocess.TimeoutExpired:
+        # A hung job that leaves no receipt is indistinguishable from a job that was
+        # never scheduled — the exact silence this instrumentation exists to remove.
+        # 124 matches timeout(1)'s convention.
+        _write_receipt(str(path), _started, 124, "")
         return False, f"Script timed out after {script_timeout}s: {path}"
     except Exception as exc:
+        _write_receipt(str(path), _started, -1, "")
         return False, f"Script execution failed: {exc}"
 
 
