@@ -223,8 +223,11 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
                     buttons=cached_buttons,
                     toast="cached" if fresh else "updating…",
                 )
+                # `served`, not `source`: being answered from the cache says nothing about
+                # who asked. Writing "cache" into `source` (as this did) erased the origin
+                # of every cache hit — 228 rows that can no longer say tap or typed.
                 record(action, request_id, view=view, ms=(time.time() - t0) * 1000.0,
-                       source="cache")
+                       served="cache")
                 return view
         except Exception:
             pass  # cache miss / error → fall through to live render

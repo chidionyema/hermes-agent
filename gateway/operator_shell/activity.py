@@ -20,14 +20,16 @@ daily files so a read never has to parse history it does not need.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import os
 import re
 import time
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 # Proof.render() writes "✅ *DONE* — ..." / "⚠️ *FAILED* — ...". Pull the status back out
 # rather than threading it separately: the receipt is what the operator actually saw.
@@ -46,6 +48,63 @@ _RETENTION_DAYS = 90
 # declare itself.
 _GW_PID_TTL = 30.0
 _gw_pid_cache: Tuple[float, Optional[int]] = (0.0, None)
+
+# HOW the operator asked, as opposed to WHICH process answered (`live`, above).
+#
+# The two are independent and both are needed. `live` separates a human from a probe; this
+# separates a tap from a typed line. Before it existed the field was hardcoded to "button"
+# at its only default, so all 1,051 non-cache rows claimed a tap — including every `/panel`,
+# every CEO command and every natural-language request that reached the same actions. The
+# cockpit's own docs say typed and tapped are equal citizens; the log could not show one.
+#
+# Why a contextvar rather than a `source=` parameter threaded through the call sites:
+# `handle_estate_action` is a fan-in reached from five modules (`telegram.py`,
+# `slash_commands.py`, `chat_router.py`, `run.py`, the otto-inbound plugin). Threading a
+# parameter would need an edit in every one of them — including `run.py`, which is off
+# limits — and would silently regress to a wrong default the next time someone adds a
+# caller. Setting it once per INBOUND UPDATE, at the three python-telegram-bot handlers,
+# covers every present and future downstream path with no edit at the call sites.
+# `contextvars` propagate into `asyncio.to_thread` and `create_task` (verified), and a
+# `.set()` inside a per-update task cannot leak back into the parent context.
+#
+# The default is "unknown", never "button": an un-instrumented caller (a probe, a test, a
+# future platform adapter) must read as unattributed rather than impersonate a human tap.
+# That is the exact failure this field was added to end.
+#
+# Known gap, stated rather than hidden: `AdapterBase.handle_message` returns quickly by
+# spawning background tasks, and `create_task` copies the context AT CREATION — which is
+# exactly why the origin survives the ingress scope exiting. A request that instead gets
+# queued as a pending message and drained later by a pre-existing owner task runs in that
+# task's older context and records as "unknown". Non-telegram adapters are un-instrumented
+# and do the same. Both degrade to unattributed, never to a fabricated tap.
+_SOURCE: contextvars.ContextVar[str] = contextvars.ContextVar("activity_source", default="")
+
+# Origins the cockpit knows how to name. Anything else is stored verbatim but rendered as
+# itself — an unrecognised origin is data, not an error.
+SOURCE_BUTTON = "button"      # inline-keyboard tap
+SOURCE_COMMAND = "command"    # typed slash command (/panel, /missions, …)
+SOURCE_CHAT = "chat"          # typed prose routed to an action by the CEO/chat router
+SOURCE_UNKNOWN = "unknown"    # no ingress declared one — probes, tests, direct calls
+
+
+@contextmanager
+def source_scope(name: str) -> Iterator[None]:
+    """Declare how the operator asked, for the duration of one inbound update.
+
+    Nesting is allowed and the innermost scope wins, so a generic ingress can set a coarse
+    origin and a more specific layer can refine it. The token is always reset, so this is
+    safe even on a shared context where task isolation does not apply.
+    """
+    token = _SOURCE.set((name or "").strip().lower() or SOURCE_UNKNOWN)
+    try:
+        yield
+    finally:
+        _SOURCE.reset(token)
+
+
+def current_source() -> str:
+    """The declared origin, or "unknown" when no ingress declared one."""
+    return _SOURCE.get() or SOURCE_UNKNOWN
 
 
 def _gateway_pid() -> Optional[int]:
@@ -112,9 +171,17 @@ def record(
     ms: float = 0.0,
     view: Any = None,
     error: str = "",
-    source: str = "button",
+    source: Optional[str] = None,
+    served: str = "",
 ) -> None:
-    """Append one row. Never raises — see module docstring."""
+    """Append one row. Never raises — see module docstring.
+
+    `source` is WHO asked and defaults to the ambient `source_scope` (see `_SOURCE`); pass it
+    explicitly only to override that. `served` is HOW the answer was produced — currently
+    only "cache". They are separate keys because they are separate facts: a typed command
+    answered from the pre-flight cache is still a typed command, and the previous code lost
+    that by writing "cache" into `source` itself.
+    """
     try:
         raw = (action or "").strip()
         head, _, arg = raw.partition(":")
@@ -124,10 +191,12 @@ def record(
             "action": head.lower(),
             "arg": arg,
             "request_id": request_id,
-            "source": source,
+            "source": source if source is not None else current_source(),
             "status": status,
             "ms": round(ms, 1),
         }
+        if served:
+            row["served"] = served
         # Attribution. `live` is omitted entirely when the gateway PID is unknown, so the
         # absence of the key means "cannot say", never "not real" — see `is_live`.
         row["pid"] = os.getpid()
@@ -227,6 +296,21 @@ def recent_knob_keys(limit: int = 2, days: int = 30) -> List[str]:
     return keys
 
 
+def origin(row: Dict[str, Any]) -> str:
+    """How the operator asked for this row, normalised for reading.
+
+    Rows written before `served` existed stored the string "cache" in `source`, which
+    overwrote the origin instead of sitting beside it. Those rows genuinely do not know
+    whether they were tapped or typed, so they read as "unknown" rather than being guessed
+    into a bucket — 228 of them exist and inventing an origin for them would put fiction
+    into the one file that is supposed to be evidence.
+    """
+    val = str(row.get("source") or "").strip().lower()
+    if not val or val == "cache":
+        return SOURCE_UNKNOWN
+    return val
+
+
 def _label(row: Dict[str, Any]) -> str:
     act = str(row.get("action") or "?")
     arg = str(row.get("arg") or "")
@@ -249,10 +333,15 @@ def rollup(days: int = 7, live_only: bool = True) -> Dict[str, Any]:
     rows = [r for r in everything if is_live(r)] if live_only else everything
     used: Counter = Counter()
     failed: Counter = Counter()
+    by_source: Counter = Counter()
+    served_cache = 0
     slow: List[Tuple[float, str]] = []
     for r in rows:
         lab = _label(r)
         used[lab] += 1
+        by_source[origin(r)] += 1
+        if str(r.get("served") or "") == "cache" or str(r.get("source") or "") == "cache":
+            served_cache += 1
         if _failed(r):
             failed[lab] += 1
         ms = float(r.get("ms") or 0.0)
@@ -268,5 +357,7 @@ def rollup(days: int = 7, live_only: bool = True) -> Dict[str, Any]:
         "failures": failed.most_common(6),
         "failure_total": sum(failed.values()),
         "slowest": slow[:5],
+        "by_source": dict(by_source),
+        "served_cache": served_cache,
         "rows": rows,
     }

@@ -286,6 +286,23 @@ def _action_ack_label(action: str) -> str:
     return "⏳ " + verb[:1].upper() + verb[1:]
 
 
+def _source_scope(name: str):
+    """``activity.source_scope`` that degrades to a no-op if the cockpit is unavailable.
+
+    Same rule as ``activity.record``: attribution must never be able to break an inbound
+    update. An adapter that cannot import the operator shell still has to deliver messages,
+    so a failure here costs a "unknown" in the audit log and nothing else.
+    """
+    try:
+        from gateway.operator_shell.activity import source_scope
+
+        return source_scope(name)
+    except Exception:
+        from contextlib import nullcontext
+
+        return nullcontext()
+
+
 def _outcome_line(view) -> str:
     """The one-line result of an action, for appending to its panel card.
 
@@ -4035,7 +4052,18 @@ class TelegramAdapter(BasePlatformAdapter):
     async def _handle_callback_query(
         self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"
     ) -> None:
-        """Handle inline keyboard button clicks."""
+        """Handle inline keyboard button clicks.
+
+        Declares the origin for the whole update, then delegates. Everything a tap can
+        reach — `handle_estate_action` here, and anything it calls in turn — records
+        itself as a button without any of those layers having to know.
+        """
+        with _source_scope("button"):
+            await self._handle_callback_query_inner(update, context)
+
+    async def _handle_callback_query_inner(
+        self, update: "Update", context: "ContextTypes.DEFAULT_TYPE"
+    ) -> None:
         query = update.callback_query
         if not query or not query.data:
             return
@@ -6761,7 +6789,11 @@ class TelegramAdapter(BasePlatformAdapter):
         event.text = self._clean_bot_trigger_text(event.text)
         await self._cache_replied_media(msg, event)
         event = self._apply_telegram_group_observe_attribution(event)
-        await self.handle_message(event)
+        # A typed slash command reaches the same actions as the buttons — /panel, /missions,
+        # /revert all land in `handle_estate_action`. Naming the origin here is what stops
+        # them being logged as taps.
+        with _source_scope("command"):
+            await self.handle_message(event)
 
     async def _handle_location_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming location/venue pin messages."""
@@ -6893,7 +6925,12 @@ class TelegramAdapter(BasePlatformAdapter):
                 "[Telegram] Flushing text batch %s (%d chars)",
                 key, len(event.text or ""),
             )
-            await self.handle_message(event)
+            # The scope has to live HERE, not in `_handle_text_message`: that handler only
+            # buffers the update and returns, and the dispatch happens later in this task
+            # after the quiet period. A scope at the handler would have exited long before
+            # the action ran, and every typed request would have logged as "unknown".
+            with _source_scope("chat"):
+                await self.handle_message(event)
         finally:
             if self._pending_text_batch_tasks.get(key) is current_task:
                 self._pending_text_batch_tasks.pop(key, None)

@@ -578,6 +578,41 @@ def _group_failures_by_root_cause(
     return out
 
 
+# How the operator asked, in the order the panel should read them: the two deliberate input
+# methods first, then prose, then the rows that cannot say.
+_ORIGIN_LABELS: List[Tuple[str, str]] = [
+    ("button", "👆 {n} tapped"),
+    ("command", "⌨️ {n} typed"),
+    ("chat", "💬 {n} asked"),
+    ("unknown", "❔ {n} unattributed"),
+]
+
+
+def _origin_line(r: Dict[str, Any]) -> str:
+    """One line splitting the window by how the action was requested.
+
+    Without this the `source` field was write-only — recorded on every row since the log
+    shipped and rendered nowhere, so "typed commands are invisible" stayed true even once
+    they were being recorded correctly. Buckets with no rows are omitted rather than printed
+    as zeroes: a screen read on a phone should carry facts, not empty columns.
+    """
+    by = r.get("by_source") or {}
+    if not by:
+        return ""
+    parts = [tmpl.format(n=by[key]) for key, tmpl in _ORIGIN_LABELS if by.get(key)]
+    # An origin the cockpit has no label for is still shown — a new ingress should appear
+    # here the day it is added, not be silently dropped into a bucket it does not belong to.
+    known = {key for key, _ in _ORIGIN_LABELS}
+    parts += [f"{name} {n}" for name, n in sorted(by.items()) if name not in known and n]
+    if not parts:
+        return ""
+    line = " · ".join(parts)
+    cached = int(r.get("served_cache") or 0)
+    if cached:
+        line += f" · ⚡ {cached} from cache"
+    return line
+
+
 def render_activity(days: int = 7) -> Tuple[str, List[ButtonRow]]:
     """What the operator actually did, and how it ended.
 
@@ -618,6 +653,9 @@ def render_activity(days: int = 7) -> Tuple[str, List[ButtonRow]]:
     lines.append(f"{r['total']} actions · {r['distinct']} distinct · *{fail_n} failed* ({pct:.0f}%)")
     if synth_line:
         lines.append(synth_line)
+    origin_line = _origin_line(r)
+    if origin_line:
+        lines.append(origin_line)
     lines.append("")
 
     # De-dup by root cause: if several failed actions share a 30-second window with the same
