@@ -16,30 +16,50 @@ def _run_diagnostic(target=None):
         except: return {"error": r.stdout[:200]}
     except Exception as e: return {"error": str(e)}
 
+def _sections(data, target):
+    """`diagnostics.py` speaks two shapes; this panel has to render both.
+
+    `--diagnose` (no target) nests each area under its name — `{"moat": {...},
+    "engine": {...}}` (`diagnostics.py:294-299`). But `--moat` and `--engine` return
+    the area *itself*, flat — `{"status", "checks", "root_cause", "fix"}`
+    (`diagnostics.py:373-375`). The panel only ever read the nested shape, so the
+    `estate:diagnose_panel:moat` button (`diagnose_panel.py:57`, the "Verify fix" the
+    fix guide sends you to) rendered a header and a timestamp and nothing else.
+
+    Returns [(area_name, payload)] for either shape.
+    """
+    nested = [(name, data[name]) for name in ("moat", "engine") if isinstance(data.get(name), dict)]
+    if nested:
+        return nested
+    if "checks" in data or "status" in data:
+        return [(target or "diagnostic", data)]
+    return []
+
+
 def render_diagnose(target=None):
     data = _run_diagnostic(target)
     lines = [f"🔍 *Diagnostic{f': {target}' if target else ''}*", ""]
     buttons = []
     if "error" in data:
         lines.append(f"⚠️ Diagnostic failed: {data['error'][:100]}")
-    elif "moat" in data:
-        m = data["moat"]
-        lines.append(f"*Moat:* {'🟢' if m.get('status')=='ok' else '🔴'} {m.get('status','?')}")
-        for check in m.get("checks", []):
-            emoji = "🟢" if check.get("status")=="pass" else "🔴"
-            lines.append(f"  {emoji} {check.get('check','?')}: {check.get('detail','?')[:80]}")
-        if m.get("root_cause"):
-            lines.append(f"\n*Root cause:* {m['root_cause']}")
-        if m.get("fix"):
-            lines.append(f"\n*Fix:* {m['fix'][:200]}")
+    else:
+        sections = _sections(data, target)
+        if not sections:
+            lines.append("_No diagnostic areas reported._")
+        for name, area in sections:
+            lines.append(f"*{name.title()}:* {'🟢' if area.get('status')=='ok' else '🔴'} {area.get('status','?')}")
+            for check in area.get("checks", []):
+                emoji = "🟢" if check.get("status")=="pass" else "🔴"
+                lines.append(f"  {emoji} {check.get('check','?')}: {str(check.get('detail','?'))[:80]}")
+            if area.get("root_cause"):
+                lines.append(f"\n*Root cause:* {area['root_cause']}")
+            if area.get("fix"):
+                lines.append(f"\n*Fix:* {str(area['fix'])[:200]}")
+            lines.append("")
+        # One fix row for the panel, not one per area — `--diagnose` returns two areas and
+        # both carry a `fix`, which would otherwise stack two identical button rows.
+        if any(area.get("fix") for _, area in sections):
             buttons.append([("📋 Fix guide", "estate:fix_guide:credits"), ("🛠 Auto-fix", "estate:fix_all")])
-    
-    if "engine" in data:
-        e = data["engine"]
-        lines.append(f"\n*Engine:* {'🟢' if e.get('status')=='ok' else '🔴'} {e.get('status','?')}")
-        for check in e.get("checks", []):
-            emoji = "🟢" if check.get("status")=="pass" else "🔴"
-            lines.append(f"  {emoji} {check.get('check','?')}: {check.get('detail','?')[:80]}")
 
     lines.append(""); lines.append(panel_stamp("diagnose"))
     buttons.append([("🔍 Full diagnose", "estate:diagnose_panel"), ("🛠 Fix all", "estate:fix_all")])

@@ -10,7 +10,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +267,74 @@ def _render_for_cache(action: str) -> Tuple[str, List[ButtonRow]]:
         from gateway.operator_shell.builds import render_builds
         return render_builds()
     return "", []
+
+
+# ── The panel registry ──────────────────────────────────────────────────────────────────
+# 29 distinct actions reached a button and no branch: 81 buttons across 14 modules rendered
+# `⚠️ Unknown action` when tapped. Almost every one of them already HAD a working renderer —
+# the panels were written, given buttons, and never wired to the dispatcher.
+#
+# A table rather than another fifteen near-identical `if action == ...` blocks, for a reason
+# beyond brevity: it makes wiring a panel and registering it THE SAME EDIT, so a renderer
+# cannot be written and left unreachable again the way these were.
+# `tests/gateway/operator_shell/test_every_button_dispatches.py` imports this dict and fails
+# if any button in the tree emits an action it does not contain — so the registry is not a
+# hand-maintained list that can drift (the objection `telegram.py:279-281` raises against
+# exactly that shape), it is checked against the buttons on every run.
+#
+# Every renderer here returns `(text, buttons)` and is read-only from the operator's point of
+# view. Three caveats worth stating rather than leaving to be discovered:
+#   - `incidents` runs two subprocesses with a 15s timeout each (`incident_panel.py:16-17`),
+#     so its worst case is ~30s.
+#   - `otto_health` appends a row to `logs/self-audit/velocity.jsonl` on every render
+#     (`otto_health.py:220-225`). It is a panel that writes; repeated taps grow that file.
+#   - `render_health` accepts `project_key` and never references it (`health_panel.py:18`),
+#     so the per-project buttons all render the same estate-wide card. Still an improvement
+#     on "Unknown action", but making that content per-project is a separate job.
+#
+# `arg` modes: NONE = renderer takes no argument; OPT = it has a default, so forward the arg
+# only when the button carried one; REQ = positional with no default, so an argless tap has
+# to be answered rather than allowed to TypeError into "Action failed".
+_ARG_NONE, _ARG_OPT, _ARG_REQ = "none", "optional", "required"
+
+_PANELS: Dict[str, Tuple[str, str, str, str]] = {
+    # action:         (module,            function,                   toast,        arg)
+    "diagnose_panel": ("diagnose_panel",  "render_diagnose",          "Diagnose",   _ARG_OPT),
+    "fix_guide":      ("diagnose_panel",  "render_fix_guide",         "Fix guide",  _ARG_OPT),
+    "predict_panel":  ("predict_panel",   "render_predict",           "Forecast",   _ARG_NONE),
+    "features_panel": ("features_panel",  "render_features",          "Features",   _ARG_NONE),
+    "health":         ("health_panel",    "render_health",            "Health",     _ARG_OPT),
+    "weekly_digest":  ("health_panel",    "render_weekly_digest",     "Digest",     _ARG_NONE),
+    "incidents":      ("incident_panel",  "render_incidents",         "Incidents",  _ARG_NONE),
+    "otto_health":    ("otto_health",     "render_otto_health",       "Self-audit", _ARG_NONE),
+    "commands":       ("command_palette", "render_commands",          "Commands",   _ARG_NONE),
+    "rsi_changes":    ("rsi_control",     "render_rsi_changes",       "Changes",    _ARG_NONE),
+    "project":        ("projects",        "render_project_dashboard", "Project",    _ARG_REQ),
+}
+
+
+def _render_registered_panel(action: str, arg: str, rid: str) -> PanelView:
+    """Render one registry entry. Panels are imported lazily, as every branch here does —
+    a panel module that fails to import must not take the whole dispatcher down at startup."""
+    module_name, func_name, toast, arg_mode = _PANELS[action]
+    if arg_mode == _ARG_REQ and not arg:
+        # Only reachable from a hand-typed callback — every literal button for these carries
+        # its arg (`projects.py:242`, `projects.py:319`, `commercial_ui.py:304`). Say what is
+        # missing instead of raising into the generic "Action failed".
+        view = render_panel_view()
+        view.text = f"⚠️ `{action}` needs a target, e.g. `{action}:<key>`\n\n" + view.text
+        view.toast = "Needs a target"
+        view.ok = False
+        return view
+
+    render = getattr(importlib.import_module(f"gateway.operator_shell.{module_name}"), func_name)
+    text, buttons = render(arg) if (arg_mode != _ARG_NONE and arg) else render()
+    return PanelView(
+        text=text,
+        buttons=buttons,
+        toast=toast,
+        proof_receipt=_proof(action, "done", f"{toast} panel", request_id=rid),
+    )
 
 
 def _dispatch(action: str, request_id: str = "") -> PanelView:
@@ -1429,6 +1497,13 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
                 ),
             )
         )
+
+    # The registry is consulted LAST, immediately before the unknown-action guard, so it can
+    # only ever convert an "Unknown action" into a panel — never shadow a branch above it.
+    # Every explicit `if action == ...` keeps precedence, which is what makes adding to
+    # `_PANELS` a safe edit rather than one that needs the whole chain re-read.
+    if action in _PANELS:
+        return _finish(_render_registered_panel(action, arg, rid))
 
     view = render_panel_view()
     view.text = f"⚠️ Unknown action `{action}`\n\n" + view.text
