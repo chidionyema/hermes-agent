@@ -310,6 +310,13 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     "commands":       ("command_palette", "render_commands",          "Commands",   _ARG_NONE),
     "rsi_changes":    ("rsi_control",     "render_rsi_changes",       "Changes",    _ARG_NONE),
     "project":        ("projects",        "render_project_dashboard", "Project",    _ARG_REQ),
+    # 2026-08-06: `project:<key>` and its five sub-panels (sdlc/builds/activity/
+    # health/missions) were all LIVE and all UNREACHABLE — the only screen that
+    # links to them is projects.render_home(), and `projects` was not a registry
+    # key, so the estate's whole project dimension had no entrance. 507 lines of
+    # working panel behind one missing dict entry.
+    "projects":       ("projects",        "render_home",              "Projects",   _ARG_NONE),
+    "dashboard":      ("web_dashboard",   "render_web_dashboard",     "Dashboard",  _ARG_NONE),
 }
 
 

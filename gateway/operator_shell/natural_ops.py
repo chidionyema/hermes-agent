@@ -72,9 +72,19 @@ _PATTERNS = [
     # Approve short id
     (re.compile(r"^\s*approve\s+`?([0-9a-fA-F]{4,12})`?\s*$", re.I),
      "approve", "{g1}", "Approve"),
-    # Fleet / missions
+    # Projects / fleet.
+    #
+    # These were ONE pattern routing "projects" and "portfolio" to Fleet, which is a
+    # fixed list of 4 hardcoded repos (fleet.py:19-22). The registry holds 14
+    # projects (~/.hermes/projects.json), so asking for "projects" answered with a
+    # different, smaller set and no route to the other 10. Projects is listed FIRST
+    # because this list is ordered and first match wins — a `projects?` left inside
+    # the fleet alternation would keep stealing the word.
     (re.compile(
-        r"^\s*(fleet|projects?|portfolio)\s*\??\s*$", re.I),
+        r"^\s*(projects?|portfolio)\s*\??\s*$", re.I),
+     "projects", "", "Projects"),
+    (re.compile(
+        r"^\s*(fleet)\s*\??\s*$", re.I),
      "fleet", "", "Fleet"),
     (re.compile(
         r"^\s*(builds?|ci|cicd|ci\/?cd|deploys?|ship\s+status|"

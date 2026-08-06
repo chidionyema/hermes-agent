@@ -8,9 +8,12 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 # Keep in sync with ~/.hermes/scripts/set-cockpit-menu.py (chat-scoped wins).
 OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     "panel",
+    # See ~/.hermes/scripts/set-cockpit-menu.py: dashboard took sethome's slot,
+    # projects took fleet's. Both displaced commands still work when typed.
+    "projects",
+    "dashboard",
     "status",
     "inbox",
-    "fleet",
     "brief",
     "cron",
     "busy",
@@ -18,7 +21,6 @@ OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     "revert",
     "missions",
     "help",
-    "sethome",
 )
 
 

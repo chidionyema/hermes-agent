@@ -132,11 +132,15 @@ _UNBUILT: dict[str, str] = {
         "Needs a chooser panel or a declared default."
     ),
     "estate_health": "No renderer of any name.",
-    "dashboard": (
-        "No render_dashboard(). The namesake render_project_dashboard() needs a project_key "
-        "that the bare `estate:dashboard` callback never supplies."
-    ),
-    "project_config": "No render_project_config() anywhere.",
+    # BUILT 2026-08-06 — web_dashboard.render_web_dashboard(), registered in
+    # estate._PANELS. It takes no project_key: the thing it opens is the estate's
+    # one web UI, not a per-project view, which is why the old namesake never fit.
+    # "dashboard": removed from quarantine.
+    #
+    # DROPPED 2026-08-06 — the only button emitting `project_config` was
+    # projects.py's ⚙️ Config tile; it was removed rather than built, so the entry
+    # is now stale and test_the_quarantine_has_no_stale_entries would fail on it.
+    # "project_config": removed from quarantine.
     "operator_mode": (
         "commercial_ui.py:267 ClientMode.set_operator() exists but ClientMode is never "
         "instantiated anywhere — grep for 'ClientMode(' returns nothing."

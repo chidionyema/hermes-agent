@@ -36,6 +36,12 @@ ButtonRow = List[Tuple[str, str]]
 MAX_GROUP_ROWS = 3
 
 _NOW = ("🏠 Home", "estate:refresh")
+# The estate is 14 registered projects (~/.hermes/projects.json), 6 active. Until
+# 2026-08-06 nothing on the spine was scoped to ONE of them, so every screen was
+# estate-wide and the founder had no way to ask "what about Prospector?" without
+# knowing the exact callback. Projects sits second because picking the subject
+# comes before picking the verb.
+_PROJECTS = ("🗂 Projects", "estate:projects")
 _RUN = ("⚡ Actions", "estate:run")
 _SDLC = ("💻 SDLC", "estate:sdlc")
 _TUNE = ("⚙️ Tune", "estate:tune")
@@ -64,6 +70,7 @@ def nav(self_action: Optional[str] = None) -> ButtonRow:
     """The one navigation row — the cockpit's spine. Always last, always this order.
 
         🏠 Home   fires (concerns, approve, estate pause)
+        🗂 Projects  subject (which of the 14 registered projects)
         ⚡ Actions   verbs (start, stop, restart, run now)
         💻 SDLC   pipeline (Assign → Board → Fleet → Review → Ship → Learn)
         ⚙️ Tune  knobs (leverage, caps, batch, cadence, brain)
@@ -72,7 +79,7 @@ def nav(self_action: Optional[str] = None) -> ButtonRow:
     `self_action` re-renders the CURRENT panel as bare 🔄. On Map itself the 🗺 glyph
     already re-opens Atlas, so no duplicate 🔄 is added.
     """
-    row: ButtonRow = [_NOW, _RUN, _SDLC, _MAP]
+    row: ButtonRow = [_NOW, _PROJECTS, _RUN, _SDLC, _MAP]
     if self_action:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").

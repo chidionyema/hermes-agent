@@ -210,11 +210,22 @@ def render_home() -> Tuple[str, List[ButtonRow]]:
             clear.append((p, age_str, "🟢"))
 
     # ── Build panel ──
-    lines = ["🏠 *Otto*"]
+    # `projects` here is get_active_projects(), which is active + incubating (:47-51).
+    # Counted from the registry rather than described from memory: the first draft of
+    # this line called all 10 of them "active" and then claimed the 4 incubating ones
+    # were "not shown" while they were rendering as buttons directly underneath.
+    reg_all = load_registry().get("projects", [])
+    n_active = sum(1 for p in reg_all if p.get("status") == "active")
+    n_incub = sum(1 for p in reg_all if p.get("status") == "incubating")
+    n_arch = sum(1 for p in reg_all if p.get("status") == "archived")
+
+    lines = ["🗂 *Projects*"]
     prospector_status = estate.get("prospector", "?")
     spend = estate.get("spend", 0)
     estate_emoji = "🔴" if "🔴" in prospector_status else ("🟡" if estate.get("incidents", 0) > 0 else "🟢")
-    lines.append(f"{estate_emoji} ${spend:.2f} spent · {len(projects)} projects")
+    lines.append(f"{estate_emoji} ${spend:.2f} spent · {n_active} active · {n_incub} incubating")
+    if n_arch:
+        lines.append(f"_{n_arch} archived, not shown_")
 
     if critical:
         lines.append("")
@@ -235,19 +246,26 @@ def render_home() -> Tuple[str, List[ButtonRow]]:
         lines.append("")
         lines.append(f"*🟢 Clear* — {names}")
 
-    # ── Buttons: critical first ──
+    # ── Buttons: EVERY active project is tappable, worst first ──
+    #
+    # This was `critical[:4]`, so a healthy estate rendered a list of project names
+    # with not one of them tappable — you could read that six projects existed and
+    # open none of them. The subject list IS this screen; severity decides the
+    # ORDER, never whether a project can be opened.
     buttons: List[ButtonRow] = []
     row: ButtonRow = []
-    for p, _, _ in critical[:4]:
-        row.append((f"🔴 {p['name'][:14]}", f"estate:project:{p['key']}"))
+    for p, _, glyph in critical + watch + clear:
+        row.append((f"{glyph} {p['name'][:16]}", f"estate:project:{p['key']}"))
         if len(row) == 2:
             buttons.append(row); row = []
     if row: buttons.append(row)
 
-    buttons.append([("🛠 Fix All", "estate:fix_all"), ("📊 All Projects", "estate:find")])
-    buttons.append([("🧠 Health", "estate:health"), ("📱 Dashboard", "estate:dashboard")])
-    if not critical:
-        buttons.append([("➕ New", "estate:onboard"), ("⚙️ Settings", "estate:tune")])
+    # Estate-wide verbs. Every callback below is dispatch-verified against
+    # handle_estate_action — the previous row offered fix_all / dashboard / onboard,
+    # and all three answered "⚠️ Unknown action". Dead buttons on the front door are
+    # why the cockpit read as broken rather than as empty.
+    buttons.append([("🖥 Web dashboard", "estate:dashboard"), ("🧠 Health", "estate:health")])
+    buttons.append([("📥 Inbox", "estate:inbox"), ("⚙️ Settings", "estate:tune")])
 
     # ── Self-improvement summary line (always visible on Home) ──
     try:
@@ -330,8 +348,13 @@ def render_project_dashboard(project_key: str, client_mode: bool = False) -> Tup
              ("🚢 CI", f"estate:builds:{project_key}")],
             [("📜 Activity", f"estate:activity:{project_key}"),
              ("🧠 Health", f"estate:health:{project_key}")],
-            [("📋 Missions", f"estate:missions:{project_key}"),
-             ("⚙️ Config", f"estate:project_config:{project_key}")],
+            # ⚙️ Config used to sit here pointing at estate:project_config, which has
+            # no renderer of any name (quarantined in test_every_button_dispatches
+            # _UNBUILT). Dropped rather than replaced: the obvious replacement was a
+            # "🗂 All projects" tile, but the spine now carries 🗂 Projects on every
+            # panel, and a tile that repeats the spine is the duplicate-callback
+            # defect (memory: cockpit-no-duplicate-callbacks). Spine wins, tile gives way.
+            [("📋 Missions", f"estate:missions:{project_key}")],
         ]
 
     buttons = with_nav(buttons)

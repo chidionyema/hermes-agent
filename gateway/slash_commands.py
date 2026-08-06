@@ -3992,6 +3992,33 @@ class GatewaySlashCommandsMixin:
         text, buttons = await asyncio.to_thread(render_executive_brief)
         return await self._send_operator_view(event, text, buttons)
 
+    async def _handle_dashboard_command(self, event: MessageEvent) -> Optional[str]:
+        """/dashboard — the typed door to the web UI.
+
+        Body and probe live in operator_shell.web_dashboard so this and the
+        `estate:dashboard` button cannot drift apart. heal=True because a typed
+        command can afford the ~40s to restart a dead tunnel; a button tap cannot.
+        """
+        from gateway.operator_shell import web_dashboard
+
+        text = await asyncio.to_thread(web_dashboard.render_text, True)
+        return await self._send_operator_view(event, text, None)
+
+    async def _handle_projects_command(self, event: MessageEvent) -> Optional[str]:
+        """/projects [key] — the project list, or one project's dashboard.
+
+        The bare form is the list; `/projects prospector` jumps straight to that
+        project so the founder never has to tap through when they already know the
+        subject. Both go through handle_estate_action, so the typed door and the
+        🗂 Projects spine button render the identical panel.
+        """
+        from gateway.operator_shell.estate import handle_estate_action
+
+        key = (event.get_command_args() or "").strip().split()[:1]
+        action = f"project:{key[0]}" if key else "projects"
+        view = await asyncio.to_thread(handle_estate_action, action)
+        return await self._send_operator_view(event, view.text, view.buttons)
+
     async def _handle_missions_command(self, event: MessageEvent) -> Optional[str]:
         from gateway.operator_shell.estate import handle_estate_action
 

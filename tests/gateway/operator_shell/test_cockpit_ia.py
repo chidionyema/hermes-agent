@@ -159,7 +159,21 @@ def test_atlas_rooms_cover_every_former_home_destination():
         assert cb in room_cbs, f"orphaned panel {cb} — missing from Atlas Rooms"
 
 
-# --- the home card (Elon diet: ≤6 buttons, no destination mall) ----------------------------
+# --- the home card (Elon diet: no destination mall) ----------------------------------------
+
+
+def _own_tiles(flat):
+    """The panel's OWN buttons — everything that is not the shared nav spine.
+
+    These two caps guard against home growing back into a mall of destinations. They used
+    to be raw totals (<=6, <=8), which meant they also counted the spine — so on
+    2026-08-06, adding 🗂 Projects to nav() failed a test that has nothing to say about
+    navigation. Subtracting the spine makes the assertion mean what its name claims.
+    """
+    from gateway.operator_shell.panel_chrome import nav
+
+    spine = {cb for _l, cb in nav()}
+    return [cb for cb in flat if cb not in spine]
 
 
 def test_home_no_longer_ships_a_nine_tile_mall():
@@ -173,7 +187,7 @@ def test_home_no_longer_ships_a_nine_tile_mall():
     assert "estate:status" not in flat
     assert "estate:st_status" not in flat
     assert "estate:pause" in flat
-    assert len(flat) <= 6  # pause + optional cron + spine
+    assert len(_own_tiles(flat)) <= 2  # pause + optional cron
 
 
 def test_busy_home_caps_at_two_concerns_and_no_mall():
@@ -186,7 +200,7 @@ def test_busy_home_caps_at_two_concerns_and_no_mall():
     flat = [cb for row in rows for _l, cb in row]
     assert "estate:st_status" not in flat
     assert "estate:fleet" not in flat
-    assert len(flat) <= 8  # 2 concerns + optional cron + pause + spine
+    assert len(_own_tiles(flat)) <= 4  # 2 concerns + optional cron + pause
 
 
 def test_home_grid_catalog_still_documents_domains():

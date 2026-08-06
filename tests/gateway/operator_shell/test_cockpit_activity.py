@@ -24,9 +24,13 @@ from gateway.operator_shell.cockpit import render_activity
 from gateway.operator_shell.mission import mission_buttons
 from gateway.operator_shell.panel_chrome import nav
 
-# Four positions: Now · Run · Tune · Map. Empty Map = Atlas; typed Map = search.
-# On the Map panel itself the 🗺 glyph re-opens Atlas — no duplicate 🔄.
-SPINE = ["estate:refresh", "estate:run", "estate:sdlc", "estate:find"]
+# Five positions: Now · Projects · Run · SDLC · Map. Empty Map = Atlas; typed
+# Map = search. On the Map panel itself the 🗺 glyph re-opens Atlas — no duplicate 🔄.
+#
+# Projects joined the spine 2026-08-06. Deliberately still a LITERAL, not derived
+# from nav(): these tests assert the spine's exact membership and order, and a list
+# read back out of the thing under test would pass no matter what nav() returned.
+SPINE = ["estate:refresh", "estate:projects", "estate:run", "estate:sdlc", "estate:find"]
 
 
 def _callbacks(rows):
@@ -44,16 +48,16 @@ def test_nav_omits_the_refresh_glyph_on_a_spine_panel(self_action):
     callback twice — the caller must not have to know that, so nav decides."""
     row = nav(self_action)
     cbs = [cb for _label, cb in row]
-    assert cbs[:4] == SPINE
-    assert len(cbs) == 4, f"nav({self_action!r}) appended a redundant refresh: {cbs}"
+    assert cbs[:5] == SPINE
+    assert len(cbs) == len(SPINE), f"nav({self_action!r}) appended a redundant refresh: {cbs}"
 
 
 @pytest.mark.parametrize("self_action", ["se_params", "activity:7", "st_status"])
 def test_nav_keeps_the_refresh_glyph_off_spine(self_action):
     row = nav(self_action)
     cbs = [cb for _label, cb in row]
-    assert cbs[:4] == SPINE
-    assert cbs[4] == f"estate:{self_action}", (
+    assert cbs[:5] == SPINE
+    assert cbs[len(SPINE)] == f"estate:{self_action}", (
         # removeprefix, not lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (both 's' and 'e' are in "estate:").
         f"nav({self_action!r}) mangled the self-action: {cbs}"
@@ -75,7 +79,7 @@ def test_nav_keeps_the_refresh_glyph_off_spine(self_action):
 def test_mission_card_never_offers_the_same_action_twice(paused, primary, concerns):
     rows = mission_buttons(paused, primary, concerns)
     assert not _dupes(rows), f"home card duplicates: {_dupes(rows)}"
-    assert [cb for _l, cb in rows[-1]][:4] == SPINE
+    assert [cb for _l, cb in rows[-1]][:5] == SPINE
 
 
 def test_mission_card_caps_concerns_but_says_how_many_were_hidden():

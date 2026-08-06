@@ -126,6 +126,17 @@ COMMAND_REGISTRY: list[CommandDef] = [
     # with the verb and carries the word "menu" for the same reason.
     CommandDef("panel", "Open the cockpit — every button, one tap (menu)", "Session",
                gateway_only=True, aliases=("menu", "cockpit", "control", "mission")),
+    # Same lesson as "panel" above, one rung further out: the founder typed /dashboard
+    # twice on 2026-08-06 (gateway.log 20:30:29, 20:42:19) and got "Unrecognized slash
+    # command" both times, because the web UI had no door from Telegram at all. The
+    # aliases are the other words someone reaches for when they want the web UI.
+    CommandDef("dashboard", "Open the web dashboard — tappable link for this phone", "Session",
+               gateway_only=True, aliases=("dash", "ui", "web", "console")),
+    # The estate is 14 registered projects but every cockpit screen was estate-wide,
+    # so "what about Prospector specifically?" had no door. projects.render_home()
+    # and its five per-project panels were built and unreachable until 2026-08-06.
+    CommandDef("projects", "Pick a project — status, CI, missions, activity", "Session",
+               gateway_only=True, aliases=("project", "portfolio", "repos")),
     # Registered, not just dispatched. run.py:7740 routes canonical == "agent_model",
     # and canonical falls back to the raw word for an UNregistered command, so typing
     # it already reached the handler while the command was invisible to /help and,
