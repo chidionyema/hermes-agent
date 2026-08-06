@@ -20,18 +20,23 @@ ButtonRow = List[Tuple[str, str]]
 HERMES = Path.home() / ".hermes"
 COORD_DB = HERMES / "coordinator.db"
 JOBS_PATH = HERMES / "cron" / "jobs.json"
+ESTATE_SPEND_HISTORY = Path.home() / ".claude" / "estate-spend-history.jsonl"
+ESTATE_BUDGET = Path.home() / ".claude" / "estate-budget.json"
 
 
-def _spend_gauge(used: float, cap: float) -> str:
+def _spend_gauge(used: float, cap: float, source: str = "estate") -> str:
     """Visual spend gauge using block characters."""
+    if source == "unavailable":
+        return "⚪ Spend: unknown — no sentinel reading today (estate_cost_sentinel)"
+    note = "" if source == "estate" else f"  ⚠️ {source}"
     if cap <= 0:
-        return f"💰 ${used:.2f} (no cap)"
+        return f"💰 ${used:.2f} (no cap){note}"
     pct = min(used / cap, 1.0)
     filled = int(pct * 10)
     empty = 10 - filled
     bar = "▓" * filled + "░" * empty
     emoji = "🟢" if pct < 0.75 else ("🟡" if pct < 0.9 else "🔴")
-    return f"{emoji} ${used:.2f} / ${cap:.2f} {bar} {pct:.0%}  [daily cap]"
+    return f"{emoji} ${used:.2f} / ${cap:.2f} {bar} {pct:.0%}  [estate today · warn cap]{note}"
 
 
 from gateway.operator_shell.launchd_health import probe_estate as _probe_daemons, summarize as _summarize_daemons
@@ -126,28 +131,47 @@ def _escalated_tasks(conn) -> List[dict]:
         return []
 
 
-def _spend_today() -> Tuple[float, float]:
-    """Estimate today's spend from the prospector guard probe."""
+def _spend_today() -> Tuple[float, float, str]:
+    """Today's ESTATE spend, the warn cap, and where the number came from.
+
+    This read prospector's `store/scheduler/ticks.jsonl -> today_spend_usd` until
+    2026-08-06. That ledger counts METERED API dollars only, so on that day this
+    card rendered "$3.91 / $20.00 20% [daily cap]" in green while the estate had
+    actually burned $1,020.34 — the founder's most-checked number, wrong by ~260x
+    and coloured to say "fine". Subscription burn, which dominates the bill, is
+    invisible to that ledger by construction; no amount of care at this call site
+    could have fixed it, because the source could not see the money.
+
+    Ground truth is the sentinel's history, appended by
+    `~/.claude/scripts/estate_cost_sentinel.record()` from Claude Code's own
+    transcripts. When there is no reading for today the honest answer is
+    "unknown" — never $0.00 rendered green.
+    """
+    cap = 120.0
     try:
-        ticks = Path.home() / "Documents/code/prospector/store/scheduler/ticks.jsonl"
-        if ticks.is_file():
-            lines = ticks.read_text().strip().splitlines()
-            today = time.strftime("%Y-%m-%d")
-            used = 0.0
-            cap = None
-            for line in reversed(lines):
-                try:
-                    t = json.loads(line)
-                    if t.get("ts", "").startswith(today):
-                        used = float(t.get("today_spend_usd", 0) or 0)
-                        cap = float(t.get("daily_cap_usd", 20) or 20)
-                        break
-                except Exception:
-                    continue
-            return used, cap or 20.0
+        cap = float(json.loads(ESTATE_BUDGET.read_text()).get("warn_usd") or cap)
     except Exception:
         pass
-    return 0.0, 20.0
+
+    today = time.strftime("%Y-%m-%d")
+    try:
+        if ESTATE_SPEND_HISTORY.is_file():
+            newest = None
+            for line in reversed(ESTATE_SPEND_HISTORY.read_text().strip().splitlines()):
+                try:
+                    row = json.loads(line)
+                except Exception:
+                    continue
+                if newest is None:
+                    newest = row
+                if row.get("day") == today:
+                    return float(row.get("total") or 0.0), cap, "estate"
+            if newest is not None:
+                return (float(newest.get("total") or 0.0), cap,
+                        f"stale — last reading {newest.get('day')}")
+    except Exception:
+        pass
+    return 0.0, cap, "unavailable"
 
 
 def render_status_summary() -> Tuple[str, List[ButtonRow]]:
@@ -156,7 +180,7 @@ def render_status_summary() -> Tuple[str, List[ButtonRow]]:
     daemon_ok, daemon_total = _count_daemons()
     cron_ok, cron_total, cron_fail = _count_cron(jobs)
     orphans = _cron_orphans(jobs)
-    used, cap = _spend_today()
+    used, cap, spend_source = _spend_today()
 
     # Connect to coordinator DB
     missions_done = missions_total = missions_blocked = 0
@@ -183,9 +207,12 @@ def render_status_summary() -> Tuple[str, List[ButtonRow]]:
         "*📊 Estate Status*",
         "",
         f"{daemon_emoji} Daemons: {daemon_ok}/{daemon_total} running",
-        f"{cron_emoji} Cron: {cron_ok}/{cron_total} healthy · {cron_fail} failing",
+        # Orphans force cron_emoji red, so the label has to name them or the line
+        # reads as a contradiction: "🔴 Cron: 28/32 healthy · 0 failing".
+        f"{cron_emoji} Cron: {cron_ok}/{cron_total} healthy · {cron_fail} failing"
+        + (f" · {len(orphans)} orphaned" if orphans else ""),
         f"{mission_emoji} Missions: {missions_done} done / {missions_total} total · {missions_blocked} blocked",
-        _spend_gauge(used, cap),
+        _spend_gauge(used, cap, spend_source),
         "",
     ]
 

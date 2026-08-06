@@ -128,7 +128,7 @@ def test_status_summary_surfaces_cron_orphans(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(
         "gateway.operator_shell.status_summary._spend_today",
-        lambda: (1.0, 20.0),
+        lambda: (1.0, 20.0, "estate"),
     )
 
     orphans = _cron_orphans()
@@ -142,6 +142,32 @@ def test_status_summary_surfaces_cron_orphans(tmp_path, monkeypatch):
     assert "rotting summarize" in text or "deadbeef" in text
     assert any("estate:status" in cb or cb == "estate:status"
                for row in buttons for _l, cb in row) or buttons
+    # An orphan forces the cron emoji red; the label must name it, or the line
+    # renders as the contradiction "red · 0 failing".
+    assert "orphaned" in text
+
+
+def test_spend_gauge_never_shows_green_when_the_reading_is_missing():
+    """The regression that made this card worthless.
+
+    On 2026-08-06 the gauge read "$3.91 / $20.00 20% [daily cap]" in GREEN while
+    the estate had burned $1,020.34, because its source counted metered API
+    dollars only. An absent or stale reading must therefore never be rendered as
+    a healthy number — "unknown" is the honest output, and a stale one has to
+    carry the date it came from.
+    """
+    from gateway.operator_shell.status_summary import _spend_gauge
+
+    missing = _spend_gauge(0.0, 120.0, "unavailable")
+    assert "unknown" in missing
+    assert "🟢" not in missing and "$0.00" not in missing
+
+    stale = _spend_gauge(50.0, 120.0, "stale — last reading 2026-08-01")
+    assert "2026-08-01" in stale and "⚠️" in stale
+
+    # A real reading over the cap must be red, not clamped into comfort.
+    hot = _spend_gauge(1091.29, 120.0, "estate")
+    assert "🔴" in hot and "1091.29" in hot
 
 
 @pytest.mark.skipif(
