@@ -144,6 +144,99 @@ def test_error_text_is_bounded(tmp_path, monkeypatch):
     assert len(row["error"]) <= 300
 
 
+# ── Slowest: one row per action, not per call ───────────────────────────────
+# `slow.append((ms, lab))` ranked individual CALLS, so a repeatedly-slow action occupied every
+# row and crowded out every other. Measured on the live store 2026-08-06: st_health×3 and
+# st_money×2 took all 5 rows, hiding st_status (65.7s), run (37.4s) and refresh (36.7s).
+
+
+def _durations(tmp_path, pairs):
+    """pairs: (label, ms) per call. Rows are live so rollup does not filter them."""
+    import os
+    path = tmp_path / "2026-08-06.jsonl"
+    with path.open("w", encoding="utf-8") as fh:
+        for i, (lab, ms) in enumerate(pairs):
+            act, _, arg = lab.partition(":")
+            fh.write(json.dumps({
+                "ts": 1_754_000_000 + i, "iso": "2026-08-06T01:00:00",
+                "action": act, "arg": arg, "status": "ok", "ms": float(ms),
+                "source": "button", "pid": os.getpid(), "live": True,
+            }) + "\n")
+    return path
+
+
+@pytest.fixture
+def _window(tmp_path, monkeypatch):
+    monkeypatch.setattr(activity, "_dir", lambda: tmp_path)
+    monkeypatch.setattr(activity, "_path", lambda day=None: tmp_path / "2026-08-06.jsonl")
+    return tmp_path
+
+
+def test_one_repeated_action_cannot_fill_the_slowest_list(_window):
+    """The defect, stated as the property that replaces it.
+
+    Six slow st_health calls plus four other slow actions: before, st_health took all five
+    rows and the other four were invisible.
+    """
+    _durations(_window, [("st_health", 100_000 + i) for i in range(6)]
+               + [("st_money", 90_000), ("st_status", 80_000),
+                  ("run", 70_000), ("refresh", 60_000)])
+    slow = activity.rollup(days=1)["slowest"]
+    assert [e[1] for e in slow] == ["st_health", "st_money", "st_status", "run", "refresh"]
+
+
+def test_the_slowest_row_reports_the_worst_call_not_the_first(_window):
+    _durations(_window, [("st_health", 5_000), ("st_health", 120_000), ("st_health", 9_000)])
+    ms, lab, n, typ = activity.rollup(days=1)["slowest"][0]
+    assert (lab, ms, n) == ("st_health", 120_000.0, 3)
+    assert typ == 9_000.0  # median of 5k/9k/120k — the outlier does not move it
+
+
+def test_a_one_off_hang_reads_differently_from_a_chronically_slow_action(_window):
+    """The reason `typ` exists at all.
+
+    On live data `refresh` was 36.7s worst but 0.0s typical of 220 calls, while `st_health`
+    was 117.5s typical of 5. Ranked by worst alone those two rows look identical, and the
+    operator would chase the wrong one.
+    """
+    _durations(_window, [("refresh", 1)] * 20 + [("refresh", 40_000)]
+               + [("st_health", 38_000)] * 5)
+    text, _ = render_activity(days=1)
+    assert "`refresh` — 40.0s worst of 21 · typ 0.0s" in text
+    assert "`st_health` — 38.0s worst of 5 · typ 38.0s" in text
+
+
+def test_a_single_call_says_no_count(_window):
+    """`worst of 1 · typ 5.0s` restates the same number three times."""
+    _durations(_window, [("run", 5_000)])
+    text, _ = render_activity(days=1)
+    assert "⏱ `run` — 5.0s" in text
+    assert "worst of" not in text
+
+
+def test_the_panel_shows_five_distinct_actions_where_it_showed_two(_window):
+    """Render-level: the assertion that failed before this shipped."""
+    _durations(_window, [("st_health", 100_000 + i) for i in range(3)]
+               + [("st_money", 90_000), ("st_money", 88_000)]
+               + [("st_status", 65_000), ("run", 37_000), ("refresh", 36_000)])
+    text, _ = render_activity(days=1)
+    slowest_block = text.split("*Slowest*")[1].split("*Last 8*")[0]
+    labels = {ln.split("`")[1] for ln in slowest_block.splitlines() if ln.startswith("⏱")}
+    assert labels == {"st_health", "st_money", "st_status", "run", "refresh"}
+
+
+def test_a_zero_duration_action_never_reaches_the_slowest_list(_window):
+    """Every `refresh` served from cache has ms=0; 220 of them must not crowd the list."""
+    _durations(_window, [("cached", 0)] * 50 + [("run", 1_000)])
+    assert [e[1] for e in activity.rollup(days=1)["slowest"]] == ["run"]
+
+
+def test_an_arg_keeps_actions_apart(_window):
+    """`tune:sizing` and `tune:spend` are different actions and must not collapse."""
+    _durations(_window, [("tune:sizing", 9_000), ("tune:spend", 8_000)])
+    assert [e[1] for e in activity.rollup(days=1)["slowest"]] == ["tune:sizing", "tune:spend"]
+
+
 # ── Knob depth ──────────────────────────────────────────────────────────────
 # Grouping fixed the 28-button screen but left every knob 3 taps away. Two changes cut that:
 # the index promotes knobs you have actually used, and a set lands back in its group.

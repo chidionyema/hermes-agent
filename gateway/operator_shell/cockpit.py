@@ -683,10 +683,16 @@ def render_activity(days: int = 7) -> Tuple[str, List[ButtonRow]]:
     for lab, n in r["top"]:
         lines.append(f"• `{lab}` — {n}×")
 
+    # One row per action, same rule the *Failed* section above already uses: five rows of one
+    # repeated action answer "which actions are slow" with a single action. `worst of N · typ`
+    # is what separates "this action is always slow" from "it hung once".
     if r["slowest"]:
         lines += ["", "*Slowest*"]
-        for ms, lab in r["slowest"]:
-            lines.append(f"⏱ `{lab}` — {ms/1000:.1f}s")
+        for ms, lab, n, typ in r["slowest"]:
+            if n > 1:
+                lines.append(f"⏱ `{lab}` — {ms/1000:.1f}s worst of {n} · typ {typ/1000:.1f}s")
+            else:
+                lines.append(f"⏱ `{lab}` — {ms/1000:.1f}s")
 
     lines += ["", "*Last 8*"]
     for row in rows_all[-8:][::-1]:

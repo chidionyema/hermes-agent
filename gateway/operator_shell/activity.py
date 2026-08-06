@@ -29,6 +29,7 @@ from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+from statistics import median
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 # Proof.render() writes "✅ *DONE* — ..." / "⚠️ *FAILED* — ...". Pull the status back out
@@ -335,7 +336,7 @@ def rollup(days: int = 7, live_only: bool = True) -> Dict[str, Any]:
     failed: Counter = Counter()
     by_source: Counter = Counter()
     served_cache = 0
-    slow: List[Tuple[float, str]] = []
+    durations: Dict[str, List[float]] = {}
     for r in rows:
         lab = _label(r)
         used[lab] += 1
@@ -346,8 +347,18 @@ def rollup(days: int = 7, live_only: bool = True) -> Dict[str, Any]:
             failed[lab] += 1
         ms = float(r.get("ms") or 0.0)
         if ms > 0:
-            slow.append((ms, lab))
-    slow.sort(reverse=True)
+            durations.setdefault(lab, []).append(ms)
+    # One row per ACTION, not per call. Ranked by worst because "Slowest" is asking about the
+    # worst experience the operator had — but a single outlier among a hundred fast calls
+    # would then read as a chronically slow action, so `typical` (the median) ships beside it
+    # and `n` says how many calls it summarises. Without the de-dup, one repeated action fills
+    # every row: measured on the live store 2026-08-06, st_health×3 + st_money×2 took all 5,
+    # hiding st_status (65.7s), run (37.4s) and refresh (36.7s) entirely.
+    slow: List[Tuple[float, str, int, float]] = []
+    for lab, vals in durations.items():
+        vals.sort()
+        slow.append((vals[-1], lab, len(vals), median(vals)))
+    slow.sort(key=lambda e: e[0], reverse=True)
     return {
         "days": days,
         "total": len(rows),
