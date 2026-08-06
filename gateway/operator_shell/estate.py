@@ -18,9 +18,6 @@ from gateway.operator_shell.panel_chrome import nav
 
 ButtonRow = List[Tuple[str, str]]
 
-# Pre-warm the coordinator import in a background thread so the first tap on 🎛 Run
-# is instant. _load_coordinator() takes ~13s on first load (2938-line coordinator.py);
-# without this the first operator to open Run waits 13s staring at nothing.
 import threading
 
 
@@ -29,10 +26,6 @@ def _prewarm_coordinator() -> None:
         _load_coordinator()
     except Exception:
         pass
-
-
-_thread = threading.Thread(target=_prewarm_coordinator, daemon=True)
-_thread.start()
 
 
 @dataclass
@@ -66,6 +59,20 @@ def _hermes_home() -> Path:
 
 _COORD_CACHE: Any = None
 _COORD_ERROR: Optional[str] = None
+
+# Pre-warm the coordinator import in a background thread so the first tap on 🎛 Run
+# is instant. _load_coordinator() takes ~13s on first load (2938-line coordinator.py);
+# without this the first operator to open Run waits 13s staring at nothing.
+#
+# Started HERE, below the two globals it mutates, not at the top of the module where it
+# used to live. A thread launched before `_COORD_CACHE = None` executes races the rest of
+# this module's own body: it reads a global that may not be bound yet, and if it wins the
+# import it writes a loaded coordinator that line above then overwrites with None. It is a
+# narrow window — the main thread reaches the assignment in microseconds and the import
+# takes ~13s — which is exactly why it would have survived every test and shown up only as
+# an unreproducible boot-time card. Ordering costs nothing; leave it ordered.
+_thread = threading.Thread(target=_prewarm_coordinator, daemon=True)
+_thread.start()
 
 
 def _load_coordinator() -> Any:
@@ -166,10 +173,24 @@ def render_panel_view() -> PanelView:
         return PanelView(text=text, paused=paused, buttons=buttons, pin_edit=True, ok=ok)
     except Exception as exc:
         logger.error("render_panel_view failed: %s", exc, exc_info=True)
+        # Name the failure SITE, not just the message. `'object' object has no attribute
+        # 'connect'` was rendered on the home card for hours on 2026-08-06 and identified
+        # nothing: a dozen modules call `C.connect()`, and this logger's traceback never
+        # reached any log file the operator can read (see memory
+        # daemon-log-drops-non-critical-logging). The last frame is the one fact that
+        # turns "the cockpit is broken" into a file to open, and the card is the one
+        # place guaranteed to be seen.
+        import traceback as _tb
+
+        frames = _tb.extract_tb(exc.__traceback__)
+        where = ""
+        if frames:
+            f = frames[-1]
+            where = f"\n{os.path.basename(f.filename)}:{f.lineno} in {f.name}()"
         return PanelView(
             text=(
                 "⚠️ *Mission card unavailable*\n\n"
-                f"```text\n{exc}\n```\n\n"
+                f"```text\n{type(exc).__name__}: {exc}{where}\n```\n\n"
                 "Gateway chat still works."
             ),
             ok=False,
