@@ -268,6 +268,60 @@ def _strip_mdv2(text: str) -> str:
     return cleaned
 
 
+def _action_ack_label(action: str) -> str:
+    """The instant toast for a button tap, derived from the action itself.
+
+    Every tap used to answer with a bare "…", so two different buttons produced
+    an identical bubble and the operator could not tell which one registered —
+    which matters because the handler behind it can run 60s+ (store status
+    probes Stripe, builds hits GitHub).
+
+    Derived, never mapped: a hand-maintained action→label table is the same
+    drift the cockpit already suffers from, and it would go stale the first
+    time someone adds a button.
+    """
+    verb = (action or "").split(":", 1)[0].replace("_", " ").strip()
+    if not verb:
+        return "…"
+    return "⏳ " + verb[:1].upper() + verb[1:]
+
+
+def _outcome_line(view) -> str:
+    """The one-line result of an action, for appending to its panel card.
+
+    PanelView.toast is assigned at 86 sites and read at exactly one --
+    ``activity.py:145``, which files it into meta/operator_shell/activity/
+    *.jsonl. So the action's own account of what happened was written to disk
+    and never put in front of the person who pressed the button. It cannot be
+    delivered through the toast bubble either: answerCallbackQuery accepts
+    one call per query and must fire immediately (the query id expires in ~15s,
+    long before a slow handler returns), so by the time `toast` exists the only
+    channel left is the card.
+
+    That silence hid failures, not just chatter — ``estate.py:1262`` sets
+    ``"♻️ Restarted" if ok else "⚠️ Failed"`` and the operator saw the same
+    panel either way.
+
+    Returns "" when there is nothing worth adding. The suppression rule is
+    de-duplication, not classification: most toasts are navigation labels
+    ("Fleet", "Activity") whose text the panel already prints in its own title,
+    and repeating those would train the operator to ignore the line that
+    matters.
+    """
+    toast = (getattr(view, "toast", "") or "").strip()
+    text = getattr(view, "text", "") or ""
+    ok = getattr(view, "ok", True)
+
+    if toast:
+        # Compare against what the card SHOWS, not against its markup, so a
+        # title written "*Fleet*" still suppresses the toast "Fleet".
+        if toast in _strip_mdv2(text):
+            return ""
+        return toast
+    # A failure with no toast of its own still may not pass silently.
+    return "⚠️ Action failed" if ok is False else ""
+
+
 # ---------------------------------------------------------------------------
 # Markdown table → Telegram-friendly row groups
 # ---------------------------------------------------------------------------
@@ -4340,7 +4394,10 @@ class TelegramAdapter(BasePlatformAdapter):
                 # whole day rather than clustered on restarts.
                 answered = False
                 try:
-                    await query.answer(text="…")
+                    # Name the action being acknowledged. This bubble is the ONLY
+                    # feedback that exists between the tap and the card edit, and a
+                    # bare "…" was identical for all 108 buttons.
+                    await query.answer(text=_action_ack_label(action))
                     answered = True
                 except Exception:
                     pass
@@ -4402,6 +4459,22 @@ class TelegramAdapter(BasePlatformAdapter):
                     view = await self._operator_stop_agents(view)
                 if getattr(view, "prospector_candidates", None):
                     view = await self._operator_queue_prospector(view)
+
+                # Say what the action actually did. Read AFTER the side-effect
+                # blocks above, because they replace `view` wholesale — that is
+                # where "Cron topic ✓", "Stopped 3" and "Use main DM" are set.
+                outcome = _outcome_line(view)
+                if outcome:
+                    try:
+                        view.text = (view.text or "").rstrip() + "\n\n↳ " + outcome
+                    except Exception:
+                        # A view that refuses attribute assignment is not worth
+                        # losing the whole panel over.
+                        logger.warning(
+                            "[%s] could not append outcome to panel for %s",
+                            self.name,
+                            action,
+                        )
 
                 markup = self._panel_keyboard_from_view(view)
 
