@@ -1983,3 +1983,101 @@ class TestPluginCommandEnumeration:
         slack_names = set(slack_subcommand_map())
         assert "status" in tg_names
         assert "status" in slack_names
+
+
+class TestDispatchAndRegistryAgreeC:
+    """A command the gateway dispatches but never registered is an UNFENCED command.
+
+    Found live 2026-08-06: gateway/run.py routed `canonical == "agent_model"`
+    while resolve_command("agent_model") was None. Typing it still reached the
+    handler, because canonical falls back to the raw word for an unregistered
+    command — so the only visible effect was that /help never listed it. The
+    invisible effect was the dangerous one: run.py's slash ACL is gated on
+    is_gateway_known_command(), so the command skipped _check_slash_access
+    entirely and any user could switch the brain.
+
+    These are structural, not per-command: they fail for the NEXT command that
+    drifts the same way, not just for agent_model.
+    """
+
+    def _run_py(self) -> str:
+        from pathlib import Path
+
+        import gateway.run as _run
+
+        return Path(_run.__file__).read_text()
+
+    def test_every_dispatched_canonical_is_a_registered_command(self):
+        import re
+
+        from hermes_cli.commands import resolve_command
+
+        dispatched = set(re.findall(r'canonical == "([a-z0-9_-]+)"', self._run_py()))
+        # Non-vacuity: this pattern is how run.py's cold-path dispatcher is written.
+        assert len(dispatched) > 20, f"dispatch pattern stopped matching ({len(dispatched)})"
+        orphans = sorted(
+            n for n in dispatched
+            if (d := resolve_command(n)) is None or d.name != n
+        )
+        assert orphans == [], (
+            f"dispatched but not registered as a canonical name: {orphans} — "
+            "these skip /help AND _check_slash_access; add a CommandDef"
+        )
+
+    def test_dispatched_commands_are_gateway_known(self):
+        """is_gateway_known_command is what run.py's slash ACL actually consults."""
+        import re
+
+        from hermes_cli.commands import is_gateway_known_command
+
+        dispatched = set(re.findall(r'canonical == "([a-z0-9_-]+)"', self._run_py()))
+        unfenced = sorted(n for n in dispatched if not is_gateway_known_command(n))
+        assert unfenced == [], f"dispatched commands invisible to the slash ACL: {unfenced}"
+
+    def test_agent_model_resolves_from_every_advertised_alias(self):
+        from hermes_cli.commands import is_gateway_known_command, resolve_command
+
+        for word in ("agent_model", "agentmodel", "brain"):
+            definition = resolve_command(word)
+            assert definition is not None, f"/{word} does not resolve"
+            assert definition.name == "agent_model"
+            assert is_gateway_known_command(word) is True
+
+    def test_bypass_set_members_all_have_a_level_two_handler(self):
+        """The set's docstring promises this; a member without one silently no-ops.
+
+        gateway/run.py dispatches bypass members by name inside one block. A name
+        in the set with no branch there falls through to the same "agent is
+        running" catch-all as a non-member, so adding it changes nothing while
+        reading as if the command works mid-run.
+        """
+        import re
+
+        from hermes_cli.commands import ACTIVE_SESSION_BYPASS_COMMANDS
+
+        src = self._run_py()
+        block = src[src.index("_cmd_def_inner.name in _DEDICATED_HANDLERS"):]
+        block = block[:block.index("# Catch-all")]
+        in_block = set(re.findall(r'_cmd_def_inner\.name == "([a-z0-9_]+)"', block))
+        # Handled ahead of the block on the running-agent fast path.
+        handled_earlier = {
+            "help", "status", "restart", "new", "stop", "steer",
+            "approve", "deny", "queue", "background", "agents",
+        }
+        assert len(in_block) > 5, "the dedicated-handler block stopped matching"
+        missing = sorted(ACTIVE_SESSION_BYPASS_COMMANDS - in_block - handled_earlier)
+        assert missing == [], (
+            f"in ACTIVE_SESSION_BYPASS_COMMANDS but with no mid-run handler: {missing}"
+        )
+
+    def test_brain_switchers_do_not_bypass_a_running_agent(self):
+        """/agent_model switches which model answers — same class as /model.
+
+        run.py keeps config-only switches out of the bypass set on purpose
+        ("take effect next message — users should wait"). A mid-run brain swap
+        would apply to a turn already in flight.
+        """
+        from hermes_cli.commands import ACTIVE_SESSION_BYPASS_COMMANDS
+
+        assert "model" not in ACTIVE_SESSION_BYPASS_COMMANDS
+        assert "agent_model" not in ACTIVE_SESSION_BYPASS_COMMANDS

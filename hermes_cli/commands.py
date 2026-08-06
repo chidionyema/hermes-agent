@@ -126,6 +126,13 @@ COMMAND_REGISTRY: list[CommandDef] = [
     # with the verb and carries the word "menu" for the same reason.
     CommandDef("panel", "Open the cockpit — every button, one tap (menu)", "Session",
                gateway_only=True, aliases=("menu", "cockpit", "control", "mission")),
+    # Registered, not just dispatched. run.py:7740 routes canonical == "agent_model",
+    # and canonical falls back to the raw word for an UNregistered command, so typing
+    # it already reached the handler while the command was invisible to /help and,
+    # worse, skipped _check_slash_access (run.py:7531 gates on
+    # is_gateway_known_command). An unregistered command is an unfenced one.
+    CommandDef("agent_model", "Agent & model: which brain is answering, and switch it",
+               "Session", gateway_only=True, aliases=("agentmodel", "brain")),
     CommandDef("inbox", "Decisions waiting on you (approvals / blocked)", "Session",
                gateway_only=True, aliases=("decisions",)),
     CommandDef("fleet", "Project tiles: prospector / signal / TIE / haworks", "Session",
@@ -1147,10 +1154,13 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #   - version: version readout — niche, /hermes version is fine.
 #   - commands: paginated browser — niche when /help exists.
 #   - reload-skills: admin-only filesystem rescan; niche on Slack.
+#   - agent_model: switches which brain answers — admin-only, and registering
+#     it natively clamped /help off the 50-slot cap (the parity test caught it).
 # Note: /help stays a native Slack slash — it's the user-facing directory.
 _SLACK_VIA_HERMES_ONLY = frozenset({
     "credits", "debug", "summary", "usage", "insights",
     "platform", "restart", "update", "version", "commands", "reload-skills",
+    "agent_model",
 })
 
 

@@ -397,18 +397,18 @@ def mission_buttons(
     # and the mission card appends the spine via with_nav(). A dedicated
     # row here would render estate:sdlc twice.
 
-    # ── Daemon controls row ──
-    rows.append([
-        ("♻️ Restart GW", "estate:daemon_restart_now:gateway"),
-        ("🔄 Restart Coord", "estate:restart"),
-    ])
-
-    # ── Quick actions row ──
-    rows.append([
-        ("📊 Status", "estate:status"),
-        ("📝 Assign", "estate:code_prompt"),
-        ("❓ Help", "estate:help"),
-    ])
+    # Three-action information architecture (founder decision 2026-08-04):
+    # the home grid is fires-only. Browse deeper controls via Map (Atlas)
+    # and Run — the home must not become a destination mall.
+    #   1. concerns (≤ _MAX_CONCERNS)
+    #   2. optional cron-delivery fix
+    #   3. pause/resume
+    # The spine is appended last by panel_chrome.nav().
+    # Previously the home also carried a daemon-controls row
+    # (♻️ Restart GW, 🔄 Restart Coord) and a quick-actions row
+    # (📊 Status, 📝 Assign, ❓ Help). `estate:status` was the most
+    # contested: it invited idle browsing when the home's job is to surface
+    # what needs you. Both rows now live under Run / Atlas instead.
 
     if not any(a == pause_or_resume[1] for _l, a in rows_actions(rows)):
         rows.append([pause_or_resume])
@@ -422,8 +422,14 @@ def rows_actions(rows: List[ButtonRow]) -> List[Tuple[str, str]]:
 
 
 def card_headline(verdict: str, detail: str) -> str:
-    """Line 0 of the mission card — Telegram's pinned banner shows only this line."""
-    return f"🏠 *Otto* · *{verdict}* — {detail}"
+    """Line 0 of the mission card — Telegram's pinned banner shows only this line.
+
+    Leads with the panel identity (`Cockpit`), then the verdict, then the detail —
+    so a thumb reading the pinned banner knows which screen it is on before
+    parsing the state. The previous `🏠 *Otto*` lead conflated home identity with
+    panel identity and pushed the screen name past the state glyph.
+    """
+    return f"🎛 *Cockpit* · *{verdict}* — {detail}"
 
 
 def _inflight_section(conn, C) -> str:

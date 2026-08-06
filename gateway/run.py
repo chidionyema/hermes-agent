@@ -7737,6 +7737,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "panel":
             return await self._handle_panel_command(event)
 
+        if canonical == "agent_model":
+            return await self._handle_agent_model_command(event)
+
         if canonical == "inbox":
             return await self._handle_inbox_command(event)
 
