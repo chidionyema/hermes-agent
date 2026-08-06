@@ -146,8 +146,13 @@ COMMAND_REGISTRY: list[CommandDef] = [
                "Session", gateway_only=True, aliases=("agentmodel", "brain")),
     CommandDef("inbox", "Decisions waiting on you (approvals / blocked)", "Session",
                gateway_only=True, aliases=("decisions",)),
+    # "portfolio" used to alias here as well as to `projects`. A duplicate alias is not
+    # an error, it is silently won by whichever CommandDef is registered first — so
+    # /portfolio resolved to fleet (4 hardcoded repos, fleet.py:19-22) while the same
+    # word typed as plain text routed to the 14-project registry via natural_ops. One
+    # word, two destinations. Fleet keeps its own name; the alias goes to projects.
     CommandDef("fleet", "Project tiles: prospector / signal / TIE / haworks", "Session",
-               gateway_only=True, aliases=("portfolio",)),
+               gateway_only=True),
     CommandDef("brief", "5-line executive sitrep", "Session",
                gateway_only=True, aliases=("sitrep",)),
     CommandDef("missions", "Autopilot mission board", "Session",
