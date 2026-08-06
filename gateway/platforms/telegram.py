@@ -4438,15 +4438,10 @@ class TelegramAdapter(BasePlatformAdapter):
                         is_mission_msg = False
 
                 if is_mission_msg and not pin_this:
-                    try:
-                        await self._send_message_with_thread_fallback(
-                            chat_id=str(query.message.chat_id),
-                            text=self.format_panel(view.text),
-                            parse_mode=ParseMode.MARKDOWN_V2,
-                            reply_markup=markup,
-                        )
-                    except Exception:
-                        logger.exception(
+                    if not await self.deliver_panel_degrading(
+                        str(query.message.chat_id), view.text, markup, query_thread_id
+                    ):
+                        logger.error(
                             "[%s] estate callback: could not send ephemeral panel", self.name
                         )
                 else:
@@ -4486,7 +4481,16 @@ class TelegramAdapter(BasePlatformAdapter):
                             if mid and pin_this:
                                 save_mission_card(str(query.message.chat_id), str(mid))
                         except Exception:
-                            pass
+                            # The card currently reads "⏳ Loading…" (written
+                            # before the action ran). Giving up here leaves the
+                            # operator on it forever, with no error and no way
+                            # to know whether the action took effect.
+                            await self.deliver_panel_degrading(
+                                str(query.message.chat_id),
+                                view.text,
+                                markup,
+                                query_thread_id,
+                            )
             except Exception as exc:
                 logger.error("[%s] estate callback query failed: %s", self.name, exc, exc_info=True)
                 # Two things must happen here, and neither did before.
@@ -5649,6 +5653,58 @@ class TelegramAdapter(BasePlatformAdapter):
                 exc_info=True,
             )
             return self.format_message(content)
+
+    async def deliver_panel_degrading(
+        self, chat_id: str, text: str, markup=None, thread_id=None
+    ) -> bool:
+        """Send a panel, degrading to plain text rather than delivering nothing.
+
+        The estate callback path writes "⏳ Loading…" into the card BEFORE
+        running the action (see the estate callback handler). If every delivery
+        attempt afterwards fails, that placeholder is what the operator is left
+        looking at — permanently, with no error and no way to tell whether the
+        action ran. A formatting fault must therefore degrade, not strand.
+
+        Order: MarkdownV2 first, then the same content as plain text with the
+        markers stripped. The streaming path already degrades this way
+        (_strip_mdv2 + parse_mode=None); this gives panels the same floor.
+
+        Returns True if the operator received something.
+        """
+        extra = {"message_thread_id": thread_id} if thread_id else {}
+
+        try:
+            await self._send_message_with_thread_fallback(
+                chat_id=str(chat_id),
+                text=self.format_panel(text),
+                parse_mode=ParseMode.MARKDOWN_V2,
+                reply_markup=markup,
+                **extra,
+            )
+            return True
+        except Exception as exc:
+            logger.warning(
+                "[%s] panel MarkdownV2 delivery failed (%s) — retrying as plain text",
+                self.name,
+                exc,
+            )
+
+        try:
+            await self._send_message_with_thread_fallback(
+                chat_id=str(chat_id),
+                text=_strip_mdv2(text),
+                parse_mode=None,
+                reply_markup=markup,
+                **extra,
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "[%s] panel delivery failed in both MarkdownV2 and plain text — "
+                "the operator is left on the loading card",
+                self.name,
+            )
+            return False
 
     # ── Group mention gating ──────────────────────────────────────────────
 
