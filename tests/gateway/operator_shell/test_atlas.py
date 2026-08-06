@@ -98,7 +98,18 @@ def test_unknown_room_falls_back_to_atlas():
     assert any("estate:room:code" in cb for row in rows for _l, cb in row)
 
 
-def test_atlas_render_matches_empty_find():
+def test_atlas_render_matches_empty_find(monkeypatch):
+    """Pin the clock: both panels footer themselves with panel_stamp(), which
+    reads time.time() at render. Comparing two unpinned renders fails whenever
+    the pair straddles a second boundary (00:34:14 vs 00:34:15) — measured at
+    roughly 1 run in 5, which randomly blocked the pre-commit gate."""
+    import time as _time
+
+    from gateway.operator_shell import panel_chrome
+
+    monkeypatch.setattr(panel_chrome.time, "time", lambda: 1_700_000_000.0)
+    assert _time is panel_chrome.time  # the patch must cover both renders
+
     a, ar = render_atlas()
     b, br = render_find(None)
     assert a == b
