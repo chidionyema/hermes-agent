@@ -264,8 +264,12 @@ def render_home() -> Tuple[str, List[ButtonRow]]:
     # handle_estate_action — the previous row offered fix_all / dashboard / onboard,
     # and all three answered "⚠️ Unknown action". Dead buttons on the front door are
     # why the cockpit read as broken rather than as empty.
-    buttons.append([("🖥 Web dashboard", "estate:dashboard"), ("🧠 Health", "estate:health")])
-    buttons.append([("📥 Inbox", "estate:inbox"), ("⚙️ Settings", "estate:tune")])
+    # ⌨️ Assign is here unscoped as well as on each project scoped, because the verb should
+    # never be more than one tap away — that is what "as effective from Telegram as from the
+    # laptop" means. The unscoped card says so plainly and points back at the project list.
+    buttons.append([("⌨️ Assign work", "estate:assign"), ("🖥 Web dashboard", "estate:dashboard")])
+    buttons.append([("🧠 Health", "estate:health"), ("📥 Inbox", "estate:inbox")])
+    buttons.append([("⚙️ Settings", "estate:tune")])
 
     # ── Self-improvement summary line (always visible on Home) ──
     try:
@@ -344,6 +348,11 @@ def render_project_dashboard(project_key: str, client_mode: bool = False) -> Tup
         lines.append("Assign → Board → Fleet → Review → Ship → Learn")
         lines.append("")
         buttons = [
+            # ⌨️ Assign leads, and owns its row, because it is the only VERB on this card —
+            # everything else reports. It is also the parity fix: `code_assign` was handled
+            # but emitted by no literal button, so giving the machine work was typed-only,
+            # and a run had no way to say which repo it was for. `assign:<key>` does both.
+            [("⌨️ Assign work", f"estate:assign:{project_key}")],
             [("📊 SDLC", f"estate:sdlc:{project_key}"),
              ("🚢 CI", f"estate:builds:{project_key}")],
             [("📜 Activity", f"estate:activity:{project_key}"),

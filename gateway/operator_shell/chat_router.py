@@ -110,8 +110,10 @@ def route_telegram_ceo(text: str, who: str = "?") -> Optional[RouteResult]:
 
         body = CR.is_code_command(raw) or CR.is_natural_code_assign(raw)
         if body:
+            # The scope that tapping ⌨️ Assign on a project left behind, if still fresh.
+            # None (never tapped, or expired) is the pre-2026-08-06 unscoped run, unchanged.
             ack, tid, buttons = CR.start_code_run(
-                body, created_by=f"telegram:{who}"
+                body, created_by=f"telegram:{who}", project_key=CR.get_assign_scope()
             )
             return RouteResult(
                 kind="code",

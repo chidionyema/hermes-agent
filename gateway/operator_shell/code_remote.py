@@ -29,6 +29,81 @@ _CODE_PREFIXES = re.compile(
     re.I,
 )
 
+# ── Assign scope: the Telegram equivalent of `cd`ing into a repo ────────────────────────
+#
+# On a laptop you pick the repo before you type. In Telegram there was no way to say WHICH
+# project a coding run was for: `start_code_run(body)` took text and nothing else, so every
+# run landed wherever the executor happened to start. Tapping ⌨️ Assign on a project sets
+# this scope; the next `cc ...` reply within the TTL runs against that project's repo.
+#
+# Deliberately a short TTL and a single slot, not a session: a scope that outlives the
+# founder's memory of setting it is worse than no scope, because the run looks correct and
+# edits the wrong repo. Expiry falls back to unscoped, which is the pre-2026-08-06 behaviour.
+_SCOPE_FILE = os.path.expanduser("~/.hermes/state/assign_scope.json")
+_SCOPE_TTL_S = 900  # 15 minutes
+
+
+def set_assign_scope(project_key: str) -> None:
+    """Remember which project the next coding run belongs to."""
+    import json
+
+    key = (project_key or "").strip().lower()
+    os.makedirs(os.path.dirname(_SCOPE_FILE), exist_ok=True)
+    tmp = _SCOPE_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"project_key": key, "ts": time.time()}, fh)
+    os.replace(tmp, _SCOPE_FILE)
+
+
+def get_assign_scope() -> Optional[str]:
+    """The project key set within the TTL, else None. Never raises."""
+    import json
+
+    try:
+        with open(_SCOPE_FILE, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if time.time() - float(data.get("ts") or 0) > _SCOPE_TTL_S:
+            return None
+        return (data.get("project_key") or "").strip().lower() or None
+    except Exception:
+        return None
+
+
+def clear_assign_scope() -> None:
+    try:
+        os.remove(_SCOPE_FILE)
+    except OSError:
+        pass
+
+
+def resolve_project_repo(project_key: str) -> Optional[Tuple[str, str]]:
+    """(display name, absolute repo path) for a registry key, or None.
+
+    The path is not trusted from the registry alone — a key naming a repo that is not on
+    disk would send the executor to a directory that does not exist, which fails deep inside
+    a coding run instead of here.
+    """
+    import json
+
+    key = (project_key or "").strip().lower()
+    if not key:
+        return None
+    try:
+        reg = json.loads(
+            open(os.path.expanduser("~/.hermes/projects.json"), encoding="utf-8").read()
+        )
+    except Exception:
+        return None
+    for proj in reg.get("projects", []):
+        if str(proj.get("key", "")).lower() != key:
+            continue
+        repo = proj.get("primary_repo") or proj.get("key")
+        path = os.path.expanduser(f"~/Documents/code/{repo}")
+        if not os.path.isdir(path):
+            return None
+        return str(proj.get("name") or key), path
+    return None
+
 
 def is_code_command(text: str) -> Optional[str]:
     """If text is a coding assign command, return the task body; else None."""
@@ -123,8 +198,18 @@ def find_inflight_code_runs(conn, C, limit: int = 5):
     return list(rows)
 
 
-def start_code_run(body: str, created_by: str = "telegram") -> Tuple[str, str, List[ButtonRow]]:
-    """Create durable coding task (idempotent within 10m for same body)."""
+def start_code_run(
+    body: str,
+    created_by: str = "telegram",
+    project_key: Optional[str] = None,
+) -> Tuple[str, str, List[ButtonRow]]:
+    """Create durable coding task (idempotent within 10m for same body).
+
+    `project_key` scopes the run to a registry project's repo. It is resolved to a real
+    directory here rather than passed through as a name, so an unknown or not-on-disk key
+    degrades to an unscoped run — the old behaviour — instead of pointing the executor at a
+    path that does not exist.
+    """
     C = _coord()
     conn = C.connect()
     try:
@@ -149,13 +234,21 @@ def start_code_run(body: str, created_by: str = "telegram") -> Tuple[str, str, L
 
         can_run, qmsg = quota_honesty()
         fence = detect_fence(body)
-        title = f"💻 CODE: {body[:100]}"
+        scoped = resolve_project_repo(project_key) if project_key else None
+        if scoped:
+            proj_name, proj_path = scoped
+            title = f"💻 CODE [{proj_name}]: {body[:100]}"
+            where = f"REPO: {proj_path}\nWork in this repository unless told otherwise.\n\n"
+        else:
+            title = f"💻 CODE: {body[:100]}"
+            where = ""
         tid = C.open_task(
             conn,
             title=title,
             body=(
                 "CODING RUN (Claude Code remote via claude -p / agy).\n"
                 "Do real file edits + tests. Cite evidence. No fabrication.\n\n"
+                f"{where}"
                 f"TASK:\n{body}"
             ),
             kind="injected",
@@ -468,3 +561,77 @@ def is_natural_code_assign(text: str) -> Optional[str]:
     if len(body.split()) < 4:
         return None
     return body
+
+
+def render_assign_card(project_key: str = "") -> Tuple[str, List[ButtonRow]]:
+    """⌨️ Assign — the door to giving the machine work, optionally scoped to a project.
+
+    Two defects this closes, both found 2026-08-06:
+
+    - `code_assign` was HANDLED but no literal button anywhere emitted it (proved by
+      `tests/gateway/operator_shell/test_every_button_dispatches.py::_declared`). The single
+      most important verb in the product was reachable only by already knowing the words
+      `cc` / `Otto code` / `assign`. That is the opposite of a phone-first cockpit.
+    - Assignment had no project scope, so "work on Prospector" could only be said in prose
+      and hoped for. Tapping this on a project sets the scope; the next `cc ...` runs there.
+
+    NOTE this renderer WRITES (the scope file) — the one exception to the read-only rule
+    stated at `estate.py:285`, and the reason it exists: tapping a project's Assign button
+    IS the act of choosing the repo.
+    """
+    from gateway.operator_shell.panel_chrome import panel_stamp, with_nav
+
+    key = (project_key or "").strip().lower()
+    scoped = resolve_project_repo(key) if key else None
+    if scoped:
+        set_assign_scope(key)
+        name, path = scoped
+        lines = [
+            f"⌨️ *Assign work — {name}*",
+            "",
+            f"Scoped to `{path.replace(str(os.path.expanduser('~')), '~')}`"
+            f" for {_SCOPE_TTL_S // 60} minutes.",
+            "",
+            "Reply in this chat with:",
+            "• `cc <what to build>`",
+            "",
+            "The run opens against this repo. Say it the way you would to a colleague —",
+            "no ticket format, no file list needed.",
+        ]
+    else:
+        if key:
+            # A key that resolved to nothing is worth saying out loud: silently falling back
+            # to unscoped is how a run edits the wrong repo and nobody knows why.
+            lines = [f"⚠️ Unknown project `{key}` — assigning unscoped.", ""]
+        else:
+            lines = []
+        lines += [
+            "⌨️ *Assign work*",
+            "",
+            "Reply in this chat with:",
+            "• `cc <what to build>`",
+            "",
+            "Tap a project first to scope the run to its repo.",
+        ]
+
+    lines += ["", "_Money/identity asks are fenced and wait for your approval._", "",
+              panel_stamp("assign")]
+
+    buttons: List[ButtonRow] = []
+    try:
+        C = _coord()
+        conn = C.connect()
+        try:
+            row: ButtonRow = []
+            for r in find_inflight_code_runs(conn, C, limit=2):
+                tid = (r["id"] or "")[:8]
+                row.append((f"📋 {tid}", f"estate:task:{tid}"))
+            if row:
+                buttons.append(row)
+        finally:
+            conn.close()
+    except Exception as exc:  # a dead coordinator must not take the card down
+        logger.warning("render_assign_card: inflight lookup failed: %s", exc)
+
+    buttons.append([("🗂 Projects", "estate:projects")])
+    return "\n".join(lines), with_nav(buttons, "assign")

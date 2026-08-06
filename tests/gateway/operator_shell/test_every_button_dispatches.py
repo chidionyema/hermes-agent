@@ -317,3 +317,43 @@ def test_no_button_emits_an_action_nothing_handles():
             f"{sum(len(w) for w in dead.values())} buttons emit an action with no handler "
             f"({len(dead)} distinct):\n{report}"
         )
+
+
+# --- the reverse direction, for a small curated set --------------------------------------
+
+# The one-directional check above is right in general: ~42 handled actions are typed-only
+# aliases (`sitrep`, `overview`, `map`), and demanding a button for each would be wrong.
+#
+# But "typed-only" is a defect for a verb the founder must be able to REACH without already
+# knowing the magic word. On 2026-08-06 `code_assign` was in that state: assigning coding
+# work — the product's whole point from a phone — was handled, tested, and emitted by no
+# button anywhere. It read as missing because it was unreachable, not because it was unbuilt.
+#
+# This list stays SHORT on purpose. It is not "everything important"; it is the handful of
+# actions where being one tap away is the feature. Adding to it is a design decision.
+CORE_VERBS = {
+    "assign": "give the machine coding work",
+    "projects": "pick which project you are working on",
+    "dashboard": "open the web UI from the phone",
+    "inbox": "see what is waiting on you",
+    "missions": "see what the machine is doing",
+}
+
+
+def test_every_core_verb_is_reachable_by_tapping():
+    declared = _declared()
+    missing = {a: why for a, why in CORE_VERBS.items() if a not in declared}
+    assert not missing, (
+        "core verbs with no button anywhere — reachable only by typing the right words:\n"
+        + "\n".join(f"  estate:{a} — {why}" for a, why in sorted(missing.items()))
+    )
+
+
+def test_core_verbs_are_actually_handled():
+    """Belt to the braces: a button for an unhandled core verb is worse than no button."""
+    exact, prefixes = _handled()
+    unhandled = [
+        a for a in CORE_VERBS
+        if a not in exact and not any(a.startswith(p) for p in prefixes)
+    ]
+    assert not unhandled, f"core verbs with a button but no handler: {unhandled}"

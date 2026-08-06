@@ -317,6 +317,14 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     # working panel behind one missing dict entry.
     "projects":       ("projects",        "render_home",              "Projects",   _ARG_NONE),
     "dashboard":      ("web_dashboard",   "render_web_dashboard",     "Dashboard",  _ARG_NONE),
+    # `code_assign` above is handled but emitted by no button (proved by
+    # test_every_button_dispatches._declared), so the product's most important verb —
+    # give the machine work — was typed-only. `assign` is its tappable door, and unlike
+    # code_assign its argument is a PROJECT KEY, not the task body: `code_assign:<arg>`
+    # treats arg as the thing to build, so a button carrying a project key there would
+    # have opened a coding run literally titled "prospector".
+    # Caveat, in the spirit of the three above: this renderer WRITES (the assign scope).
+    "assign":         ("code_remote",     "render_assign_card",       "Assign",     _ARG_OPT),
 }
 
 
