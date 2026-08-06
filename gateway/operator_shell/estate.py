@@ -244,7 +244,9 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
         try:
             from gateway.operator_shell.preflight import cache_put
 
-            cache_put(action, view.text, view.buttons or [])
+            # ok=view.ok, never bare: a degraded render must not become the answer
+            # every later tap gets (see preflight.cache_put).
+            cache_put(action, view.text, view.buttons or [], ok=view.ok)
         except Exception:
             pass
 
@@ -252,21 +254,35 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
     return view
 
 
-def _render_for_cache(action: str) -> Tuple[str, List[ButtonRow]]:
-    """Render-only path used by the pre-flight background refresh."""
-    if action == "refresh":
-        from gateway.operator_shell.mission import render_mission_card
+def _render_for_cache(action: str) -> Tuple[str, List[ButtonRow], bool]:
+    """Render-only path used by the pre-flight background refresh and boot warmup.
 
-        text, _paused, btns = render_mission_card()
-        return text, btns
+    Returns ``(text, buttons, ok)``. The third element is the whole point: this path
+    has no PanelView, so without it a bridge-down render is stored as though it were
+    an answer — which is exactly how the home card came to say "estate unavailable"
+    for 26 minutes on 2026-08-06 while the coordinator was serving 422 task rows.
+
+    `refresh` goes through ``render_panel_view()`` rather than calling
+    ``render_mission_card()`` directly, so the ok flag has ONE definition
+    (`render_panel_view`, above) instead of a copy that can drift. Bonus: the cached
+    card now carries the ``maybe_auto_pause()`` notice the live path prepends, which
+    the direct call silently dropped.
+    """
+    if action == "refresh":
+        view = render_panel_view()
+        return view.text, view.buttons or [], view.ok
+    # st_* and builds render real states. A store proof that says FAIL is an ANSWER,
+    # not a failure to answer — it is cached like any other, deliberately.
     if action in ("st_status", "st_health", "st_reconcile", "st_money"):
         from gateway.operator_shell.store_ops import render
         verb = action[len("st_"):]
-        return render(verb)
+        text, btns = render(verb)
+        return text, btns, True
     if action == "builds":
         from gateway.operator_shell.builds import render_builds
-        return render_builds()
-    return "", []
+        text, btns = render_builds()
+        return text, btns, True
+    return "", [], True
 
 
 # ── The panel registry ──────────────────────────────────────────────────────────────────

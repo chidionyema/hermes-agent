@@ -74,8 +74,8 @@ def test_warmup_stores_without_raising(cache_dir):
     # Track put completion by wrapping cache_put.
     real_put = pf.cache_put
 
-    def tracking_put(action, text, buttons):
-        real_put(action, text, buttons)
+    def tracking_put(action, text, buttons, ok=True):
+        real_put(action, text, buttons, ok=ok)
         done.append(action)
 
     pf.cache_put = tracking_put  # type: ignore[method-assign]
@@ -119,3 +119,92 @@ def test_warmup_skips_fresh_entries(cache_dir):
     time.sleep(0.2)
     assert calls == []
     assert pf.cache_get("st_status")[0] == "already warm"
+
+
+# --- a failed render must not become the answer ------------------------------------
+#
+# 2026-08-06: the boot warmup rendered the home card inside the window where a gateway
+# restart had the coordinator bridge down. "🔴 UNKNOWN — estate unavailable" was cached
+# and served for 26 minutes while the coordinator was answering with 422 task rows. The
+# founder's report was "nothing works". Nothing was broken except this cache.
+
+
+def test_failed_render_does_not_replace_a_recent_good_entry(cache_dir):
+    from gateway.operator_shell import preflight as pf
+
+    pf.cache_put("refresh", "🎛 Cockpit · healthy", [[("🏠", "estate:refresh")]])
+    pf.cache_put("refresh", "🔴 UNKNOWN — estate unavailable", [], ok=False)
+
+    assert pf.cache_get("refresh")[0] == "🎛 Cockpit · healthy"
+
+
+def test_failed_render_is_stored_when_there_is_nothing_better(cache_dir):
+    """An empty cache has no last-good answer to protect — show the truth."""
+    from gateway.operator_shell import preflight as pf
+
+    pf.cache_put("refresh", "🔴 UNKNOWN — estate unavailable", [], ok=False)
+    hit = pf.cache_get("refresh")
+    assert hit is not None and "unavailable" in hit[0]
+
+
+def test_failed_render_wins_once_the_good_entry_is_stale(cache_dir):
+    """The grace window is bounded on purpose: a stale-good card served through a real
+    outage is the same silent lie in the opposite direction."""
+    from gateway.operator_shell import preflight as pf
+
+    pf.cache_put("refresh", "🎛 Cockpit · healthy", [])
+    data = pf._load()
+    data["refresh"]["ts"] = time.time() - (pf._FAILURE_GRACE_S + 5)
+    pf._store(data)
+
+    pf.cache_put("refresh", "🔴 UNKNOWN — estate unavailable", [], ok=False)
+    assert "unavailable" in pf.cache_get("refresh")[0]
+
+
+def test_cache_refresh_propagates_the_ok_flag(cache_dir):
+    """The background/warmup path has no PanelView, so ok must ride in the return."""
+    from gateway.operator_shell import preflight as pf
+
+    pf.cache_put("refresh", "🎛 Cockpit · healthy", [])
+    pf.cache_refresh("refresh", lambda: ("🔴 estate unavailable", [], False))
+    time.sleep(0.3)
+    assert pf.cache_get("refresh")[0] == "🎛 Cockpit · healthy"
+
+
+def test_cache_refresh_still_accepts_the_two_tuple_contract(cache_dir):
+    from gateway.operator_shell import preflight as pf
+
+    pf.cache_refresh("builds", lambda: ("builds: green", []))
+    deadline = time.time() + 3.0
+    while time.time() < deadline and pf.cache_get("builds") is None:
+        time.sleep(0.05)
+    assert pf.cache_get("builds")[0] == "builds: green"
+
+
+def test_render_for_cache_reports_the_panels_own_ok_flag(monkeypatch):
+    """`refresh` must inherit render_panel_view's ok rather than a second copy of the
+    'estate unavailable' string that can drift away from it."""
+    from gateway.operator_shell import estate
+
+    monkeypatch.setattr(
+        estate, "render_panel_view",
+        lambda: estate.PanelView(text="🔴 estate unavailable", buttons=[], ok=False),
+    )
+    text, buttons, ok = estate._render_for_cache("refresh")
+    assert ok is False and "unavailable" in text
+
+
+def test_dispatch_hands_the_views_ok_flag_to_the_cache(cache_dir, monkeypatch):
+    """The seam, not the halves: a degraded PanelView must reach cache_put as ok=False."""
+    from gateway.operator_shell import activity, estate
+    from gateway.operator_shell import preflight as pf
+
+    seen = {}
+    monkeypatch.setattr(estate, "_dispatch",
+                        lambda a, r: estate.PanelView(text="🔴 estate unavailable", ok=False))
+    monkeypatch.setattr(activity, "record", lambda *a, **k: None)
+    monkeypatch.setattr(pf, "cache_put",
+                        lambda action, text, buttons, ok=True: seen.update(ok=ok))
+
+    estate.handle_estate_action("refresh")
+    assert seen.get("ok") is False, "a degraded render was cached as though it were an answer"

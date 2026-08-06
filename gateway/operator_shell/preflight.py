@@ -11,8 +11,10 @@ What this does
 1. ``cache_get(action)`` returns the last-known result for ``action`` even when past
    TTL (stale-while-revalidate). Returns ``None`` only when the cache is empty.
    The third element of the tuple is ``fresh`` — True when age ≤ TTL.
-2. ``cache_put(action, text, buttons)`` stores the most recent result. Same payload
-   shape every panel already returns — no new contract.
+2. ``cache_put(action, text, buttons, ok=True)`` stores the most recent result. Same
+   payload shape every panel already returns. ``ok=False`` marks a render that could
+   not reach the truth; it is dropped while a recent good entry exists, so a transient
+   bridge blip cannot pin the cockpit in a broken state (see cache_put).
 3. ``cache_refresh(action, render_fn)`` runs ``render_fn()`` in a daemon thread,
    stores the result. The caller returns the cached value immediately and the
    next tap will see the fresh one.
@@ -61,6 +63,9 @@ ButtonRow = List[Any]  # List[Tuple[str, str]] at the panel layer; loose import 
 _DIR = Path(os.path.expanduser("~/.hermes/state"))
 _PATH = _DIR / "preflight-cache.json"
 _LOCK = threading.Lock()
+
+# How long the last GOOD entry outranks a failed render. See cache_put.
+_FAILURE_GRACE_S = 300
 
 _TTL: dict = {
     # action: TTL seconds
@@ -146,11 +151,42 @@ def cache_get(action: str) -> Optional[Tuple[str, List[ButtonRow], bool]]:
         return entry.get("text", ""), entry.get("buttons", []), fresh
 
 
-def cache_put(action: str, text: str, buttons: List[ButtonRow]) -> None:
-    """Store a fresh result. Thread-safe (full read-modify-write under lock)."""
+def cache_put(action: str, text: str, buttons: List[ButtonRow], ok: bool = True) -> None:
+    """Store a fresh result. Thread-safe (full read-modify-write under lock).
+
+    ``ok=False`` means the render could not reach the truth (bridge down, exception) —
+    NOT that it reached the truth and the truth is bad. A failing store proof is real
+    information and is cached like any other answer; "estate unavailable" is the
+    absence of an answer.
+
+    A not-ok render is dropped while a good entry younger than ``_FAILURE_GRACE_S``
+    exists. On 2026-08-06 the boot warmup rendered the home card inside the brief
+    window when a gateway restart had the coordinator bridge down, cached
+    "🔴 UNKNOWN — estate unavailable", and served it for 26 minutes over a healthy
+    estate (422 task rows, agent running, connect OK). The founder's report was
+    "nothing works". One transient render pinned the entire cockpit.
+
+    Past the grace window the failure IS stored. "Never cache a failure" alone swaps
+    one silent lie for another: a real outage would then sit behind a comfortable
+    stale-good card indefinitely. A few minutes of the last known answer is a
+    kindness; an hour of it is a lie.
+    """
     with _LOCK:
         data = _load_unlocked()
-        data[action] = {"ts": time.time(), "text": text, "buttons": buttons}
+        if not ok:
+            prev = data.get(action)
+            age = (time.time() - float(prev.get("ts", 0))) if prev else None
+            if age is not None and age <= _FAILURE_GRACE_S:
+                logger.info(
+                    "preflight: dropped failed render for %s; serving last good (%.0fs old)",
+                    action, age,
+                )
+                return
+            logger.warning(
+                "preflight: caching FAILED render for %s — no good entry within %ss",
+                action, _FAILURE_GRACE_S,
+            )
+        data[action] = {"ts": time.time(), "text": text, "buttons": buttons, "ok": ok}
         # Trim to the last 20 actions to keep the file small.
         if len(data) > 20:
             for k in sorted(data, key=lambda k: data[k].get("ts", 0))[: len(data) - 20]:
@@ -175,8 +211,17 @@ def cache_refresh(action: str, render_fn: Callable[[], Tuple[str, List[ButtonRow
 
     def _runner() -> None:
         try:
-            text, buttons = render_fn()
-            cache_put(action, text, buttons)
+            rendered = render_fn()
+            # 3-tuples carry the render's own ok flag; 2-tuples are the older contract
+            # (external callers, tests) and are trusted as before. This path is the one
+            # that poisoned the cockpit on 2026-08-06 — the boot warmup renders here,
+            # with no PanelView in sight, so the flag has to travel in the return value.
+            if len(rendered) == 3:
+                text, buttons, ok = rendered
+            else:
+                text, buttons = rendered
+                ok = True
+            cache_put(action, text, buttons, ok=ok)
         except Exception as exc:
             logger.debug("preflight: refresh %s failed: %s", action, exc)
 
