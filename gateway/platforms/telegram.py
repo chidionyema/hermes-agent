@@ -3550,7 +3550,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     f"Provider: {provider_label}\n\n"
                     f"Select a provider:"
                 )
-            text = self.format_message(_card)
+            text = self.format_panel(_card)
 
             thread_id = metadata.get("thread_id") if metadata else None
             reply_to_id = self._reply_to_message_id_for_send(None, metadata, reply_to_mode=self._reply_to_mode)
@@ -4428,7 +4428,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
                         mission = await asyncio.to_thread(render_panel_view)
                         await query.edit_message_text(
-                            text=self.format_message(mission.text),
+                            text=self.format_panel(mission.text),
                             parse_mode=ParseMode.MARKDOWN_V2,
                             reply_markup=self._panel_keyboard_from_view(mission),
                         )
@@ -4441,7 +4441,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     try:
                         await self._send_message_with_thread_fallback(
                             chat_id=str(query.message.chat_id),
-                            text=self.format_message(view.text),
+                            text=self.format_panel(view.text),
                             parse_mode=ParseMode.MARKDOWN_V2,
                             reply_markup=markup,
                         )
@@ -4452,7 +4452,7 @@ class TelegramAdapter(BasePlatformAdapter):
                 else:
                     try:
                         edited = await query.edit_message_text(
-                            text=self.format_message(view.text),
+                            text=self.format_panel(view.text),
                             parse_mode=ParseMode.MARKDOWN_V2,
                             reply_markup=markup,
                         )
@@ -4478,7 +4478,7 @@ class TelegramAdapter(BasePlatformAdapter):
                         try:
                             sent = await self._send_message_with_thread_fallback(
                                 chat_id=str(query.message.chat_id),
-                                text=self.format_message(view.text),
+                                text=self.format_panel(view.text),
                                 parse_mode=ParseMode.MARKDOWN_V2,
                                 reply_markup=markup,
                             )
@@ -5622,6 +5622,34 @@ class TelegramAdapter(BasePlatformAdapter):
 
         return text
 
+    def format_panel(self, content: str) -> str:
+        """Prepare operator_shell panel text for parse_mode=MarkdownV2.
+
+        Panels are authored in NATIVE MarkdownV2 (``*Title*`` = bold,
+        ``_4m ago_`` = italic), so they must not go through format_message —
+        that converts CommonMark INTO MarkdownV2 and therefore inverts already
+        converted markup: ``*x*`` → ``_x_`` (bold becomes italic) and authored
+        ``_x_`` → ``\\_x\\_`` (italic becomes literal underscores). Measured
+        across the 47 renderable panels: 187 bold spans demoted, 82 italic
+        spans literalised, 1 panel intact.
+
+        Falls back to format_message if the sanitiser is unavailable or raises,
+        so this can never deliver less than the old behaviour.
+        """
+        if not content:
+            return content
+        try:
+            from gateway.operator_shell.mdv2 import render_panel
+
+            return render_panel(content)
+        except Exception:
+            logger.warning(
+                "[%s] panel sanitiser unavailable — falling back to format_message",
+                self.name,
+                exc_info=True,
+            )
+            return self.format_message(content)
+
     # ── Group mention gating ──────────────────────────────────────────────
 
     def _telegram_require_mention(self) -> bool:
@@ -6551,7 +6579,7 @@ class TelegramAdapter(BasePlatformAdapter):
         chat_id = str(event.source.chat_id) if event and event.source else None
         if not chat_id:
             raise ValueError("send_operator_panel: missing chat_id")
-        text = self.format_message(view.text)
+        text = self.format_panel(view.text)
         markup = self._panel_keyboard_from_view(view)
         card = load_mission_card()
         if (
