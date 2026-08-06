@@ -124,8 +124,15 @@ COMMAND_REGISTRY: list[CommandDef] = [
     # door called only "panel" is invisible to anyone hunting for a menu — and it genuinely
     # was ("how do you even get to the menu?", founder 2026-07-31). The description leads
     # with the verb and carries the word "menu" for the same reason.
+    # Third time this exact lesson: "how do i get to the home page?" (founder, 2026-08-06)
+    # — and /home resolved to nothing. A door whose name is not the word people reach for
+    # is not a door. "now" matches the mission card's own footer ("say `now` to force") and
+    # estate.handle_estate_action's alias, so one word means one thing typed either way.
+    # NOT "start": test_no_alias_shadows_a_real_command_name caught it as an existing
+    # command, and it is also Telegram's own bot-open command. The guard earned its keep.
     CommandDef("panel", "Open the cockpit — every button, one tap (menu)", "Session",
-               gateway_only=True, aliases=("menu", "cockpit", "control", "mission")),
+               gateway_only=True,
+               aliases=("menu", "cockpit", "control", "mission", "home", "now")),
     # Same lesson as "panel" above, one rung further out: the founder typed /dashboard
     # twice on 2026-08-06 (gateway.log 20:30:29, 20:42:19) and got "Unrecognized slash
     # command" both times, because the web UI had no door from Telegram at all. The
