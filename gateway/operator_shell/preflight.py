@@ -60,9 +60,32 @@ logger = logging.getLogger(__name__)
 
 ButtonRow = List[Any]  # List[Tuple[str, str]] at the panel layer; loose import to avoid cycle.
 
-_DIR = Path(os.path.expanduser("~/.hermes/state"))
-_PATH = _DIR / "preflight-cache.json"
 _LOCK = threading.Lock()
+
+
+def _dir() -> Path:
+    """Resolved per call, never at import.
+
+    This module used to bind ``~/.hermes/state`` at import time. 1,303 test sites point
+    HERMES_HOME at a tmp estate and an import-time path ignores every one of them, so a
+    test-suite render — against a tmp coordinator that is legitimately absent — was
+    written into the PRODUCTION cache. On 2026-08-07 a full suite run stored
+    "🔴 UNKNOWN — estate unavailable" (ok=False) under `refresh` in
+    ~/.hermes/state/preflight-cache.json, and the live cockpit served that card to the
+    founder while a direct render of the same estate returned
+    "🎛 Cockpit · 🟡 PAUSED" with ok=True. The founder's report was "nothing is working,
+    still can't access home screen".
+
+    The old ``_DIR``/``_PATH`` module attributes are deliberately GONE rather than kept
+    as aliases: a test that monkeypatches a name which no longer exists fails loudly,
+    whereas an ignored alias would silently write production state again.
+    """
+    return Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))) / "state"
+
+
+def _path() -> Path:
+    return _dir() / "preflight-cache.json"
+
 
 # How long the last GOOD entry outranks a failed render. See cache_put.
 _FAILURE_GRACE_S = 300
@@ -102,10 +125,11 @@ _WARMUP_ACTIONS = (
 
 
 def _load_unlocked() -> dict:
+    path = _path()
     try:
-        if not _PATH.is_file():
+        if not path.is_file():
             return {}
-        with _PATH.open("r") as f:
+        with path.open("r") as f:
             return json.load(f)
     except Exception as exc:
         logger.debug("preflight: cache load failed: %s", exc)
@@ -113,12 +137,13 @@ def _load_unlocked() -> dict:
 
 
 def _store_unlocked(data: dict) -> None:
+    path = _path()
     try:
-        _DIR.mkdir(parents=True, exist_ok=True)
-        tmp = _PATH.with_suffix(".json.tmp")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".json.tmp")
         with tmp.open("w") as f:
             json.dump(data, f)
-        tmp.replace(_PATH)
+        tmp.replace(path)
     except Exception as exc:
         logger.debug("preflight: cache store failed: %s", exc)
 
@@ -175,6 +200,12 @@ def cache_put(action: str, text: str, buttons: List[ButtonRow], ok: bool = True)
         data = _load_unlocked()
         if not ok:
             prev = data.get(action)
+            # Only a GOOD entry can grant grace. The check used to read prev["ts"] without
+            # prev["ok"], so one stored failure granted grace to the next: the log claimed
+            # "serving last good" while the entry it protected was itself
+            # "estate unavailable", and the failure's ts never advanced.
+            if prev is not None and not prev.get("ok", True):
+                prev = None
             age = (time.time() - float(prev.get("ts", 0))) if prev else None
             if age is not None and age <= _FAILURE_GRACE_S:
                 logger.info(
@@ -201,12 +232,23 @@ def cache_invalidate(action: str) -> None:
         _store_unlocked(data)
 
 
-def cache_refresh(action: str, render_fn: Callable[[], Tuple[str, List[ButtonRow]]]) -> None:
+def cache_refresh(
+    action: str,
+    render_fn: Callable[[], Tuple[str, List[ButtonRow]]],
+    store_failures: bool = True,
+) -> None:
     """Run render_fn() in a daemon thread and store the result.
 
     Used by the dispatch path: caller returns the cached value immediately, then
     the next tap will see the fresh one. Errors here MUST NOT propagate — the
     cache is best-effort, never a source of truth.
+
+    ``store_failures=False`` drops a not-ok render instead of caching it. The boot
+    warmup passes it: a pre-fill has no operator waiting on the answer, so a failed
+    warmup render is not "the honest truth to show" — it is just noise that outlives
+    the condition that caused it. Renders the operator actually asked for still cache
+    their failures past the grace window (see cache_put), because there the alternative
+    is a stale-good card served through a real outage.
     """
 
     def _runner() -> None:
@@ -221,6 +263,12 @@ def cache_refresh(action: str, render_fn: Callable[[], Tuple[str, List[ButtonRow
             else:
                 text, buttons = rendered
                 ok = True
+            if not ok and not store_failures:
+                logger.info(
+                    "preflight: warmup render for %s was not ok — not cached; "
+                    "no operator is waiting on a pre-fill", action,
+                )
+                return
             cache_put(action, text, buttons, ok=ok)
         except Exception as exc:
             logger.debug("preflight: refresh %s failed: %s", action, exc)
@@ -238,6 +286,12 @@ def warmup_slow_panels(
     Best-effort: failures are logged and never raised. Does not block the caller.
     ``render_fn`` defaults to ``estate._render_for_cache`` so this module stays
     free of a hard import cycle at module load.
+
+    Warmup renders are stored ONLY when ok. This runs while the gateway is still coming
+    up — on 2026-08-06 it rendered the home card in the window where a restart had the
+    coordinator bridge down, cached "🔴 UNKNOWN — estate unavailable", and served it for
+    26 minutes over a healthy estate. A pre-fill nobody requested must not be able to
+    publish a failure; the operator's own taps still cache theirs (see cache_put).
     """
 
     def _default_render(action: str) -> Tuple[str, List[ButtonRow]]:
@@ -252,5 +306,5 @@ def warmup_slow_panels(
         existing = cache_get(action)
         if existing is not None and existing[2]:
             continue
-        cache_refresh(action, lambda a=action: render(a))
+        cache_refresh(action, lambda a=action: render(a), store_failures=False)
     logger.info("preflight: warmup started for %s", ", ".join(actions))
