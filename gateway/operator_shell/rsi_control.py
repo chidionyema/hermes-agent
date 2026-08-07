@@ -265,10 +265,20 @@ def render_idle_status() -> Tuple[str, List[ButtonRow]]:
         else:
             lines.append("✅ No pending insights")
     
+    # 2026-08-07: both of this panel's original buttons were quarantined-unbuilt, which is
+    # why giving the panel a door had to come with repointing them.
+    #   estate:rsi_run   — MUTATES (shells out to a real code-generating cycle); needs the
+    #                      two-screen confirm pattern, not a wire. Still quarantined.
+    #   estate:idle_start — no start function exists anywhere; rsi_control only ever pgreps
+    #                      for idle_engine. Removed rather than faked, and its quarantine
+    #                      entry deleted in the same commit (the entry must not outlive its
+    #                      last button — test_the_quarantine_has_no_stale_entries).
+    # Both replacements are read-only panels that are already handled.
     buttons: List[ButtonRow] = [
-        [("🔄 Run Cycle", "estate:rsi_run"), ("🧠 RSI Panel", "estate:rsi")],
+        [("🤖 Otto", "estate:otto"), ("🧠 RSI Panel", "estate:rsi")],
     ]
     if not is_running:
-        buttons.append([("▶ Start Engine", "estate:idle_start")])
-    
-    return "\n".join(lines), with_nav(buttons)
+        lines.append("")
+        lines.append("_Start it from the laptop: launchctl kickstart -k gui/501/ai.hermes.idle-engine_")
+
+    return "\n".join(lines), with_nav(buttons, "idle_status")

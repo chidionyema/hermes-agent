@@ -3992,6 +3992,31 @@ class GatewaySlashCommandsMixin:
         text, buttons = await asyncio.to_thread(render_executive_brief)
         return await self._send_operator_view(event, text, buttons)
 
+    async def _handle_otto_command(self, event: MessageEvent) -> Optional[str]:
+        """/otto — services, work, learning, self-improvement. Read-only.
+
+        Same renderer as the `estate:otto` button, so the typed and tapped doors cannot
+        drift apart — the failure mode `/dashboard` documents two handlers above.
+        """
+        from gateway.operator_shell.otto_panel import render_otto
+
+        text, buttons = await asyncio.to_thread(render_otto)
+        return await self._send_operator_view(event, text, buttons)
+
+    async def _handle_rsi_command(self, event: MessageEvent) -> Optional[str]:
+        """/rsi — the self-improvement control panel.
+
+        `rsi_panel.render_rsi_panel`, NOT the identically-named `rsi_control` one: there
+        are two, only this one is reached by `estate:rsi`, and per
+        test_every_button_dispatches.py:154-165 they hold opposite polarity on the arm
+        toggle. Routing the typed door at the other one would toast "paused" while
+        learning stayed live.
+        """
+        from gateway.operator_shell.rsi_panel import render_rsi_panel
+
+        text, buttons = await asyncio.to_thread(render_rsi_panel)
+        return await self._send_operator_view(event, text, buttons)
+
     async def _handle_dashboard_command(self, event: MessageEvent) -> Optional[str]:
         """/dashboard — the typed door to the web UI.
 

@@ -344,6 +344,16 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     "weekly_digest":  ("health_panel",    "render_weekly_digest",     "Digest",     _ARG_NONE),
     "incidents":      ("incident_panel",  "render_incidents",         "Incidents",  _ARG_NONE),
     "otto_health":    ("otto_health",     "render_otto_health",       "Self-audit", _ARG_NONE),
+    # 2026-08-07: `otto_health` is a SCORE; `otto` is the STATE behind it. The audit in
+    # checkpoints/2026-08-07-otto-audit.md found four live failures (a 30s executor cap,
+    # 243 tasks stranded in a status the state machine does not know, zero landed
+    # self-improvements, write-only idle learning) none of which any panel could show —
+    # so the estate's whole autonomy dimension was laptop-only. Read-only, unlike
+    # `otto_health`, which writes a velocity row per render.
+    "otto":           ("otto_panel",      "render_otto",              "Otto",       _ARG_NONE),
+    # `render_idle_status` was written, given buttons, and then given no door: zero
+    # references estate-wide until this line. The "built and unreachable" defect class.
+    "idle_status":    ("rsi_control",     "render_idle_status",       "Idle",       _ARG_NONE),
     "commands":       ("command_palette", "render_commands",          "Commands",   _ARG_NONE),
     "rsi_changes":    ("rsi_control",     "render_rsi_changes",       "Changes",    _ARG_NONE),
     "project":        ("projects",        "render_project_dashboard", "Project",    _ARG_REQ),

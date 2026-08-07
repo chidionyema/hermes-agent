@@ -163,10 +163,11 @@ _UNBUILT: dict[str, str] = {
         "the already-working estate:disarm_learning."
     ),
     "rsi_resume": "MUTATES THE WRONG FILE — same toggle_learning() as rsi_pause; duplicates estate:arm_learning.",
-    "idle_start": (
-        "MUTATES. No start function exists at all — rsi_control.py only ever pgreps for "
-        "idle_engine. Writing one means launching a persistent daemon from a tap."
-    ),
+    # DELETED 2026-08-07 — the sole button emitting `idle_start` was rsi_control.py:272,
+    # removed when `render_idle_status` was finally given a door (estate._PANELS
+    # "idle_status"). Nothing was built: no start function ever existed. The button went,
+    # so the entry had to go too or test_the_quarantine_has_no_stale_entries fails.
+    # "idle_start": removed from quarantine.
     "deploy": (
         "MUTATES. No deploy function exists; the only deploy-adjacent code is read-only CI "
         "status. Triggering a real deployment from a tap needs the confirm pattern."
@@ -218,7 +219,9 @@ def test_the_quarantine_has_no_stale_entries():
 
 def test_the_quarantine_does_not_grow():
     """A ratchet. New unwired buttons must not be absorbed by widening the exemption."""
-    assert len(_UNBUILT) <= 18, (
+    # 18 -> 15 on 2026-08-07: `idle_start` left the list (its button was deleted), and a
+    # ratchet that keeps its old headroom after a win is not a ratchet.
+    assert len(_UNBUILT) <= 15, (
         f"quarantine grew to {len(_UNBUILT)}. Build it or delete the button; if you are "
         f"deliberately deferring, lower this number in the same commit and say why."
     )

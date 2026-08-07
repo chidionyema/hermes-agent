@@ -164,6 +164,14 @@ COMMAND_REGISTRY: list[CommandDef] = [
                gateway_only=True, aliases=("sitrep",)),
     CommandDef("missions", "Autopilot mission board", "Session",
                gateway_only=True, aliases=("missionboard", "mission-board")),
+    # 2026-08-07. rsi_control.py:5 has claimed "Accessible via: /rsi" since it was
+    # written; no such command existed, and `estate:rsi` was reachable only by tapping
+    # through another panel or typing the exact words "self improve". Both of these are
+    # read-only renders, hence both in ACTIVE_SESSION_BYPASS_COMMANDS below.
+    CommandDef("otto", "Otto at a glance — services, work, learning, self-improvement",
+               "Session", gateway_only=True, aliases=("autonomy",)),
+    CommandDef("rsi", "Self-improvement control — arm/disarm, recent changes", "Session",
+               gateway_only=True, aliases=("selfimprove",)),
     CommandDef("resume", "Resume a previously-named session", "Session",
                args_hint="[name]"),
 
@@ -419,11 +427,13 @@ ACTIVE_SESSION_BYPASS_COMMANDS: frozenset[str] = frozenset(
         "missions",
         "new",
         "notify",
+        "otto",
         "panel",
         "profile",
         "queue",
         "restart",
         "revert",
+        "rsi",
         "status",
         "steer",
         "stop",
@@ -1180,10 +1190,13 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #   - agent_model: switches which brain answers — admin-only, and registering
 #     it natively clamped /help off the 50-slot cap (the parity test caught it).
 # Note: /help stays a native Slack slash — it's the user-facing directory.
+#   - otto / rsi: Telegram-first operator panels (2026-08-07). Registering them
+#     natively clamped /curator and /blueprint off the cap — the same contest
+#     agent_model lost. They stay reachable on Slack as /hermes otto | /hermes rsi.
 _SLACK_VIA_HERMES_ONLY = frozenset({
     "credits", "debug", "summary", "usage", "insights",
     "platform", "restart", "update", "version", "commands", "reload-skills",
-    "agent_model",
+    "agent_model", "otto", "rsi",
 })
 
 

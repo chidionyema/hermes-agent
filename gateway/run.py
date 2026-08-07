@@ -7354,6 +7354,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     return await self._handle_brief_command(event)
                 if _cmd_def_inner.name == "missions":
                     return await self._handle_missions_command(event)
+                if _cmd_def_inner.name == "otto":
+                    return await self._handle_otto_command(event)
+                if _cmd_def_inner.name == "rsi":
+                    return await self._handle_rsi_command(event)
                 if _cmd_def_inner.name == "revert":
                     return await self._handle_revert_command(event)
                 if _cmd_def_inner.name == "cron":
@@ -7757,6 +7761,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         if canonical == "missions":
             return await self._handle_missions_command(event)
+
+        if canonical == "otto":
+            return await self._handle_otto_command(event)
+
+        if canonical == "rsi":
+            return await self._handle_rsi_command(event)
 
         if canonical == "revert":
             return await self._handle_revert_command(event)
