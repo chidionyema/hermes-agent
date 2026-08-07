@@ -10,12 +10,22 @@ import pytest
 
 @pytest.fixture
 def cache_dir(tmp_path, monkeypatch):
-    """Point preflight storage at an isolated temp dir."""
+    """Point preflight storage at an isolated temp estate.
+
+    Sets HERMES_HOME instead of patching a module attribute. preflight resolves its path
+    per call from the environment, so this is what actually keeps a test run out of
+    ~/.hermes/state. The previous version patched ``pf._DIR``/``pf._PATH``, which
+    isolated THIS file and left the other 1,303 HERMES_HOME test sites writing the
+    production cache — that is how a suite came to serve the founder
+    "🔴 UNKNOWN — estate unavailable" on 2026-08-07.
+    """
     from gateway.operator_shell import preflight as pf
 
-    monkeypatch.setattr(pf, "_DIR", tmp_path)
-    monkeypatch.setattr(pf, "_PATH", tmp_path / "preflight-cache.json")
-    return tmp_path
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    state = tmp_path / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    assert pf._path().parent == state, pf._path()
+    return state
 
 
 def test_st_ttls_are_explicit(cache_dir):
@@ -208,3 +218,74 @@ def test_dispatch_hands_the_views_ok_flag_to_the_cache(cache_dir, monkeypatch):
 
     estate.handle_estate_action("refresh")
     assert seen.get("ok") is False, "a degraded render was cached as though it were an answer"
+
+
+def test_cache_path_follows_hermes_home(tmp_path, monkeypatch):
+    """The root cause of 2026-08-07: an import-time path ignores HERMES_HOME.
+
+    A test suite that carefully points HERMES_HOME at a tmp estate still wrote
+    ~/.hermes/state/preflight-cache.json, so its own degraded renders were served to the
+    live cockpit. Resolution must happen per call, and it must not be reachable via a
+    stale module attribute either.
+    """
+    from gateway.operator_shell import preflight as pf
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    assert pf._path() == tmp_path / "state" / "preflight-cache.json"
+
+    other = tmp_path / "elsewhere"
+    monkeypatch.setenv("HERMES_HOME", str(other))
+    assert pf._path() == other / "state" / "preflight-cache.json", "path was cached, not re-resolved"
+
+    # A write must land under the env-designated estate and nowhere else.
+    pf.cache_put("builds", "scoped", [])
+    assert (other / "state" / "preflight-cache.json").is_file()
+    assert not (tmp_path / "state" / "preflight-cache.json").exists()
+
+    # The old attributes must be GONE, so any test still patching them fails loudly
+    # instead of silently writing production state.
+    assert not hasattr(pf, "_DIR") and not hasattr(pf, "_PATH")
+
+
+def test_a_stored_failure_does_not_grant_grace_to_the_next_failure(cache_dir):
+    """Grace protects a GOOD entry. It used to read prev["ts"] without prev["ok"], so one
+    stored failure shielded the next and logged "serving last good" over a failure."""
+    from gateway.operator_shell import preflight as pf
+
+    pf.cache_put("refresh", "🔴 first failure", [], ok=False)
+    first_ts = pf._load()["refresh"]["ts"]
+
+    pf.cache_put("refresh", "🔴 second failure", [], ok=False)
+    entry = pf._load()["refresh"]
+
+    assert entry["text"] == "🔴 second failure", "a failure granted grace to another failure"
+    assert entry["ts"] >= first_ts, "the failure's ts never advanced"
+
+
+def test_warmup_does_not_cache_a_failed_render(cache_dir):
+    """The 2026-08-06 incident class: a boot pre-fill published a failure.
+
+    Warmup runs while the coordinator bridge may still be down. Nobody is waiting on a
+    pre-fill, so a not-ok warmup render must leave the cache untouched rather than
+    become the card the founder sees.
+    """
+    from gateway.operator_shell import preflight as pf
+
+    calls = []
+
+    def failing_render(action: str):
+        calls.append(action)
+        return "🔴 UNKNOWN — estate unavailable", [], False
+
+    pf.warmup_slow_panels(actions=("refresh",), render_fn=failing_render)
+    deadline = time.time() + 3.0
+    while time.time() < deadline and not calls:
+        time.sleep(0.05)
+    time.sleep(0.3)  # let the (non-)put settle
+
+    assert calls == ["refresh"], "warmup never rendered"
+    assert pf.cache_get("refresh") is None, "a failed warmup render was published to the cache"
+
+    # An operator-requested render still caches its failure — the opposite lie is worse.
+    pf.cache_put("refresh", "🔴 UNKNOWN — estate unavailable", [], ok=False)
+    assert "unavailable" in pf.cache_get("refresh")[0]
