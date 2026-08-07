@@ -1,0 +1,226 @@
+"""Type what you want; get the button.
+
+The complaint: "buttons may exist but the UI is so confusing I don't know where to find
+anything." That is not fixed by adding buttons — the live sweep counted 131 destinations
+across 76 panels. Past ~30, browsing stops working and search starts.
+
+The index is DERIVED, never hand-written. `natural_ops._PATTERNS` is already the list of
+things this estate can do and the words the operator would use to ask for them — the regex
+literals *are* the vocabulary. Extracting from there means a new op is findable the moment
+it is added, and a hand-kept second list can never drift out of sync with the first.
+
+Two kinds of hit, kept apart on purpose:
+
+- **Do it now** — the op takes no argument, so it is a real button (`estate:brain`).
+- **Type this** — the op needs an id or a value (`approve <id>`), which no button can carry.
+  Shown as text, because a button that cannot work is worse than no button.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Dict, List, Optional, Set, Tuple
+
+from gateway.operator_shell.panel_chrome import nav, panel_stamp, with_nav
+from gateway.operator_shell.usage import example_command
+
+ButtonRow = List[Tuple[str, str]]
+
+# Regex scaffolding and words that match everything are noise, not vocabulary.
+_STOP: Set[str] = {
+    "the", "and", "for", "are", "you", "your", "our", "was", "what", "whats",
+    "how", "hows", "who", "why", "when", "where", "which", "that", "this", "with",
+    "from", "into", "not", "any", "all", "can", "let", "get", "got", "put", "has",
+    "have", "does", "did", "will", "would", "should", "could", "please", "just",
+    "now", "then", "here", "there", "some", "one", "two", "out", "off", "yes",
+    "yeah", "yep", "okay", "sup", "hey", "hello", "thanks", "thank", "thx",
+    "cool", "nice", "hmm", "give", "show", "tell", "want", "need", "make", "very",
+}
+
+_WORD = re.compile(r"[a-z][a-z']{2,}")
+
+
+def _keywords(pattern: str, label: str) -> Set[str]:
+    """Literal words a human would type, pulled out of a regex source plus its label.
+
+    Deliberately crude: lowercase alphabetic runs of 3+, minus stopwords. Regex operators
+    are punctuation, so they fall out on their own; the odd class fragment that survives
+    costs a spurious match on a word nobody types, which is cheaper than a missed one.
+    """
+    words = set(_WORD.findall(pattern.lower()))
+    words |= set(_WORD.findall(label.lower()))
+    return {w for w in words if w not in _STOP}
+
+
+class Entry:
+    __slots__ = ("action", "args", "label", "words", "needs_arg", "usage", "typed")
+
+    def __init__(self, action: str, args: str, label: str, words: Set[str],
+                 usage: Optional[str] = None, typed: bool = False):
+        self.action = action
+        self.args = args
+        self.label = label
+        self.words = words
+        # A slash command: it is dispatched by typing it into the chat, not by a callback,
+        # so there is no button form of it at all. Same "tell them, don't offer a dead
+        # button" treatment as an op that needs an argument.
+        self.typed = typed
+        # "{g1}" is a capture placeholder: the op is only meaningful with an id or value
+        # the operator supplies, so it can be told about but not offered as a tap.
+        self.needs_arg = typed or "{g" in (args or "")
+        # What to type, derived from the pattern itself. The action name is NOT it —
+        # `match_natural_op("se_set …")` is None, so printing that sent the operator to a
+        # command the router has never accepted.
+        self.usage = usage
+
+    @property
+    def callback(self) -> str:
+        return f"estate:{self.action}" + (f":{self.args}" if self.args and not self.needs_arg else "")
+
+
+def _index() -> List[Entry]:
+    from gateway.operator_shell.natural_ops import _PATTERNS
+
+    seen: Dict[str, Entry] = {}
+    for pat, action, args, label in _PATTERNS:
+        if not label:
+            continue  # unlabelled noise-absorbers ("ok", "👍") are not destinations
+        entry = Entry(action, args, label, _keywords(pat.pattern, label),
+                      example_command(pat) if "{g" in (args or "") else None)
+        # Several patterns reach the same destination (there are five ways to ask for the
+        # brief). Merge their vocabulary onto one result instead of listing it five times.
+        key = f"{action}|{args}"
+        if key in seen:
+            seen[key].words |= entry.words
+            if seen[key].usage is None:
+                seen[key].usage = entry.usage
+        else:
+            seen[key] = entry
+    return _collapse_same_label(list(seen.values())) + _slash_entries()
+
+
+def _slash_entries() -> List[Entry]:
+    """The slash commands, as findable destinations.
+
+    Telegram's ``/`` list shows 9 commands and hides the other 49 (``menu_profile:
+    operator``, config.yaml). The hidden ones still dispatch perfectly — but a command you
+    cannot see and cannot guess the name of does not exist to the operator. This is the only
+    surface that can reintroduce them, because it is searched by meaning rather than
+    browsed.
+
+    They are `typed`, never buttons: a slash command is text the router parses, so a
+    callback button could not carry it. Derived from the registry for the same reason the
+    op index is derived from `_PATTERNS` — a hand-kept copy drifts.
+    """
+    try:
+        from hermes_cli.commands import gateway_command_index
+    except Exception:
+        return []  # find must never be the thing that breaks; no commands is survivable
+    try:
+        rows = gateway_command_index()
+    except Exception:
+        return []
+    out: List[Entry] = []
+    for name, description, args_hint, aliases in rows:
+        vocab = " ".join([name, *aliases]).replace("-", " ").replace("_", " ")
+        usage = f"/{name} {args_hint}".strip() if args_hint else f"/{name}"
+        out.append(Entry("", "", description, _keywords(vocab, description),
+                         usage=usage, typed=True))
+    return out
+
+
+def _collapse_same_label(entries: List[Entry]) -> List[Entry]:
+    """One destination, one row — even when it is reachable both by tap and by typing.
+
+    `find` is registered twice: argless (open the panel) and with a capture (`find spend`).
+    Distinct keys, identical label, so a search for "search" printed *Find anything* as a
+    ⌨️ line **and** as a button — the same duplicate-button defect already fixed twice on
+    the home card. The tappable form wins: it is the one a button can carry, and the panel
+    it opens explains the typed form anyway.
+    """
+    by_label: Dict[str, Entry] = {}
+    order: List[str] = []
+    for entry in entries:
+        key = f"{entry.action}|{entry.label}"
+        if key not in by_label:
+            by_label[key] = entry
+            order.append(key)
+            continue
+        kept = by_label[key]
+        if kept.needs_arg and not entry.needs_arg:
+            entry.words |= kept.words
+            entry.usage = entry.usage or kept.usage
+            by_label[key] = entry
+        else:
+            kept.words |= entry.words
+            kept.usage = kept.usage or entry.usage
+    return [by_label[k] for k in order]
+
+
+def search(query: str, limit: int = 8) -> List[Tuple[int, Entry]]:
+    """Rank destinations against a free-text query. Exact word beats prefix beats nothing."""
+    tokens = [t for t in _WORD.findall((query or "").lower()) if t not in _STOP]
+    if not tokens:
+        return []
+    scored: List[Tuple[int, Entry]] = []
+    for entry in _index():
+        score = 0
+        for tok in tokens:
+            if tok in entry.words:
+                score += 3
+            elif any(w.startswith(tok) or tok.startswith(w) for w in entry.words):
+                score += 1
+        if score:
+            scored.append((score, entry))
+    # Score, then taps before typing, then label — stable across renders of the same query.
+    # A slash command that scores level with an estate op loses the tie on purpose: both
+    # get you there, and one of them is a button.
+    scored.sort(key=lambda pair: (-pair[0], pair[1].typed, pair[1].label))
+    return scored[:limit]
+
+
+def render_find(query: Optional[str] = None) -> Tuple[str, List[ButtonRow]]:
+    query = (query or "").strip()
+    if not query:
+        # Empty Find is the Atlas — rooms first; type a word to search.
+        from gateway.operator_shell.atlas import render_atlas
+
+        return render_atlas()
+
+    hits = search(query)
+    if not hits:
+        text = "\n".join([
+            f"🔎 Nothing matches *{query}*.",
+            "",
+            "Try a plainer word — `restart`, `spend`, `model`, `logs`, `approve`, `status`.",
+            "Anything longer than a lookup is treated as a task for the agent, not a search.",
+            "",
+            panel_stamp("find"),
+        ])
+        return text, with_nav(None, "find")
+
+    lines = [f"🔎 *{query}* — {len(hits)} match{'' if len(hits) == 1 else 'es'}", ""]
+    buttons: List[ButtonRow] = []
+    row: ButtonRow = []
+    for _score, entry in hits:
+        if entry.typed:
+            lines.append(f"⌨️ `{entry.usage}` — {entry.label}")
+            continue
+        if entry.needs_arg:
+            if entry.usage:
+                lines.append(f"⌨️ *{entry.label}* — type `{entry.usage}`")
+            else:
+                # Never invent one. An unroutable command reads as a broken feature.
+                lines.append(f"⌨️ *{entry.label}* — ask for it in plain words")
+            continue
+        lines.append(f"• {entry.label}")
+        row.append((entry.label, entry.callback))
+        if len(row) == 2:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    buttons = with_nav(buttons, "find")
+    lines.append("")
+    lines.append(panel_stamp("find"))
+    return "\n".join(lines), buttons
