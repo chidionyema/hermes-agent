@@ -372,6 +372,13 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     # have opened a coding run literally titled "prospector".
     # Caveat, in the spirit of the three above: this renderer WRITES (the assign scope).
     "assign":         ("code_remote",     "render_assign_card",       "Assign",     _ARG_OPT),
+    # 2026-08-08: Engine readout — the operator's "what is the factory doing?" tap. The data
+    # pipeline is `prospector/scheduler/status.py::status_snapshot()`, merged to prospector
+    # `main` in PR #160 (e871889) — do not re-point this at the branch it was written on, which
+    # is gone. The engine also pushes a debounced digest after every
+    # tick; this is the on-demand counterpart. Pure read-only (no subprocess), loads the engine
+    # path-based the same way `prospector/scheduler/alerts.py:_load_hermes_sender` does.
+    "prospector_now": ("prospector_now", "render_prospector_now",     "Now",        _ARG_NONE),
 }
 
 

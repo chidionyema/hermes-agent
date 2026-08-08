@@ -40,6 +40,10 @@ COMMAND_GROUPS = [
     ]),
     ("🔭 Inspect projects", [
         ("🔭 Prospector", "estate:prospector_daemon"),
+        # The daemon panel above says whether the process is alive; this one says what it is
+        # producing (last tick, spend, providers, backlog), read from the engine's own
+        # status_snapshot().
+        ("🎛 Prospector now", "estate:prospector_now"),
         ("💹 Signal Engine", "estate:signal_engine"),
         ("🛒 Store status", "estate:st_status"),
         ("🏗 CI / Builds", "estate:builds"),
