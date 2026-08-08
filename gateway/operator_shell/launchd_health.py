@@ -120,7 +120,7 @@ def probe(label: str, timeout: float = 3.0) -> Health:
 
     try:
         r = subprocess.run(
-            ["launchctl", "print", f"gui/{os.getuid()}/{label}"],
+            ["launchctl", "print", f"gui/{os.getuid()}/{label}"],  # windows-footgun: ok — launchctl is macOS-only
             capture_output=True, text=True, timeout=timeout,
         )
         out = r.stdout or ""

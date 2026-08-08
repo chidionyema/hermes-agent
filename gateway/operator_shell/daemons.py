@@ -120,7 +120,7 @@ _LOGS = {u[0]: u[3] for u in _ESTATE + _EXTRA}
 
 
 def _uid() -> int:
-    return os.getuid()
+    return os.getuid()  # windows-footgun: ok — only reached to build a launchd `gui/<uid>/` target
 
 
 def _plist_dir() -> Path:
