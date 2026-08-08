@@ -32,7 +32,7 @@ def _load_jsonl(path: Path, since_hours: int = 168) -> list:
         return []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
     entries = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -221,7 +221,7 @@ def _save_daily_snapshot():
 
     # Update velocity
     VELOCITY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(VELOCITY_FILE, "a") as f:
+    with open(VELOCITY_FILE, "a", encoding="utf-8") as f:
         f.write(json.dumps({"date": today, "score": score["score"]}) + "\n")
 
     return snapshot

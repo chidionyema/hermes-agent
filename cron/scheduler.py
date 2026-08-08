@@ -954,7 +954,7 @@ def _write_receipt(script_path: str, started: float, exit_code: int, stdout: str
         }
         path = _get_hermes_home() / _RECEIPTS_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a") as fh:
+        with open(path, "a", encoding="utf-8") as fh:
             fh.write(json.dumps(rec) + "\n")
     except Exception:  # noqa: BLE001 — observation must never break the observed
         logger.debug("capability receipt write failed", exc_info=True)
