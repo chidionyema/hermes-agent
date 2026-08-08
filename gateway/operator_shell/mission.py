@@ -412,6 +412,14 @@ def mission_buttons(
 
     if not any(a == pause_or_resume[1] for _l, a in rows_actions(rows)):
         rows.append([pause_or_resume])
+
+    # 🎛 Now (the engine readout) deliberately does NOT sit here. It was added as an
+    # unconditional home row and broke the fires-only invariant that home carries at most two
+    # of its own tiles — `test_cockpit_ia.py:190` caught it: 3 <= 2 with
+    # ['estate:setup_cron_topic', 'estate:pause', 'estate:prospector_now']. A readout is a
+    # destination, not a fire, so it lives where the other machine readouts live: the Atlas
+    # machine room and the command palette. It also stays on the coordinator-unavailable card
+    # below, which has no fires to compete with and no other live signal at all.
     rows.append(nav())
     return rows
 
@@ -497,6 +505,13 @@ def _render_unavailable_card() -> Tuple[str, bool, List[ButtonRow]]:
             ("📝 Assign", "estate:code_prompt"),
             ("❓ Help", "estate:help"),
         ],
+        # 🎛 Now — the engine readout, on the coordinator-unavailable path only. Home is
+        # fires-only and capped, so the readout lives in the Atlas machine room and the
+        # command palette (see the note in `mission_buttons`). Here it earns its row: this
+        # card renders precisely because the coordinator is down, so it carries no concerns,
+        # and the engine is a separate process that is very likely still working. The
+        # renderer is in `prospector_now.py`; this is the door.
+        [("🎛 Now", "estate:prospector_now")],
         nav(),
     ]
     return text, False, buttons

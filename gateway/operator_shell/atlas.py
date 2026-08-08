@@ -281,7 +281,11 @@ def render_room(room_id: str, probes: bool = True) -> Tuple[str, List[ButtonRow]
             Group("👁 Look", [
                 [("📊 Status", "estate:status"), ("⚙️ Daemons", "estate:daemons")],
                 [("🖥 Host", "estate:host"), ("🗓 Cron", "estate:pd_cron")],
-                [("📜 Activity", "estate:activity")],
+                # 🎛 Now — the prospector engine's live readout (daemon phase, last tick,
+                # spend, providers, backlog). A destination, not a fire, so it belongs here
+                # rather than on home; this row is what keeps it from being a panel nobody
+                # can reach.
+                [("📜 Activity", "estate:activity"), ("🎛 Now", "estate:prospector_now")],
             ], note="restarts live on Run"),
         ]
         return compose(
