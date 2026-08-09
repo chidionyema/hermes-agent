@@ -498,7 +498,10 @@ def _render_unavailable_card() -> Tuple[str, bool, List[ButtonRow]]:
         [("💻 Full SDLC pipeline", "estate:sdlc")],
         [
             ("♻️ Restart GW", "estate:daemon_restart_now:gateway"),
-            ("🔄 Restart Coord", "estate:restart"),
+            # ♻️ not 🔄, "coord" not "Coord": the button beside it and the same callback in
+            # command_palette.py:37 both already read "♻️ Restart coord". One destination
+            # wearing two glyphs in one row is how an operator learns to distrust the glyph.
+            ("♻️ Restart coord", "estate:restart"),
         ],
         [
             ("📊 Status", "estate:status"),
