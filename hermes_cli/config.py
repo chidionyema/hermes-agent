@@ -2586,6 +2586,38 @@ DEFAULT_CONFIG = {
 # until it has a home on every surface, so the drift cannot silently return.
 AUXILIARY_TASK_KEYS: tuple[str, ...] = tuple(DEFAULT_CONFIG["auxiliary"].keys())
 
+
+def role_model_allowlist(role: str, config: Optional[dict] = None) -> Optional[List[str]]:
+    """Model keys permitted to hold ``role``, or ``None`` when unrestricted.
+
+    Lives here, not in the panel that edits it, because the policy has TWO enforcement
+    points and a policy with two readers drifts. The operator-facing one is
+    ``operator_shell.brains.fence_check`` — refuses to point the role at a model outside
+    the list. The runtime one is ``tools.approval._smart_approve`` — refuses an ANSWER
+    that came from outside the list, which the first cannot see: ``call_llm`` silently
+    substitutes a different provider when the configured one is unhealthy or returns a
+    payment error (``agent/auxiliary_client.py:2981,3028,5571``), so a role pinned to
+    Claude gets arbitrated by whatever is cheapest and alive exactly when Claude runs out
+    of credits. A fence only at selection time is a fence on the wrong event.
+
+    Config shape, read fresh on every call so arming it needs no restart::
+
+        operator_shell:
+          role_model_allowlist:
+            approval: [opus, sonnet, haiku]
+    """
+    cfg = config if config is not None else (load_config() or {})
+    block = cfg.get("operator_shell") if isinstance(cfg, dict) else None
+    if not isinstance(block, dict):
+        return None
+    table = block.get("role_model_allowlist")
+    if not isinstance(table, dict):
+        return None
+    allowed = table.get(role)
+    if not isinstance(allowed, (list, tuple)) or not allowed:
+        return None
+    return [str(x).strip().lower() for x in allowed if str(x).strip()]
+
 # =============================================================================
 # Config Migration System
 # =============================================================================

@@ -24,7 +24,7 @@ from gateway.operator_shell import daemons as D
 def test_the_daemons_panel_stays_within_the_eight_button_cap():
     _text, buttons = D.render_daemons()
     total = sum(len(r) for r in buttons)
-    assert total <= 8, f"daemons panel rendered {total} buttons"
+    assert total <= D.MAX_BUTTONS, f"daemons panel rendered {total} buttons"
 
 
 def test_the_panel_renders_even_when_the_cap_is_exceeded(monkeypatch):
@@ -39,17 +39,28 @@ def test_the_panel_renders_even_when_the_cap_is_exceeded(monkeypatch):
     text, buttons = D.render_daemons()
 
     total = sum(len(r) for r in buttons)
-    assert total <= 8, f"degraded panel still over cap: {total}"
+    assert total <= D.MAX_BUTTONS, f"degraded panel still over cap: {total}"
     assert text.strip(), "panel rendered no text"
     # The spine survives — a screen with no way back is not a recovery path.
     assert buttons[-1], "navigation row was dropped"
     assert "hidden to fit" in text
 
 
+def test_every_declared_verb_fits_now_that_the_cap_is_nine():
+    """The founder raised the cap on 2026-08-09 rather than accept a hidden verb. 3 actions
+    + a 6-button spine = 9 exactly, so nothing should be trimmed and the apology line should
+    not appear. If a future spine grows again this fails loudly instead of quietly hiding a
+    button — which is the whole reason the trim was made visible in the first place."""
+    text, buttons = D.render_daemons()
+    labels = [label for row in buttons for label, _cb in row]
+
+    assert "▶️ Start coord" in labels, "the verb the old 8-cap was hiding is still hidden"
+    assert "hidden to fit" not in text, "something is still being trimmed at cap 9"
+    assert sum(len(r) for r in buttons) == 9
+
+
 def test_both_recovery_doors_survive_the_trim():
-    """The panel is over cap today and will stay there: 3 action buttons + a 6-button spine
-    = 9. What degradation removes therefore matters more than that it happens. `🗂 Projects`
-    joining the spine on 2026-08-06 ate the third action slot, and the first two drafts of
+    """What degradation removes matters more than that it happens. The first two drafts of
     the trim each dropped a recovery verb — once the gateway bounce, once both coord verbs.
     These two callbacks are the whole point of the screen and must outlive any trim."""
     _text, buttons = D.render_daemons()

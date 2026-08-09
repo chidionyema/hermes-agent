@@ -1048,6 +1048,24 @@ def _get_cron_approval_mode() -> str:
         return "deny"
 
 
+def _answering_model_is_allowed(model_id: str, allowed: list) -> bool:
+    """Did an allowlisted brain actually produce this answer?
+
+    Matches the shortlist KEY as a substring of the model id the provider reported, which
+    is how this vocabulary is built: `opus` → `claude-opus-5`, `sonnet` → `claude-sonnet-5`,
+    `deepseek` → `deepseek-v4-pro`, `minimax` → `MiniMax-M3`
+    (`gateway/operator_shell/brain.py:51`).
+
+    Unrecognised or missing ids fail CLOSED. An answer whose provenance cannot be
+    established is exactly the case this check exists for — a silent substitution reports
+    someone else's model id, or none at all.
+    """
+    ident = (model_id or "").strip().lower()
+    if not ident:
+        return False
+    return any(key and key in ident for key in allowed)
+
+
 def _smart_approve(command: str, description: str) -> str:
     """Use the auxiliary LLM to assess risk and decide approval.
 
@@ -1056,6 +1074,24 @@ def _smart_approve(command: str, description: str) -> str:
 
     Inspired by OpenAI Codex's Smart Approvals guardian subagent
     (openai/codex#13860).
+
+    **Fenced at the point of use, and self-healing** (founder directive 2026-08-09: only
+    Claude may arbitrate approvals, and it must recover on its own when out of credits).
+    `operator_shell.brains` fences which model an operator may POINT this role at, but that
+    cannot bind the runtime: `call_llm` silently substitutes another provider when the
+    configured one is unhealthy or returns a payment error
+    (`agent/auxiliary_client.py:2981,3028,5571`). So the role would be arbitrated by
+    whatever is cheapest and alive precisely when Claude runs out of credits — and `auto`
+    inheritance points at the standing default (DeepSeek) regardless of any allowlist.
+
+    When `operator_shell.role_model_allowlist.approval` is armed, an answer from outside
+    the list is discarded and the decision escalates to a human. Escalation is a PARK, not
+    a failure: the provider health mark expires on its own (600s TTL,
+    `auxiliary_client.py:2314`), so when credits return the next call routes back to Claude
+    and smart approvals resume with no operator action. Nothing is auto-approved by a brain
+    the founder did not authorise, and nothing stays stuck once the wall clears.
+
+    Unarmed (no allowlist configured) behaviour is unchanged.
     """
     try:
         from agent.auxiliary_client import call_llm
@@ -1080,6 +1116,35 @@ Respond with exactly one word: APPROVE, DENY, or ESCALATE"""
             temperature=0,
             max_tokens=16,
         )
+
+        allowed = None
+        try:
+            from hermes_cli.config import role_model_allowlist
+
+            allowed = role_model_allowlist("approval")
+        except Exception as exc:  # fence unreadable -> fence closed
+            logger.warning(
+                "Smart approvals: could not read role_model_allowlist (%s); escalating "
+                "rather than trusting an unfenced answer",
+                exc,
+            )
+            return "escalate"
+
+        if allowed is not None:
+            answered_by = str(getattr(response, "model", "") or "")
+            if not _answering_model_is_allowed(answered_by, allowed):
+                # WARNING, not debug: this is the credit wall becoming visible. The old
+                # debug line meant a silently substituted brain left no operator-readable
+                # trace at all.
+                logger.warning(
+                    "Smart approvals: answer came from %r, which is not in "
+                    "operator_shell.role_model_allowlist.approval (%s) — escalating to a "
+                    "human. This self-clears when the allowlisted provider is healthy "
+                    "again; no operator action needed.",
+                    answered_by or "<no model reported>",
+                    ", ".join(allowed),
+                )
+                return "escalate"
 
         answer = (response.choices[0].message.content or "").strip().upper()
 

@@ -17,6 +17,14 @@ from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
+# Raised from 8 to 9 on founder instruction, 2026-08-09. The cap was written when the
+# shared spine was 5 buttons, leaving 3 action slots; `🗂 Projects` joined the spine on
+# 2026-08-06 (`panel_chrome._PROJECTS`) and silently took one, so the recovery panel had to
+# hide `▶️ Start coord` to fit. Nine restores the three action slots this panel was designed
+# around. The trim below still exists and still binds — the point of a cap is that something
+# principled happens at the boundary, not that the number is 8.
+MAX_BUTTONS = 9
+
 # kind: keepalive | interval | calendar
 _ESTATE: Tuple[Tuple[str, str, str, Tuple[Path, ...]], ...] = (
     (
@@ -363,8 +371,8 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
     lines.append("_Gateway start fenced. Prospect gen → Prospect daemons._")
     lines.append(panel_stamp("daemons"))
 
-    # Cap: 8 buttons total. The spine (nav) below contributes 5 (Home · Actions · SDLC ·
-    # Browse · 🔄 daemons), leaving 3 action slots. The previous 16-button grid crammed
+    # Cap: MAX_BUTTONS. The spine (nav) below contributes 6 (Home · Projects · Actions ·
+    # SDLC · Browse · 🔄 daemons), leaving 3 action slots. The previous 16-button grid crammed
     # restart/start/stop/logs/run_now across every daemon onto one screen — most of those
     # verbs live on the Run verbs panel (cockpit.py `⚙️ Daemons` group) and run via direct
     # callback. What stays HERE is the recovery path for the three KeepAlive jobs that
@@ -395,7 +403,7 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
     # would also have stripped the guard entirely, so it was a crash in dev and nothing in
     # prod: the two environments disagreeing is worse than either. Trim action rows from
     # the end instead and keep `nav` — losing a button beats losing the screen.
-    if sum(len(r) for r in buttons) > 8:
+    if sum(len(r) for r in buttons) > MAX_BUTTONS:
         # Trim by BUTTON, not by row, and never stop early. Two earlier drafts each lost the
         # wrong thing: keeping the spine whole still returned 12 when the spine was itself
         # the overflow, and dropping whole rows at the first misfit threw away both coord
@@ -404,8 +412,8 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
         # spends the last free slot on `♻️ Restart coord` and drops only `▶️ Start coord`,
         # which `launchctl kickstart -k` (estate.py:1511) already covers for a stopped job.
         # The spine is preferred but not exempt — a cap the overflow case escapes is no cap.
-        spine = list(buttons[-1])[:8]
-        budget = 8 - len(spine)
+        spine = list(buttons[-1])[:MAX_BUTTONS]
+        budget = MAX_BUTTONS - len(spine)
         kept: List[ButtonRow] = []
         for row in buttons[:-1]:
             if budget <= 0:

@@ -197,17 +197,16 @@ def _allowlist_for(role: str, cfg: Optional[dict] = None) -> Optional[List[str]]
         operator_shell:
           role_model_allowlist:
             approval: [opus, sonnet]
+
+    Delegates to ``hermes_cli.config.role_model_allowlist`` — one reader, because the
+    policy is enforced twice and the second enforcement point lives outside this package
+    (``tools/approval.py`` refuses an ANSWER from an unlisted brain, which this function's
+    caller cannot see; ``call_llm`` substitutes providers silently when one is out of
+    credits). Two copies of a fence's definition is one copy that goes stale.
     """
-    cfg = cfg if cfg is not None else _cfg()
-    block = cfg.get("operator_shell")
-    block = block if isinstance(block, dict) else {}
-    table = block.get("role_model_allowlist")
-    if not isinstance(table, dict):
-        return None
-    allowed = table.get(role)
-    if not isinstance(allowed, (list, tuple)) or not allowed:
-        return None
-    return [str(x).strip().lower() for x in allowed]
+    from hermes_cli.config import role_model_allowlist
+
+    return role_model_allowlist(role, cfg if cfg is not None else _cfg())
 
 
 def fence_check(role: str, key: str, cfg: Optional[dict] = None) -> Tuple[bool, str]:
