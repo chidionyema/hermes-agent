@@ -247,3 +247,37 @@ def test_menu_and_cockpit_reach_the_panel():
     for word in ("menu", "cockpit", "panel", "control", "mission"):
         cmd = resolve_command(word)
         assert cmd is not None and cmd.name == "panel", f"/{word} does not open the cockpit"
+
+
+# ── the tune screen and the params card must say the same words ─────────────
+
+
+def test_a_group_prints_the_rail_knobs_the_way_the_params_card_does():
+    """`backlog_cap = 0` reads as "capped at nothing"; 0 means the brake is OFF.
+
+    The params card already rendered these two as words while the group screen printed the raw
+    `0` and `True`, so the same two knobs read differently on two screens one tap apart.
+    """
+    from gateway.operator_shell.cockpit import _current
+
+    pd = {"backlog_cap": 0, "grounding_gate": True}
+    assert _current("backlog_cap", {}, pd) == "off"
+    assert _current("grounding_gate", {}, pd) == "on"
+
+    pd = {"backlog_cap": 200, "grounding_gate": False}
+    assert _current("backlog_cap", {}, pd) == "200"
+    assert _current("grounding_gate", {}, pd) == "off"
+
+
+def test_a_config_only_group_does_not_promise_a_daemon_restart():
+    """The footer was a constant string claiming every knob restarts the daemon.
+
+    True of the two plist knobs, false of every config.yaml knob: those are picked up at the
+    next tick, when `code_fingerprint` notices config.yaml moved and the daemon re-execs. An
+    operator told "restarted" goes looking for a restart that never happened.
+    """
+    from gateway.operator_shell.cockpit import _KNOBS, _apply_note
+
+    rails = _apply_note(_KNOBS["rails"][2])
+    assert "next tick" in rails
+    assert "restarts the daemon" not in rails

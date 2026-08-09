@@ -282,12 +282,40 @@ _CONFIG = REPO / "config.yaml"
 _PAUSE = STORE / "PAUSE"
 
 # Allowlisted phone-editable knobs → (kind, allowed_values)
-# kind: plist_interval | plist_env | yaml_batch | yaml_cap | pause
+# The CLI-slot ceiling the engine actually reads: `claude_cli.py:48,62`. It was
+# PROSPECTOR_CURSOR_CONCURRENCY here until 2026-08-09, which no live code has read since
+# cursor_cli was deleted on 2026-08-06 — `tests/unit/test_moat_resilience.py:215` exists in
+# the engine repo specifically to assert that name stays gone. So the phone's concurrency
+# button wrote a plist variable nothing consumed and then restarted the daemon to apply it:
+# a control that moved, confirmed, and changed nothing. One constant, three call sites, so
+# the read, the write and the confirm screen cannot name different variables again.
+_CONC_ENV = "PROSPECTOR_CLAUDE_CONCURRENCY"
+
+# kind: plist_interval | plist_env | yaml_scalar | pause
 _SAFE_PARAMS = {
     "interval": ("plist_interval", ("3600", "7200", "14400")),  # 1h / 2h / 4h
     "concurrency": ("plist_env", ("2", "4", "8")),
-    "batch_size": ("yaml_batch", ("3", "5", "10")),
-    "daily_cap": ("yaml_cap", ("10", "20", "40")),
+    "batch_size": ("yaml_scalar", ("3", "5", "10")),
+    "daily_cap": ("yaml_scalar", ("10", "20", "40")),
+    "backlog_cap": ("yaml_scalar", ("0", "50", "200")),
+    "grounding_gate": ("yaml_scalar", ("on", "off")),
+}
+
+# knob → (the config.yaml key it patches, how the value is written). One row per
+# scalar, so adding a knob is a table entry rather than another branch in set_param.
+# Deliberately NOT here: `min_composite_to_pass` (five occurrences, four of them lane
+# overrides that win over the global one — a single value would silently not apply),
+# the score weights (six axes, not a scalar), `retrieval.provider` (an ordered chain;
+# reordering it from a phone can blind the moat) and the pricing rungs (money rail —
+# a price change strands fulfilment for packs already sold).
+_YAML_KEYS = {
+    "batch_size": ("batch_size", lambda v: str(int(v))),
+    "daily_cap": ("daily_cap_usd", lambda v: f"{float(v):.1f}"),
+    "backlog_cap": ("backlog_cap", lambda v: str(int(v))),
+    "grounding_gate": (
+        "gate_generation_on_grounding",
+        lambda v: "true" if str(v).strip().lower() == "on" else "false",
+    ),
 }
 
 
@@ -307,6 +335,66 @@ def _write_plist_dict(data: Dict[str, object]) -> None:
         plistlib.dump(data, f, sort_keys=False)
 
 
+def _yaml_assign_lines(text: str, key: str) -> List[int]:
+    """Line indices where `key` is really ASSIGNED. Comments excluded.
+
+    config.yaml documents its own knobs in prose, and the prose quotes them in
+    assignment form: line 1296 is ``# `batch_size: 15` mints up to 15 rows per tick``
+    and line 1330 ``# `backlog_cap: 0` — the stock-based brake is OFF``. A whole-file
+    regex with count=1 therefore matches the COMMENT, which is exactly what the
+    shipped batch_size setter did: it rewrote line 1296, returned success, and
+    read_params() read the same comment back — so the phone displayed a value the
+    daemon had never been given. Only the part of a line before `#` can assign.
+    """
+    import re
+
+    pat = re.compile(r"(?<![\w.])" + re.escape(key) + r":\s*[^\s,}]")
+    return [
+        i
+        for i, line in enumerate(text.splitlines())
+        if pat.search(line.split("#", 1)[0])
+    ]
+
+
+def _read_yaml_scalar(text: str, key: str) -> str | None:
+    """The assigned value, or None when the key is absent or ambiguous."""
+    import re
+
+    hits = _yaml_assign_lines(text, key)
+    if len(hits) != 1:
+        return None
+    line = text.splitlines()[hits[0]].split("#", 1)[0]
+    m = re.search(r"(?<![\w.])" + re.escape(key) + r":\s*([^\s,}]+)", line)
+    return m.group(1) if m else None
+
+
+def _patch_yaml_scalar(text: str, key: str, written: str) -> str | None:
+    """`text` with `key`'s value replaced, or None if not uniquely locatable.
+
+    Refusing on 0 or >1 assignments is the fence: a setter that cannot say WHICH
+    line it is about to rewrite must not rewrite one. The trailing comment on the
+    line is preserved, because on the `schedule:` flow mapping the prose beside a
+    knob is how the next reader learns why it is set that way.
+    """
+    import re
+
+    hits = _yaml_assign_lines(text, key)
+    if len(hits) != 1:
+        return None
+    lines = text.splitlines(keepends=True)
+    body, sep, comment = lines[hits[0]].partition("#")
+    new_body, n = re.subn(
+        r"((?<![\w.])" + re.escape(key) + r":\s*)[^\s,}]+",
+        lambda m: m.group(1) + written,
+        body,
+        count=1,
+    )
+    if n != 1:
+        return None
+    lines[hits[0]] = new_body + sep + comment
+    return "".join(lines)
+
+
 def read_params() -> Dict[str, object]:
     """Current safe params from plist + config.yaml + PAUSE file."""
     out: Dict[str, object] = {
@@ -314,6 +402,8 @@ def read_params() -> Dict[str, object]:
         "concurrency": None,
         "batch_size": None,
         "daily_cap_usd": None,
+        "backlog_cap": None,
+        "grounding_gate": None,
         "paused": _PAUSE.is_file(),
         "watchdog_interval_s": 900,
     }
@@ -325,20 +415,24 @@ def read_params() -> Dict[str, object]:
             if i + 1 < len(args):
                 out["interval_s"] = int(args[i + 1])
         env = data.get("EnvironmentVariables") or {}
-        if "PROSPECTOR_CURSOR_CONCURRENCY" in env:
-            out["concurrency"] = int(env["PROSPECTOR_CURSOR_CONCURRENCY"])
+        if _CONC_ENV in env:
+            out["concurrency"] = int(env[_CONC_ENV])
     except Exception as exc:
         out["plist_err"] = str(exc)[:60]
     try:
-        import re
-
         text = _CONFIG.read_text(encoding="utf-8")
-        m = re.search(r"batch_size:\s*(\d+)", text)
-        if m:
-            out["batch_size"] = int(m.group(1))
-        m = re.search(r"daily_cap_usd:\s*([0-9.]+)", text)
-        if m:
-            out["daily_cap_usd"] = float(m.group(1))
+        raw = _read_yaml_scalar(text, "batch_size")
+        if raw is not None:
+            out["batch_size"] = int(raw)
+        raw = _read_yaml_scalar(text, "daily_cap_usd")
+        if raw is not None:
+            out["daily_cap_usd"] = float(raw)
+        raw = _read_yaml_scalar(text, "backlog_cap")
+        if raw is not None:
+            out["backlog_cap"] = int(raw)
+        raw = _read_yaml_scalar(text, "gate_generation_on_grounding")
+        if raw is not None:
+            out["grounding_gate"] = raw.strip().lower() == "true"
     except Exception as exc:
         out["config_err"] = str(exc)[:60]
     return out
@@ -349,10 +443,17 @@ def _params_lines() -> List[str]:
     iv = p.get("interval_s")
     iv_h = f"{iv // 3600}h" if isinstance(iv, int) else "?"
     pause = "ON (idle)" if p.get("paused") else "off"
+    gate = p.get("grounding_gate")
+    gate_s = "?" if gate is None else ("on" if gate else "off")
+    cap = p.get("backlog_cap")
+    # 0 is the documented "brake off" value, not a cap of zero. Printing the number would
+    # read as "generation is capped at nothing", which is the opposite of what it means.
+    cap_s = "?" if cap is None else ("off" if cap == 0 else str(cap))
     return [
         "*Params* (safe knobs — no secrets)",
         f"• interval `{iv}`s ({iv_h}) · concurrency `{p.get('concurrency')}`",
         f"• batch_size `{p.get('batch_size')}` · daily_cap `${p.get('daily_cap_usd')}`",
+        f"• backlog_cap `{cap_s}` · grounding gate `{gate_s}`",
         f"• PAUSE file `{pause}` · watchdog every `{p.get('watchdog_interval_s')}s`",
     ]
 
@@ -386,41 +487,29 @@ def set_param(key: str, value: str) -> Tuple[bool, str, bool]:
             return False, "scheduler plist missing", False
         data = _read_plist_dict()
         env = dict(data.get("EnvironmentVariables") or {})
-        old = env.get("PROSPECTOR_CURSOR_CONCURRENCY", "?")
-        env["PROSPECTOR_CURSOR_CONCURRENCY"] = value
+        old = env.get(_CONC_ENV, "?")
+        env[_CONC_ENV] = value
         data["EnvironmentVariables"] = env
         _write_plist_dict(data)
         return True, f"concurrency {old} → {value} (plist env)", True
 
-    if kind == "yaml_batch":
-        import re
-
+    if kind == "yaml_scalar":
+        yaml_key, fmt = _YAML_KEYS[key]
+        try:
+            written = fmt(value)
+        except (TypeError, ValueError):
+            return False, f"`{value}` is not a value for `{yaml_key}`", False
         text = _CONFIG.read_text(encoding="utf-8")
-        new, n = re.subn(
-            r"(batch_size:\s*)\d+",
-            rf"\g<1>{value}",
-            text,
-            count=1,
-        )
-        if n != 1:
-            return False, "could not patch batch_size in config.yaml", False
+        old = _read_yaml_scalar(text, yaml_key)
+        new = _patch_yaml_scalar(text, yaml_key, written)
+        if new is None:
+            return (
+                False,
+                f"could not uniquely locate `{yaml_key}` in config.yaml — not written",
+                False,
+            )
         _CONFIG.write_text(new, encoding="utf-8")
-        return True, f"batch_size → {value} (config.yaml; next tick)", False
-
-    if kind == "yaml_cap":
-        import re
-
-        text = _CONFIG.read_text(encoding="utf-8")
-        new, n = re.subn(
-            r"(daily_cap_usd:\s*)[0-9.]+",
-            rf"\g<1>{float(value):.1f}",
-            text,
-            count=1,
-        )
-        if n != 1:
-            return False, "could not patch daily_cap_usd in config.yaml", False
-        _CONFIG.write_text(new, encoding="utf-8")
-        return True, f"daily_cap_usd → ${value} (config.yaml; next tick)", False
+        return True, f"{yaml_key} {old} → {written} (config.yaml; next tick)", False
 
     return False, "unhandled kind", False
 
@@ -444,7 +533,7 @@ def confirm_set_param(key: str, value: str) -> Tuple[str, List[ButtonRow]]:
     cur = read_params()
     labels = {
         "interval": f"daemon interval → `{value}`s (needs restart)",
-        "concurrency": f"PROSPECTOR_CURSOR_CONCURRENCY → `{value}` (needs restart)",
+        "concurrency": f"{_CONC_ENV} → `{value}` (needs restart)",
         "batch_size": f"schedule.batch_size → `{value}` (next tick)",
         "daily_cap": f"spend.daily_cap_usd → `${value}` (next tick)",
     }

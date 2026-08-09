@@ -17,12 +17,22 @@ import pytest
 from gateway.operator_shell import prospector_daemon as PD
 
 
+# Shaped like the REAL config.yaml, prose and all. The previous sample declared each knob
+# exactly once and nowhere else, so `text.count("batch_size:") == 1` passed and the suite
+# stayed green while the shipped setter was rewriting a COMMENT in production: the real
+# config.yaml documents its own knobs in assignment form (`# \x60batch_size: 15\x60 mints up to
+# 15 rows per tick`, line 1296) hundreds of lines above the `schedule:` mapping on line 1350,
+# so a whole-file regex with count=1 never reached the assignment. A fixture that cannot
+# contain the defect cannot witness the fix.
 CONFIG_SAMPLE = """\
-schedule:
-  batch_size: 5
-  cadence: daily
+# `batch_size: 15` mints up to 15 rows per tick; prose that quotes the knob.
+# `backlog_cap: 100` — the stock-based brake, superseded and documented here.
+# `gate_generation_on_grounding: true` — the replacement, a rate not a stock.
+schedule: { cadence: daily, batch_size: 5, backlog_cap: 0, max_resume_attempts: 5,
+            gate_generation_on_grounding: true }
 
 spend:
+  # meter flat before and after, none of it visible to spend.daily_cap_usd.
   daily_cap_usd: 20.0
   alarm: true
 """
@@ -43,7 +53,7 @@ def repo(tmp_path, monkeypatch):
             {
                 "Label": "com.prospector.scheduler",
                 "ProgramArguments": ["/usr/bin/python3", "-m", "gen", "--daemon", "--interval", "7200"],
-                "EnvironmentVariables": {"PROSPECTOR_CURSOR_CONCURRENCY": "4"},
+                "EnvironmentVariables": {"PROSPECTOR_CLAUDE_CONCURRENCY": "4"},
                 "KeepAlive": True,
             },
             f,
@@ -148,6 +158,8 @@ def test_read_params_reads_plist_and_config(repo):
     assert p["concurrency"] == 4
     assert p["batch_size"] == 5
     assert p["daily_cap_usd"] == 20.0
+    assert p["backlog_cap"] == 0
+    assert p["grounding_gate"] is True
     assert p["paused"] is False
 
 
@@ -158,6 +170,8 @@ def test_read_params_reads_plist_and_config(repo):
         ("concurrency", "64"),
         ("batch_size", "500"),
         ("daily_cap", "9999"),
+        ("backlog_cap", "99999"),
+        ("grounding_gate", "maybe"),
         ("api_key", "sk-live"),     # not a knob at all
     ],
 )
@@ -179,23 +193,31 @@ def test_set_interval_rewrites_the_plist_argument_in_place(repo):
     # Everything else in the plist must survive a phone tap.
     assert data["Label"] == "com.prospector.scheduler"
     assert data["KeepAlive"] is True
-    assert data["EnvironmentVariables"]["PROSPECTOR_CURSOR_CONCURRENCY"] == "4"
+    assert data["EnvironmentVariables"][PD._CONC_ENV] == "4"
 
 
 def test_set_concurrency_rewrites_only_the_env_var(repo):
     ok, _detail, needs_restart = PD.set_param("concurrency", "8")
     assert (ok, needs_restart) == (True, True)
     data = plistlib.loads(PD._SCHED_PLIST.read_bytes())
-    assert data["EnvironmentVariables"]["PROSPECTOR_CURSOR_CONCURRENCY"] == "8"
+    assert data["EnvironmentVariables"][PD._CONC_ENV] == "8"
     assert "--interval" in data["ProgramArguments"]
 
 
-def test_set_batch_size_patches_config_exactly_once(repo):
+def test_set_batch_size_patches_the_assignment_and_not_the_prose(repo):
+    """The regression. `batch_size: 15` also appears inside a comment, above the real one.
+
+    The shipped setter used `re.subn(r"(batch_size:\\s*)\\d+", ..., count=1)` over the whole
+    file, so it rewrote the COMMENT, returned `True, "batch_size → 10"`, and `read_params()`
+    read the comment straight back — the panel showed 10 while the daemon ran 15. Asserting
+    on the prose line explicitly is what stops that returning.
+    """
     ok, _detail, needs_restart = PD.set_param("batch_size", "10")
     assert ok is True
     assert needs_restart is False  # config.yaml is re-read next tick
     text = PD._CONFIG.read_text()
-    assert text.count("batch_size:") == 1
+    assert "batch_size: 10," in text                    # the schedule mapping moved
+    assert "# `batch_size: 15` mints up to 15" in text   # the prose did NOT
     assert PD.read_params()["batch_size"] == 10
     assert "cadence: daily" in text  # neighbours untouched
 
@@ -204,6 +226,45 @@ def test_set_daily_cap_patches_config(repo):
     ok, _detail, _ = PD.set_param("daily_cap", "40")
     assert ok is True
     assert PD.read_params()["daily_cap_usd"] == 40.0
+
+
+def test_set_backlog_cap_patches_the_assignment_and_not_the_prose(repo):
+    ok, _detail, needs_restart = PD.set_param("backlog_cap", "200")
+    assert (ok, needs_restart) == (True, False)
+    text = PD._CONFIG.read_text()
+    assert "backlog_cap: 200," in text
+    assert "# `backlog_cap: 100` — the stock-based brake" in text
+    assert PD.read_params()["backlog_cap"] == 200
+    assert PD.read_params()["batch_size"] == 5  # the neighbour on the same line survives
+
+
+def test_grounding_gate_writes_a_yaml_bool_not_the_button_word(repo):
+    """The button says on/off; config.yaml must read true/false or the engine ignores it."""
+    ok, detail, _ = PD.set_param("grounding_gate", "off")
+    assert ok is True
+    text = PD._CONFIG.read_text()
+    assert "gate_generation_on_grounding: false" in text
+    assert "off" not in detail.split("→")[-1]
+    assert PD.read_params()["grounding_gate"] is False
+    # and the prose that quotes it in assignment form is untouched
+    assert "# `gate_generation_on_grounding: true` — the replacement" in text
+
+
+def test_a_knob_that_is_not_uniquely_locatable_refuses_to_write(repo):
+    """0 or 2 assignments means the setter cannot say which line it is about to change.
+
+    Refusing is the whole point: writing 'one of them' is how a knob reports success and
+    changes nothing the daemon reads.
+    """
+    PD._CONFIG.write_text(
+        "schedule: { batch_size: 5 }\nother: { batch_size: 9 }\n", encoding="utf-8"
+    )
+    before = PD._CONFIG.read_bytes()
+    ok, detail, _ = PD.set_param("batch_size", "10")
+    assert ok is False
+    assert "uniquely locate" in detail
+    assert PD._CONFIG.read_bytes() == before
+    assert PD.read_params()["batch_size"] is None  # ambiguous reads as unknown, not a guess
 
 
 def test_set_interval_reports_failure_when_the_plist_lacks_the_flag(repo):
@@ -345,3 +406,29 @@ def test_params_panel_never_renders_a_secret(repo):
     assert "Secrets never shown" in text
     for banned in ("sk-", "token", "password", "ANTHROPIC"):
         assert banned not in text
+
+
+# ── the concurrency knob must name a variable the engine reads ───────────────
+
+
+def test_the_concurrency_knob_names_a_variable_the_engine_still_reads():
+    """A knob that writes a variable nothing consumes is a control that lies.
+
+    Until 2026-08-09 this wrote `PROSPECTOR_CURSOR_CONCURRENCY` into the scheduler plist and
+    then restarted the daemon to apply it. cursor_cli was deleted from the engine on
+    2026-08-06, so no live code had read that name since; the engine repo even carries
+    `tests/unit/test_moat_resilience.py:215` asserting it stays gone. The button moved, the
+    confirm screen agreed, the daemon restarted, and the engine's CLI ceiling never changed.
+    """
+    import inspect
+
+    assert PD._CONC_ENV == "PROSPECTOR_CLAUDE_CONCURRENCY"
+    # Comments are excluded on purpose: the constant's own comment records the dead name
+    # so the next reader learns why it moved. Only executable code may still use it.
+    code = "\n".join(l.split("#", 1)[0] for l in inspect.getsource(PD).splitlines())
+    assert "PROSPECTOR_CURSOR_CONCURRENCY" not in code
+
+
+def test_the_concurrency_confirm_screen_names_the_same_variable_it_writes(repo):
+    text, _rows = PD.confirm_set_param("concurrency", "4")
+    assert PD._CONC_ENV in text
