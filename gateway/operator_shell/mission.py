@@ -355,7 +355,7 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
 _SURFACES: List[ButtonRow] = [
     [("🛒 Store", "estate:st_status"), ("🗓 Cron", "estate:pd_cron"), ("📥 Inbox", "estate:inbox")],
     [("🚀 Fleet", "estate:fleet"), ("📋 Missions", "estate:missions"), ("🏗 CI", "estate:builds")],
-    [("⚙️ Daemons", "estate:daemons"), ("🧠 RSI", "estate:rsi"), ("📸 Changed", "estate:diff")],
+    [("⚙️ Daemons", "estate:daemons"), ("🧠 RSI", "estate:rsi"), ("📸 Diff", "estate:diff")],
 ]
 
 _MAX_CONCERNS = 2
@@ -390,7 +390,7 @@ def mission_buttons(
     rows: List[ButtonRow] = [[c] for c in live[:_MAX_CONCERNS]]
 
     if not cron_ok:
-        rows.append([("🗓 Fix cron delivery", "estate:setup_cron_topic")])
+        rows.append([("🗓 Cron delivery", "estate:setup_cron_topic")])
 
     # NOTE: SDLC button removed from the action rows — the SPINE
     # (panel_chrome.nav()) carries 'estate:sdlc' as the third spine button,
@@ -412,6 +412,14 @@ def mission_buttons(
 
     if not any(a == pause_or_resume[1] for _l, a in rows_actions(rows)):
         rows.append([pause_or_resume])
+
+    # 🎛 Now (the engine readout) deliberately does NOT sit here. It was added as an
+    # unconditional home row and broke the fires-only invariant that home carries at most two
+    # of its own tiles — `test_cockpit_ia.py:190` caught it: 3 <= 2 with
+    # ['estate:setup_cron_topic', 'estate:pause', 'estate:prospector_now']. A readout is a
+    # destination, not a fire, so it lives where the other machine readouts live: the Atlas
+    # machine room and the command palette. It also stays on the coordinator-unavailable card
+    # below, which has no fires to compete with and no other live signal at all.
     rows.append(nav())
     return rows
 
@@ -487,16 +495,26 @@ def _render_unavailable_card() -> Tuple[str, bool, List[ButtonRow]]:
     ]
     text = "\n".join(lines)
     buttons: List[ButtonRow] = [
-        [("💻 Full SDLC pipeline", "estate:sdlc")],
+        [("💻 SDLC", "estate:sdlc")],
         [
-            ("♻️ Restart GW", "estate:daemon_restart_now:gateway"),
-            ("🔄 Restart Coord", "estate:restart"),
+            ("♻️ Restart gateway now", "estate:daemon_restart_now:gateway"),
+            # ♻️ not 🔄, "coord" not "Coord": the button beside it and the same callback in
+            # command_palette.py:37 both already read "♻️ Restart coord". One destination
+            # wearing two glyphs in one row is how an operator learns to distrust the glyph.
+            ("♻️ Restart coord", "estate:restart"),
         ],
         [
             ("📊 Status", "estate:status"),
             ("📝 Assign", "estate:code_prompt"),
             ("❓ Help", "estate:help"),
         ],
+        # 🎛 Now — the engine readout, on the coordinator-unavailable path only. Home is
+        # fires-only and capped, so the readout lives in the Atlas machine room and the
+        # command palette (see the note in `mission_buttons`). Here it earns its row: this
+        # card renders precisely because the coordinator is down, so it carries no concerns,
+        # and the engine is a separate process that is very likely still working. The
+        # renderer is in `prospector_now.py`; this is the door.
+        [("🎛 Now", "estate:prospector_now")],
         nav(),
     ]
     return text, False, buttons

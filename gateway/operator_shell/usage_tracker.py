@@ -65,7 +65,7 @@ def get_suggestions(action: str) -> List[Tuple[str, str]]:
             "pd_cron": ("🗓 Cron", "estate:pd_cron"),
             "diagnose_panel": ("🔍 Diagnose", "estate:diagnose_panel"),
             "diagnose_panel:moat": ("🔍 Diagnose moat", "estate:diagnose_panel:moat"),
-            "brief": ("🎙 Brief", "estate:brief"),
+            "brief": ("📋 Brief", "estate:brief"),
             "inbox": ("📥 Inbox", "estate:inbox"),
             "missions": ("📋 Missions", "estate:missions"),
             "refresh": ("🏠 Home", "estate:refresh"),
@@ -73,15 +73,15 @@ def get_suggestions(action: str) -> List[Tuple[str, str]]:
             "builds": ("🏗 CI", "estate:builds"),
             "diff": ("📸 Diff", "estate:diff"),
             "tune": ("⚙️ Tune", "estate:tune"),
-            "run": ("🎛 Run", "estate:run"),
+            "run": ("⚡ Actions", "estate:run"),
             "daemons": ("⚙️ Daemons", "estate:daemons"),
             "brain": ("🧠 Brain", "estate:brain"),
-            "otto_health": ("🧠 Health", "estate:otto_health"),
+            "otto_health": ("🧠 Otto health", "estate:otto_health"),
             "score": ("📈 Score", "estate:score"),
             "rsi": ("🧠 RSI", "estate:rsi"),
-            "correlate": ("🔗 Correlate", "estate:correlate"),
+            "correlate": ("🔗 Correlate failures", "estate:correlate"),
             "dependencies": ("🔗 Dependencies", "estate:dependencies"),
-            "approve": ("✅ Approve", "estate:inbox"),
+            "approve": ("📥 Inbox", "estate:inbox"),
         }
         mapped = label_map.get(s, (s, f"estate:{s}"))
         result.append(mapped)

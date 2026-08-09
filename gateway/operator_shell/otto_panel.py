@@ -439,8 +439,8 @@ def render_otto() -> Tuple[str, List[ButtonRow]]:
     lines += ["", panel_stamp("otto")]
 
     buttons: List[ButtonRow] = [
-        [("🧠 RSI", "estate:rsi"), ("📊 Self-audit", "estate:otto_health")],
-        [("🔄 Idle", "estate:idle_status"), ("📋 Changes", "estate:rsi_changes")],
+        [("🧠 RSI", "estate:rsi"), ("🧠 Otto health", "estate:otto_health")],
+        [("🔄 Idle", "estate:idle_status"), ("📋 Recent changes", "estate:rsi_changes")],
         [("📥 Inbox", "estate:inbox"), ("🩺 Health", "estate:health")],
     ]
     return "\n".join(lines), with_nav(buttons, "otto")

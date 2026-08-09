@@ -32,7 +32,7 @@ def _load_jsonl(path: Path, since_hours: int = 168) -> list:
         return []
     cutoff = datetime.now(timezone.utc) - timedelta(hours=since_hours)
     entries = []
-    for line in path.read_text().splitlines():
+    for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line:
             continue
@@ -178,7 +178,18 @@ def _velocity_data() -> list:
             entries.append(json.loads(line))
         except Exception:
             continue
-    return entries[-14:]  # last 14 days
+    # One entry per DATE, last write wins, then the last 14 DATES. This was
+    # `entries[-14:]` — the last 14 ROWS — under a comment claiming days, feeding a panel
+    # that calls it a "14-day trend". Because the writer appended on every render, the live
+    # file held 76 rows across 4 dates (60 of them 2026-08-02), so the trend showed 3 days
+    # with 11 bars re-sampling one of them. Deduping on READ also repairs the display for
+    # history already written, without rewriting the operator's audit file underneath them.
+    by_date: dict = {}
+    for e in entries:
+        day = e.get("date")
+        if day:
+            by_date[day] = e
+    return [by_date[d] for d in sorted(by_date)][-14:]
 
 
 def _sparkline(scores: list, width: int = 14) -> str:
@@ -219,10 +230,28 @@ def _save_daily_snapshot():
 
     path.write_text(json.dumps(snapshot, indent=2))
 
-    # Update velocity
+    # Upsert today's row; do NOT append. This function is called from render_otto_health
+    # (:252), so opening the panel is a write — every tap used to add another row for the
+    # same date and skew the trend the same panel then draws. The daily JSON above was
+    # always idempotent (write_text); only this file grew. Written via tmp+replace so a
+    # crash mid-rewrite cannot truncate the history.
     VELOCITY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(VELOCITY_FILE, "a") as f:
-        f.write(json.dumps({"date": today, "score": score["score"]}) + "\n")
+    rows = []
+    if VELOCITY_FILE.is_file():
+        for line in VELOCITY_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except Exception:
+                continue
+            if entry.get("date") != today:
+                rows.append(entry)
+    rows.append({"date": today, "score": score["score"]})
+    tmp = VELOCITY_FILE.with_suffix(VELOCITY_FILE.suffix + ".tmp")
+    tmp.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    tmp.replace(VELOCITY_FILE)
 
     return snapshot
 
@@ -312,7 +341,7 @@ def render_otto_health() -> Tuple[str, List[ButtonRow]]:
 
     buttons: List[ButtonRow] = [
         [("📊 Status", "estate:status"), ("📜 Activity", "estate:activity:7")],
-        [("📝 Policies", "estate:find"), ("🧠 RSI", "estate:rsi")],
+        [("🗺 Browse", "estate:find"), ("🧠 RSI", "estate:rsi")],
     ]
     buttons = with_nav(buttons, "otto_health")
 

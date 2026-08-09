@@ -39,6 +39,6 @@ def render_predict(target="credits"):
         if data.get("action"):
             lines.append(f"  → {data['action']}")
     lines.append(""); lines.append(panel_stamp("predict"))
-    buttons.append([("🔍 Diagnose", "estate:diagnose_panel"), ("📋 Fix guide", "estate:fix_guide:credits")])
+    buttons.append([("🔍 Diagnose", "estate:diagnose_panel"), ("💳 Fix credits", "estate:fix_guide:credits")])
     buttons = with_nav(buttons, "predict_panel")
     return "\n".join(lines), buttons

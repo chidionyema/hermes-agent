@@ -2572,6 +2572,52 @@ DEFAULT_CONFIG = {
     "_config_version": 29,
 }
 
+# Canonical auxiliary task keys, in config order. THE single source of truth for
+# "which roles have a switchable brain" — every surface that renders the roles
+# derives from this rather than keeping its own copy.
+#
+# Measured 2026-08-08, which is why this exists: three hardcoded lists disagreed.
+# DEFAULT_CONFIG had 13, hermes_cli/main.py `_AUX_TASKS` had 12 (no `monitor`),
+# and hermes_cli/web_server.py `_AUX_TASK_SLOTS` had 11 (no `monitor`, no
+# `tts_audio_tags`) — while both missing roles are live in code
+# (tools/tts_tool.py:194, cron/scripts/classify_items.py:167). A role you can
+# configure but cannot see is a hidden control panel. Adding a 14th role to
+# DEFAULT_CONFIG["auxiliary"] now fails tests/hermes_cli/test_auxiliary_role_coverage.py
+# until it has a home on every surface, so the drift cannot silently return.
+AUXILIARY_TASK_KEYS: tuple[str, ...] = tuple(DEFAULT_CONFIG["auxiliary"].keys())
+
+
+def role_model_allowlist(role: str, config: Optional[dict] = None) -> Optional[List[str]]:
+    """Model keys permitted to hold ``role``, or ``None`` when unrestricted.
+
+    Lives here, not in the panel that edits it, because the policy has TWO enforcement
+    points and a policy with two readers drifts. The operator-facing one is
+    ``operator_shell.brains.fence_check`` — refuses to point the role at a model outside
+    the list. The runtime one is ``tools.approval._smart_approve`` — refuses an ANSWER
+    that came from outside the list, which the first cannot see: ``call_llm`` silently
+    substitutes a different provider when the configured one is unhealthy or returns a
+    payment error (``agent/auxiliary_client.py:2981,3028,5571``), so a role pinned to
+    Claude gets arbitrated by whatever is cheapest and alive exactly when Claude runs out
+    of credits. A fence only at selection time is a fence on the wrong event.
+
+    Config shape, read fresh on every call so arming it needs no restart::
+
+        operator_shell:
+          role_model_allowlist:
+            approval: [opus, sonnet, haiku]
+    """
+    cfg = config if config is not None else (load_config() or {})
+    block = cfg.get("operator_shell") if isinstance(cfg, dict) else None
+    if not isinstance(block, dict):
+        return None
+    table = block.get("role_model_allowlist")
+    if not isinstance(table, dict):
+        return None
+    allowed = table.get(role)
+    if not isinstance(allowed, (list, tuple)) or not allowed:
+        return None
+    return [str(x).strip().lower() for x in allowed if str(x).strip()]
+
 # =============================================================================
 # Config Migration System
 # =============================================================================

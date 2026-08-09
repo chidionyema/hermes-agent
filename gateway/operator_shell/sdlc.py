@@ -222,7 +222,7 @@ def render_sdlc() -> Tuple[str, List[ButtonRow]]:
             ("📋 Board", "estate:missions"),
         ],
         [
-            ("📦 Fleet", "estate:fleet"),
+            ("🚀 Fleet", "estate:fleet"),
             ("👁 Review", "estate:inbox"),
         ],
         [

@@ -12,15 +12,15 @@ ButtonRow = List[Tuple[str, str]]
 COMMAND_GROUPS = [
     ("🏠 See what's happening", [
         ("📊 Status", "estate:status"),
-        ("🏠 Home / Mission", "estate:refresh"),
-        ("🎙 Brief", "estate:brief"),
+        ("🏠 Home", "estate:refresh"),
+        ("📋 Brief", "estate:brief"),
         ("📥 Inbox", "estate:inbox"),
         ("🚀 Fleet", "estate:fleet"),
         ("📋 Missions", "estate:missions"),
         ("📜 Activity", "estate:activity:7"),
     ]),
     ("🔍 Diagnose problems", [
-        ("🔍 Full diagnostic", "estate:diagnose_panel"),
+        ("🔍 Diagnose", "estate:diagnose_panel"),
         ("🔮 Predict", "estate:predict_panel"),
         ("💳 Fix credits", "estate:fix_guide:credits"),
         ("🛠 Fix all", "estate:fix_all"),
@@ -31,24 +31,28 @@ COMMAND_GROUPS = [
         ("🔗 Correlate failures", "estate:correlate"),
     ]),
     ("⚡ Take action", [
-        ("🎛 Run panel", "estate:run"),
-        ("⏸ Pause spend", "estate:pause"),
-        ("▶️ Resume spend", "estate:resume"),
+        ("⚡ Actions", "estate:run"),
+        ("⏸ Pause estate spend", "estate:pause"),
+        ("▶️ Resume estate spend", "estate:resume"),
         ("♻️ Restart coord", "estate:restart"),
         ("🛠 Fix all safe", "estate:fix_all_safe"),
-        ("🧠 RSI panel", "estate:rsi"),
+        ("🧠 RSI", "estate:rsi"),
     ]),
     ("🔭 Inspect projects", [
         ("🔭 Prospector", "estate:prospector_daemon"),
-        ("💹 Signal Engine", "estate:signal_engine"),
-        ("🛒 Store status", "estate:st_status"),
-        ("🏗 CI / Builds", "estate:builds"),
-        ("📸 Changed files", "estate:diff"),
+        # The daemon panel above says whether the process is alive; this one says what it is
+        # producing (last tick, spend, providers, backlog), read from the engine's own
+        # status_snapshot().
+        ("🎛 Now", "estate:prospector_now"),
+        ("💹 Engine", "estate:signal_engine"),
+        ("🛒 Store", "estate:st_status"),
+        ("🏗 CI", "estate:builds"),
+        ("📸 Diff", "estate:diff"),
     ]),
     ("⚙️ Configure", [
-        ("⚙️ Tune panel", "estate:tune"),
-        ("🗓 Cron panel", "estate:pd_cron"),
-        ("🧠 Brain / Model", "estate:brain"),
+        ("⚙️ Tune", "estate:tune"),
+        ("🗓 Cron", "estate:pd_cron"),
+        ("🧠 Brain", "estate:brain"),
         ("🗓 Cron delivery", "estate:setup_cron_topic"),
     ]),
     ("🛠 Machine", [
@@ -57,15 +61,14 @@ COMMAND_GROUPS = [
         ("📜 Log search", "estate:logs"),
     ]),
     ("💻 Code", [
-        ("💻 SDLC pipeline", "estate:sdlc"),
-        ("📝 Assign code", "estate:code_prompt"),
-        ("🗺 Browse / Atlas", "estate:find"),
-        ("🔎 Find / Search", "estate:find"),
+        ("💻 SDLC", "estate:sdlc"),
+        ("📝 Assign", "estate:code_prompt"),
+        ("🗺 Browse", "estate:find"),
     ]),
     ("📋 Info", [
-        ("📋 All features", "estate:features_panel"),
+        ("📋 Features", "estate:features_panel"),
         ("❓ Help", "estate:help"),
-        ("📋 Command palette", "estate:commands"),
+        ("🎛 All commands", "estate:commands"),
     ]),
 ]
 

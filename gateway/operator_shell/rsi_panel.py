@@ -174,7 +174,7 @@ def _primary_next(armed: bool, idle: Optional[dict], staged: int) -> Optional[Tu
     if _idle_is_live_fire(idle):
         return None  # live-firing: the only useful act is to re-read, and 🔄 does that
     if staged > 0:
-        return ("📥 Open inbox", "estate:inbox")
+        return ("📥 Inbox", "estate:inbox")
     return None  # armed, idle, nothing staged — nothing to do here
 
 
@@ -241,7 +241,7 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
     arm_btn = (
         ("⛔ Disarm", "estate:disarm_learning")
         if armed
-        else ("🟢 Arm", "estate:arm_learning")
+        else ("🟢 Arm learning", "estate:arm_learning")
     )
     buttons: List[ButtonRow] = []
     # When disarmed the CTA *is* arming, which the standing toggle below already offers —

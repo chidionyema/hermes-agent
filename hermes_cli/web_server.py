@@ -46,6 +46,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from hermes_cli import __version__, __release_date__
 from hermes_cli.config import (
     cfg_get,
+    AUXILIARY_TASK_KEYS,
     DEFAULT_CONFIG,
     OPTIONAL_ENV_VARS,
     get_config_path,
@@ -3153,21 +3154,12 @@ def get_model_info(profile: Optional[str] = None):
 # Models page (which has no chat PTY open) can drive it.
 # ---------------------------------------------------------------------------
 
-# Canonical auxiliary task slots. Keep in sync with DEFAULT_CONFIG["auxiliary"]
-# in hermes_cli/config.py — listed here for deterministic ordering in the UI.
-_AUX_TASK_SLOTS: Tuple[str, ...] = (
-    "vision",
-    "web_extract",
-    "compression",
-    "skills_hub",
-    "approval",
-    "mcp",
-    "title_generation",
-    "triage_specifier",
-    "kanban_decomposer",
-    "profile_describer",
-    "curator",
-)
+# Canonical auxiliary task slots, DERIVED from DEFAULT_CONFIG["auxiliary"] rather
+# than restated here. The previous hand-maintained copy said "keep in sync" and had
+# drifted to 11 of 13: `tts_audio_tags` and `monitor` were configurable in YAML and
+# used in code, but this page — the one surface that supposedly had per-role
+# coverage — silently omitted them. A comment is not a sync mechanism.
+_AUX_TASK_SLOTS: Tuple[str, ...] = AUXILIARY_TASK_KEYS
 
 
 @app.get("/api/model/options")

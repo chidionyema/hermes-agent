@@ -925,7 +925,16 @@ def telegram_menu_commands(max_commands: int = 100) -> tuple[list[tuple[str, str
         operator_commands = filter_operator_menu(core_commands)
         # Full registry still typed-dispatchable; menu shows Tier-0 only.
         hidden = max(0, len(core_commands) - len(operator_commands))
-        return operator_commands[: max(1, min(max_commands, 12))], hidden
+        # Honour the caller's cap, NOT a hardcoded 12. The 12-slot ceiling was a holdover from
+        # when Telegram's documented cap was 12 and has been invalidated by
+        # MAX_COMMANDS_PER_SCOPE = 30 in gateway/platforms/telegram.py. The Operator UX programme
+        # (OPERATOR_UX_SPEC.md §1) surfaces two Tier-0 commands that the old cap hid:
+        # `agent_model` and `model` (see gateway/operator_shell/menu.py:OPERATOR_TELEGRAM_MENU).
+        # `min(max_commands, MAX_COMMANDS_PER_SCOPE)` is the explicit upper bound so neither
+        # caller nor callee can exceed the Telegram-documented limit by accident.
+        from gateway.platforms.telegram import MAX_COMMANDS_PER_SCOPE
+        cap = min(max_commands, MAX_COMMANDS_PER_SCOPE)
+        return operator_commands[: max(1, cap)], hidden
 
     reserved_names = {n for n, _ in core_commands}
     all_commands = list(core_commands)

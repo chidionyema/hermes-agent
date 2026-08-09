@@ -19,17 +19,28 @@ from gateway.operator_shell.proof import (
 from gateway.operator_shell.voice_brief import wants_executive_brief
 
 
-def test_operator_menu_is_twelve_or_fewer():
-    assert len(OPERATOR_TELEGRAM_MENU) <= 12
+def test_operator_menu_is_within_telegram_scope_cap():
+    # P0 of OPERATOR_UX_SPEC.md: the menu's hard cap was 12 because Telegram's documented
+    # limit was 12 at the time; that limit is now 30 (gateway/platforms/telegram.py:
+    # MAX_COMMANDS_PER_SCOPE), and two Tier-0 commands — `agent_model` and `model` — were
+    # hidden behind the old cap. The list can now grow up to the Telegram-documented cap.
+    # The test that names the new contract rather than the old one, so a regression to 12
+    # is caught.
+    from gateway.platforms.telegram import MAX_COMMANDS_PER_SCOPE
+    assert len(OPERATOR_TELEGRAM_MENU) <= MAX_COMMANDS_PER_SCOPE
+    # The two commands P0 surfaces:
+    assert "agent_model" in OPERATOR_TELEGRAM_MENU
+    assert "model" in OPERATOR_TELEGRAM_MENU
+    # And the doors they sat next to are still there:
     assert "panel" in OPERATOR_TELEGRAM_MENU
     assert "cron" in OPERATOR_TELEGRAM_MENU
 
 
 def test_filter_operator_menu_uses_tier0_order_not_input_order():
-    # filter_operator_menu emits OPERATOR_TELEGRAM_MENU order (menu.py:49),
+    # filter_operator_menu emits OPERATOR_TELEGRAM_MENU order (menu.py),
     # not the caller's order, and drops anything not Tier-0 ("zzz", "new").
-    cmds = [("zzz", "Z"), ("panel", "Panel"), ("help", "Help"), ("cron", "Cron"), ("new", "New")]
-    assert [n for n, _ in filter_operator_menu(cmds)] == ["panel", "cron", "help"]
+    cmds = [("zzz", "Z"), ("panel", "Panel"), ("help", "Help"), ("cron", "Cron"), ("new", "New"), ("agent_model", "A"), ("model", "M")]
+    assert [n for n, _ in filter_operator_menu(cmds)] == ["panel", "cron", "agent_model", "model", "help"]
 
 
 def test_filter_operator_menu_drops_non_tier0():

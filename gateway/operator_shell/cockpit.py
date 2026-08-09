@@ -43,8 +43,9 @@ _TUNE_GROUPS: List[Tuple[str, str, str]] = [
     ("⚡ Execution", "tune:exec", "which rail — sim, testnet, or real capital"),
     ("🎚 Sizing", "tune:sizing", "how big each position is allowed to get"),
     ("🛡 Safety", "tune:safety", "when the engine stops itself"),
-    ("💵 Spend", "tune:spend", "daily ceilings — LLM and Prospector"),
-    ("📦 Prospector", "tune:prospector", "batch size, concurrency, cadence"),
+    ("💵 Spend cap", "tune:spend", "daily ceilings — LLM and Prospector"),
+    ("📦 Throughput", "tune:prospector", "batch size, concurrency, cadence"),
+    ("🚦 Rails", "tune:rails", "when the engine throttles its own generation"),
 ]
 
 # Every allowlisted value, including the 6 that had no button before this module.
@@ -118,7 +119,7 @@ _KNOBS: Dict[str, Tuple[str, str, List[Tuple[str, ButtonRow]]]] = {
         ],
     ),
     "spend": (
-        "💵 Spend",
+        "💵 Spend cap",
         "Daily ceilings. Prospector's cap is the automated liability backstop — it is what "
         "makes unattended generation permissible, so lowering it is always safe.",
         [
@@ -136,7 +137,7 @@ _KNOBS: Dict[str, Tuple[str, str, List[Tuple[str, ButtonRow]]]] = {
         ],
     ),
     "prospector": (
-        "📦 Prospector",
+        "📦 Throughput",
         "Throughput and cadence. None of these touch the moat — verification always runs "
         "the full six checks regardless of what is set here.",
         [
@@ -154,6 +155,27 @@ _KNOBS: Dict[str, Tuple[str, str, List[Tuple[str, ButtonRow]]]] = {
                 ("⏱ 1h", "estate:pd_set:interval:3600"),
                 ("⏱ 2h", "estate:pd_set:interval:7200"),
                 ("⏱ 4h", "estate:pd_set:interval:14400"),
+            ]),
+        ],
+    ),
+    # Its own group rather than five more buttons on Prospector: that screen is throughput
+    # ("how much per tick"), these are the two rails that decide whether a tick generates
+    # AT ALL, and the group cap of 9 exists so a phone does not scroll.
+    "rails": (
+        "🚦 Rails",
+        "When the engine throttles its own generation. Neither touches the moat — anything "
+        "generated still faces all six checks. These decide whether it is generated at all. "
+        "`backlog_cap` is a stock brake (off at 0); the grounding gate is a rate brake that "
+        "suppresses generation only while live retrieval is actually degraded.",
+        [
+            ("backlog_cap", [
+                ("🚦 cap off", "estate:pd_set:backlog_cap:0"),
+                ("🚦 cap 50", "estate:pd_set:backlog_cap:50"),
+                ("🚦 cap 200", "estate:pd_set:backlog_cap:200"),
+            ]),
+            ("grounding_gate", [
+                ("🌐 gate on", "estate:pd_set:grounding_gate:on"),
+                ("🌐 gate off", "estate:pd_set:grounding_gate:off"),
             ]),
         ],
     ),
@@ -266,6 +288,16 @@ def _current(label: str, se: Dict[str, object], pd: Dict[str, object]) -> str:
             return f"{int(val) // 3600}h"
         except Exception:
             return str(val)
+    # The params card already renders these two as words. Printing the raw value here instead
+    # would put `0` and `True` on one screen and `off` and `on` on the other for the same two
+    # knobs, and `backlog_cap = 0` reads as "capped at nothing" when 0 means the brake is OFF.
+    if label == "backlog_cap":
+        try:
+            return "off" if int(val) == 0 else str(int(val))
+        except Exception:
+            return str(val)
+    if label == "grounding_gate":
+        return "on" if str(val).strip().lower() in ("true", "on", "1") else "off"
     return str(val)
 
 
@@ -334,11 +366,43 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
         [(_TUNE_GROUPS[2][0], f"estate:{_TUNE_GROUPS[2][1]}"),
          (_TUNE_GROUPS[3][0], f"estate:{_TUNE_GROUPS[3][1]}")],
         [(_TUNE_GROUPS[4][0], f"estate:{_TUNE_GROUPS[4][1]}"),
-         ("🗓 Cron delivery", "estate:setup_cron_topic")],
+         (_TUNE_GROUPS[5][0], f"estate:{_TUNE_GROUPS[5][1]}")],
+        [("🗓 Cron delivery", "estate:setup_cron_topic")],
         [("🧠 Brain", "estate:brain")],
         nav("tune"),
     ]
     return "\n".join(lines), rows
+
+
+def _apply_note(knobs: List[Tuple[str, List[Tuple[str, str]]]]) -> str:
+    """How this group's changes actually take effect — read from the knobs, not assumed.
+
+    The footer used to say "restarts the daemon" on every group. That is true only of the two
+    plist knobs; a config.yaml knob is picked up at the NEXT TICK, because `code_fingerprint`
+    hashes config.yaml alongside the engine sources and the daemon re-execs when it moves
+    (`prospector/scheduler/run_scheduled.py:1257`). Telling an operator their `backlog_cap`
+    change restarted the daemon invites them to go looking for a restart that never happened.
+    """
+    kinds = set()
+    for _label, buttons in knobs:
+        for _text, cb in buttons:
+            parts = str(cb).split(":")
+            if len(parts) >= 3 and parts[1] == "pd_set":
+                try:
+                    from gateway.operator_shell.prospector_daemon import _SAFE_PARAMS
+                except Exception:
+                    return "Every change is confirmed on a second screen."
+                entry = _SAFE_PARAMS.get(parts[2])
+                if entry:
+                    kinds.add(entry[0])
+    if not kinds:
+        return "Every change is confirmed on a second screen and restarts the daemon."
+    if kinds <= {"yaml_scalar"}:
+        return (
+            "Every change is confirmed on a second screen and applies at the next tick — "
+            "the daemon re-execs itself when config.yaml changes."
+        )
+    return "Every change is confirmed on a second screen and restarts the daemon."
 
 
 def render_tune_group(group: str) -> Tuple[str, List[ButtonRow]]:
@@ -354,7 +418,7 @@ def render_tune_group(group: str) -> Tuple[str, List[ButtonRow]]:
     for label, buttons in knobs:
         lines.append(f"• `{label}` = *{_current(label, se, pd)}*")
         rows.append(list(buttons))
-    lines += ["", "_Every change is confirmed on a second screen and restarts the daemon._"]
+    lines += ["", f"_{_apply_note(knobs)}_"]
 
     # No "All knobs" row — the spine's ⚙️ Tune already goes there, and the same callback twice
     # on one screen is the defect, not a convenience.
@@ -450,7 +514,7 @@ def render_run() -> Tuple[str, List[ButtonRow]]:
         se_row.append(("⏹ Stop engine", "estate:se_stop"))
     else:
         se_row.append(("💹 Engine", "estate:signal_engine"))
-    se_row.append(("♻️ Restart", "estate:se_restart_now"))
+    se_row.append(("♻️ Restart engine", "estate:se_restart_now"))
     groups.append(Group(
         "💹 Signal engine", [se_row],
         status=_tri(se_up, "`running`", "`stopped`"),
@@ -464,12 +528,12 @@ def render_run() -> Tuple[str, List[ButtonRow]]:
         # itself labels pd_unpause "▶️ Clear PAUSE" (prospector_daemon.py:459).
         pd_rows.append([
             ("▶️ Clear Prospector PAUSE", "estate:pd_unpause"),
-            ("♻️ Restart", "estate:pd_restart_now:scheduler"),
+            ("♻️ Restart Prospector", "estate:pd_restart_now:scheduler"),
         ])
     else:
         pd_rows.append([
             ("⏸ Pause Prospector", "estate:pd_pause"),
-            ("♻️ Restart", "estate:pd_restart_now:scheduler"),
+            ("♻️ Restart Prospector", "estate:pd_restart_now:scheduler"),
         ])
     groups.append(Group(
         "🔭 Prospector", pd_rows,
@@ -482,7 +546,7 @@ def render_run() -> Tuple[str, List[ButtonRow]]:
     groups.append(Group("⚙️ Daemons", [
         [
             ("♻️ Coordinator", "estate:daemon_restart_now:coordinator"),
-            ("♻️ Gateway", "estate:daemon_restart_now:gateway"),
+            ("♻️ Restart gateway now", "estate:daemon_restart_now:gateway"),
         ],
         [
             ("▶️ Run watchdog", "estate:daemon_run_now:watchdog"),

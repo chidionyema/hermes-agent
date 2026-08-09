@@ -28,7 +28,7 @@ WATCHDOG_STALE_S = 900  # StartInterval 300s; >15m = watchdog not ticking
 
 
 def _uid() -> int:
-    return os.getuid()
+    return os.getuid()  # windows-footgun: ok — only reached to build a launchd `gui/<uid>/` target
 
 
 def _keepawake_running() -> Dict[str, Any]:

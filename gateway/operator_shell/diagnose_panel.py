@@ -59,10 +59,10 @@ def render_diagnose(target=None):
         # One fix row for the panel, not one per area — `--diagnose` returns two areas and
         # both carry a `fix`, which would otherwise stack two identical button rows.
         if any(area.get("fix") for _, area in sections):
-            buttons.append([("📋 Fix guide", "estate:fix_guide:credits"), ("🛠 Auto-fix", "estate:fix_all")])
+            buttons.append([("💳 Fix credits", "estate:fix_guide:credits"), ("🛠 Fix all", "estate:fix_all")])
 
     lines.append(""); lines.append(panel_stamp("diagnose"))
-    buttons.append([("🔍 Full diagnose", "estate:diagnose_panel"), ("🛠 Fix all", "estate:fix_all")])
+    buttons.append([("🔍 Diagnose", "estate:diagnose_panel"), ("🛠 Fix all", "estate:fix_all")])
     buttons = with_nav(buttons, "diagnose_panel")
     return "\n".join(lines), buttons
 
@@ -74,8 +74,8 @@ def render_fix_guide(target="credits"):
                  "Step 3: Add Anthropic credits", "  → [Open console.anthropic.com](https://console.anthropic.com)",
                  "Step 4: Verify by running `diagnose moat`", "",
                  "_Estimated time: 2 minutes_", "", panel_stamp("fix_guide")]
-        buttons = [[("🔍 Verify fix", "estate:diagnose_panel:moat")],
-                   [("🛠 Auto-fix", "estate:fix_all")]]
+        buttons = [[("🔍 Diagnose moat", "estate:diagnose_panel:moat")],
+                   [("🛠 Fix all", "estate:fix_all")]]
     else:
         lines = [f"📋 *Fix Guide: {target}*", "", "_No guide available for this target yet._", "", panel_stamp("fix_guide")]
         buttons = []

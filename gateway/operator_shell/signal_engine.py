@@ -644,7 +644,7 @@ def render_signal_engine() -> Tuple[str, List[ButtonRow]]:
     if verdict == "tcc_denied":
         buttons.append([("📜 Logs", "estate:se_logs"), ("🔄 Re-check", "estate:signal_engine")])
     elif verdict == "unsupervised":
-        buttons.append([("🛡 Load LaunchAgent", "estate:se_start")])
+        buttons.append([("▶️ Start engine", "estate:se_start")])
     elif verdict == "stalled":
         buttons.append([("♻️ Restart", "estate:se_restart")])
         primary_restart = True
@@ -654,16 +654,16 @@ def render_signal_engine() -> Tuple[str, List[ButtonRow]]:
     if not primary_restart:
         ops.append(("♻️ Restart", "estate:se_restart"))
     if running:
-        ops.append(("⏹ Stop", "estate:se_stop"))
+        ops.append(("⏹ Stop engine", "estate:se_stop"))
     else:
-        ops.append(("▶️ Start", "estate:se_start"))
+        ops.append(("▶️ Start engine", "estate:se_start"))
     if ops:
         buttons.append(ops)
     buttons.append(
         [
             ("▶️ Resume engine" if h.get("paused") else "⏸ Pause engine",
              "estate:se_resume" if h.get("paused") else "estate:se_pause"),
-            ("💰 Knobs", "estate:tune"),
+            ("⚙️ Tune", "estate:tune"),
             ("📜 Logs", "estate:se_logs"),
         ]
     )
@@ -712,8 +712,8 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
     # and hands off to the group that changes them. One place per knob, not two.
     buttons: List[ButtonRow] = [
         [("⚡ Execution", "estate:tune:exec"), ("🎚 Sizing", "estate:tune:sizing")],
-        [("🛡 Safety", "estate:tune:safety"), ("💵 Spend", "estate:tune:spend")],
-        [("💹 Daemon", "estate:signal_engine"), ("📜 Logs", "estate:se_logs")],
+        [("🛡 Safety", "estate:tune:safety"), ("💵 Spend cap", "estate:tune:spend")],
+        [("💹 Engine", "estate:signal_engine"), ("📜 Logs", "estate:se_logs")],
         nav("se_params"),
     ]
     return "\n".join(lines), buttons
@@ -827,7 +827,7 @@ def render_logs() -> Tuple[str, List[ButtonRow]]:
             lines.append(_tail_lines((path,), n=8))
         lines.append("")
     return "\n".join(lines).rstrip(), [
-        [("💹 Daemon", "estate:signal_engine"), ("💰 Knobs", "estate:se_params")],
+        [("💹 Engine", "estate:signal_engine"), ("💰 Knobs", "estate:se_params")],
         [("🚀 Fleet", "estate:fleet")],
         nav("se_logs"),
     ]
