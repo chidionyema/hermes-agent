@@ -382,9 +382,26 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
         ],
         nav("daemons"),
     ]
-    assert sum(len(r) for r in buttons) <= 8, (
-        f"daemons panel exceeded 8-button cap: {sum(len(r) for r in buttons)} buttons"
-    )
+    # Degrade, never raise. This was a bare `assert` in the render path: an operator who
+    # tripped it got no daemons panel at all — and the gateway panel is the only
+    # phone-reachable door to restart a crashed KeepAlive job, so the failure mode was
+    # "the recovery screen is down because recovery has too many buttons". `python -O`
+    # would also have stripped the guard entirely, so it was a crash in dev and nothing in
+    # prod: the two environments disagreeing is worse than either. Trim action rows from
+    # the end instead and keep `nav` — losing a button beats losing the screen.
+    if sum(len(r) for r in buttons) > 8:
+        # The spine is preferred, not exempt: clamp it first, then refill action rows into
+        # whatever budget is left. An earlier version kept the spine whole and trimmed only
+        # actions, which still returned 12 buttons when the spine itself was the overflow —
+        # a cap that the overflow case can escape is not a cap.
+        spine = list(buttons[-1])[:8]
+        trimmed = [spine]
+        for row in buttons[:-1]:
+            if sum(len(r) for r in trimmed) + len(row) > 8:
+                break
+            trimmed.insert(-1, row)
+        buttons = trimmed
+        lines.append("_Some actions were hidden to fit; open Run for the full verb list._")
     return "\n".join(lines), buttons
 
 
