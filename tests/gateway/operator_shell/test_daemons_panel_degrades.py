@@ -46,17 +46,20 @@ def test_the_panel_renders_even_when_the_cap_is_exceeded(monkeypatch):
     assert "hidden to fit" in text
 
 
-def test_every_declared_verb_fits_now_that_the_cap_is_nine():
-    """The founder raised the cap on 2026-08-09 rather than accept a hidden verb. 3 actions
-    + a 6-button spine = 9 exactly, so nothing should be trimmed and the apology line should
-    not appear. If a future spine grows again this fails loudly instead of quietly hiding a
-    button — which is the whole reason the trim was made visible in the first place."""
+def test_every_declared_verb_fits_now_that_the_cap_is_ten():
+    """The founder raised the cap on 2026-08-09, twice the same day: 8->9 assumed a 6-button
+    spine, but Tune had been silently missing from the spine since 2026-08-02 and no one had
+    counted nav("daemons")'s own trailing self-refresh glyph either, so 9 only "worked" by
+    masking two miscounts that happened to cancel out. Restoring Tune and counting correctly
+    makes the real spine contribution 7, so 3 actions + 7 = 10 is what fits without trimming.
+    If a future spine grows again this fails loudly instead of quietly hiding a button — which
+    is the whole reason the trim was made visible in the first place."""
     text, buttons = D.render_daemons()
     labels = [label for row in buttons for label, _cb in row]
 
-    assert "▶️ Start coord" in labels, "the verb the old 8-cap was hiding is still hidden"
-    assert "hidden to fit" not in text, "something is still being trimmed at cap 9"
-    assert sum(len(r) for r in buttons) == 9
+    assert "▶️ Start coord" in labels, "the verb the cap is meant to protect is hidden"
+    assert "hidden to fit" not in text, "something is still being trimmed at cap 10"
+    assert sum(len(r) for r in buttons) == 10
 
 
 def test_both_recovery_doors_survive_the_trim():
