@@ -372,13 +372,19 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
     # gateway (bounce; fenced, so this is the only phone-reachable door). Oneshots
     # (watch / RSI / Progress / TIE) and other cross-panel links are surfaced from Run —
     # dropping them here is a navigation change, not a feature loss.
+    # Ordered by what an operator loses if it is missing, because the trim below drops from
+    # the end. The spine grew from 5 buttons to 6 when `🗂 Projects` was added on 2026-08-06
+    # (panel_chrome.py `_PROJECTS`), which silently ate one of the three action slots this
+    # comment budgets for — 3 actions + 6 spine = 9, over the cap. Gateway first: it is the
+    # only phone-reachable door to a gateway that has stopped answering, so it must never be
+    # the button that degradation removes.
     buttons: List[ButtonRow] = [
+        [
+            ("♻️ Bounce gateway", "estate:daemon_restart:gateway"),
+        ],
         [
             ("♻️ Restart coord", "estate:daemon_restart:coordinator"),
             ("▶️ Start coord", "estate:daemon_start:coordinator"),
-        ],
-        [
-            ("♻️ Bounce gateway", "estate:daemon_restart:gateway"),
         ],
         nav("daemons"),
     ]
@@ -390,17 +396,24 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
     # prod: the two environments disagreeing is worse than either. Trim action rows from
     # the end instead and keep `nav` — losing a button beats losing the screen.
     if sum(len(r) for r in buttons) > 8:
-        # The spine is preferred, not exempt: clamp it first, then refill action rows into
-        # whatever budget is left. An earlier version kept the spine whole and trimmed only
-        # actions, which still returned 12 buttons when the spine itself was the overflow —
-        # a cap that the overflow case can escape is not a cap.
+        # Trim by BUTTON, not by row, and never stop early. Two earlier drafts each lost the
+        # wrong thing: keeping the spine whole still returned 12 when the spine was itself
+        # the overflow, and dropping whole rows at the first misfit threw away both coord
+        # verbs to protect a one-button gateway row — leaving a recovery panel that could
+        # not recover the coordinator. Filling button-by-button in declared priority order
+        # spends the last free slot on `♻️ Restart coord` and drops only `▶️ Start coord`,
+        # which `launchctl kickstart -k` (estate.py:1511) already covers for a stopped job.
+        # The spine is preferred but not exempt — a cap the overflow case escapes is no cap.
         spine = list(buttons[-1])[:8]
-        trimmed = [spine]
+        budget = 8 - len(spine)
+        kept: List[ButtonRow] = []
         for row in buttons[:-1]:
-            if sum(len(r) for r in trimmed) + len(row) > 8:
+            if budget <= 0:
                 break
-            trimmed.insert(-1, row)
-        buttons = trimmed
+            take = list(row)[:budget]
+            kept.append(take)
+            budget -= len(take)
+        buttons = kept + [spine]
         lines.append("_Some actions were hidden to fit; open Run for the full verb list._")
     return "\n".join(lines), buttons
 

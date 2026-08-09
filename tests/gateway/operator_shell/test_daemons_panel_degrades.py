@@ -46,6 +46,23 @@ def test_the_panel_renders_even_when_the_cap_is_exceeded(monkeypatch):
     assert "hidden to fit" in text
 
 
+def test_both_recovery_doors_survive_the_trim():
+    """The panel is over cap today and will stay there: 3 action buttons + a 6-button spine
+    = 9. What degradation removes therefore matters more than that it happens. `🗂 Projects`
+    joining the spine on 2026-08-06 ate the third action slot, and the first two drafts of
+    the trim each dropped a recovery verb — once the gateway bounce, once both coord verbs.
+    These two callbacks are the whole point of the screen and must outlive any trim."""
+    _text, buttons = D.render_daemons()
+    callbacks = {cb for row in buttons for _label, cb in row}
+
+    assert "estate:daemon_restart:gateway" in callbacks, (
+        "the only phone-reachable door to a stopped gateway was trimmed away"
+    )
+    assert "estate:daemon_restart:coordinator" in callbacks, (
+        "the coordinator recovery verb was trimmed away"
+    )
+
+
 def test_the_cap_is_not_enforced_by_an_assert():
     """`python -O` strips asserts, so a guard written as one is absent in production."""
     src = inspect.getsource(D.render_daemons)
