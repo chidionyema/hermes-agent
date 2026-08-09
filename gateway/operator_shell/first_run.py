@@ -50,7 +50,7 @@ def render_welcome():
         panel_stamp("welcome"),
     ]
     buttons = [
-        [("🎛 See all commands", "estate:commands"), ("📊 Status", "estate:status")],
+        [("🎛 All commands", "estate:commands"), ("📊 Status", "estate:status")],
         [("🔍 Diagnose", "estate:diagnose_panel"), ("❓ Help", "estate:help")],
         [("⚙️ Setup wizard", "estate:setup_wizard")],
     ]

@@ -268,8 +268,8 @@ def render_home() -> Tuple[str, List[ButtonRow]]:
     # never be more than one tap away — that is what "as effective from Telegram as from the
     # laptop" means. The unscoped card says so plainly and points back at the project list.
     buttons.append([("⌨️ Assign work", "estate:assign"), ("🖥 Web dashboard", "estate:dashboard")])
-    buttons.append([("🧠 Health", "estate:health"), ("📥 Inbox", "estate:inbox")])
-    buttons.append([("⚙️ Settings", "estate:tune")])
+    buttons.append([("🩺 Health", "estate:health"), ("📥 Inbox", "estate:inbox")])
+    buttons.append([("⚙️ Tune", "estate:tune")])
 
     # ── Self-improvement summary line (always visible on Home) ──
     try:

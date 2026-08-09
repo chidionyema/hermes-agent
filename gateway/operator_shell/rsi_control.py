@@ -104,12 +104,12 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
     
     buttons: List[ButtonRow] = [
         [("🔄 Run Cycle Now", "estate:rsi_run"),
-         ("📊 View Evidence", "estate:health")],
+         ("🩺 Health", "estate:health")],
         [("⏸ Pause Learning" if is_active else "▶ Resume Learning", 
           "estate:rsi_pause" if is_active else "estate:rsi_resume"),
-         ("📋 Recent Changes", "estate:rsi_changes")],
+         ("📋 Recent changes", "estate:rsi_changes")],
         [("📅 Weekly Digest", "estate:weekly_digest"),
-         ("🛠 Fix All", "estate:fix_all")],
+         ("🛠 Fix all", "estate:fix_all")],
     ]
     
     return "\n".join(lines), with_nav(buttons)
@@ -155,7 +155,7 @@ def render_rsi_changes() -> Tuple[str, List[ButtonRow]]:
             lines.append(f"  • {e.get('effective',0)}/{e.get('total',0)} effective ({e.get('rate',0):.0%})")
     
     buttons: List[ButtonRow] = [
-        [("🧠 Back to RSI", "estate:rsi"), ("📊 Health", "estate:health")],
+        [("🧠 Back to RSI", "estate:rsi"), ("🩺 Health", "estate:health")],
     ]
     return "\n".join(lines), with_nav(buttons)
 
@@ -275,7 +275,7 @@ def render_idle_status() -> Tuple[str, List[ButtonRow]]:
     #                      last button — test_the_quarantine_has_no_stale_entries).
     # Both replacements are read-only panels that are already handled.
     buttons: List[ButtonRow] = [
-        [("🤖 Otto", "estate:otto"), ("🧠 RSI Panel", "estate:rsi")],
+        [("🤖 Otto", "estate:otto"), ("🧠 RSI", "estate:rsi")],
     ]
     if not is_running:
         lines.append("")

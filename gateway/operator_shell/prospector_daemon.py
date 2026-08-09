@@ -577,11 +577,11 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
     # in Tune's Spend group beside the LLM cap, because a spend ceiling is a spend ceiling
     # whichever daemon is burning it, and they are almost always adjusted together.
     buttons: List[ButtonRow] = [
-        [("📦 Throughput", "estate:tune:prospector"), ("💵 Spend", "estate:tune:spend")],
+        [("📦 Throughput", "estate:tune:prospector"), ("💵 Spend cap", "estate:tune:spend")],
         # PAUSE is the automated liability backstop from CLAUDE.md, not a preference. It stays
         # on this screen as well as on Run — the same reasoning as estate pause on the home card.
         [pause_btn],
-        [("⚙️ Daemon", "estate:prospector_daemon"), ("🗓 Cron", "estate:pd_cron")],
+        [("🔭 Prospector", "estate:prospector_daemon"), ("🗓 Cron", "estate:pd_cron")],
         nav("pd_params"),
     ]
     return "\n".join(lines), buttons
@@ -729,7 +729,7 @@ def render_cron() -> Tuple[str, List[ButtonRow]]:
                 ]
             )
     buttons.append(
-        [("⚙️ Daemon", "estate:prospector_daemon"), ("⚙️ Params", "estate:pd_params")]
+        [("🔭 Prospector", "estate:prospector_daemon"), ("⚙️ Params", "estate:pd_params")]
     )
     buttons.append(nav("pd_cron"))
     return "\n".join(lines), buttons
@@ -831,7 +831,7 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
         if j.get("last_error") or (
             j.get("last_status") not in (None, "ok") and j.get("enabled", True)
         ):
-            cta = ("🗓 Cron outcomes", "estate:pd_cron")
+            cta = ("🗓 Cron", "estate:pd_cron")
             break
 
     # Context-aware buttons: adapt based on daemon state + last tick
@@ -860,7 +860,14 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
     if cta:
         buttons.append([cta])
     if has_zero_yield:
-        buttons.append([("🧪 Golden set", "estate:pd_logs:scheduler"), ("⚙️ Params", "estate:pd_params")])
+        # Was a button row offering "🧪 Golden set" — a name for a destination that does not
+        # exist (it opened scheduler logs) — beside a "⚙️ Params" duplicating the row appended
+        # immediately below. The FINDING is real, so it stays; a finding belongs in the text,
+        # and both destinations that row offered are still one tap away underneath.
+        lines.append("")
+        lines.append(
+            "⚠️ _Zero yield: the last 3 ticks produced dossiers but no passes._"
+        )
     if control_row:
         buttons.append(control_row)
     buttons.append([
@@ -893,7 +900,7 @@ def render_logs(unit_arg: str = "scheduler") -> Tuple[str, List[ButtonRow]]:
             lines.append(_tail_lines((path,), n=8))
         lines.append("")
     buttons: List[ButtonRow] = [
-        [("⚙️ Daemon", "estate:prospector_daemon")],
+        [("🔭 Prospector", "estate:prospector_daemon")],
         nav(f"pd_logs:{short}"),
     ]
     return "\n".join(lines).rstrip(), buttons

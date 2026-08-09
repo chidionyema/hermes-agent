@@ -41,16 +41,15 @@ def render_help() -> Tuple[str, List[ButtonRow]]:
 
     buttons: List[ButtonRow] = [
         [
-            ("🔧 Restart me", "estate:daemon_restart_now:gateway"),
+            ("♻️ Restart gateway now", "estate:daemon_restart_now:gateway"),
             ("📊 Status", "estate:status"),
         ],
         [
-            ("🗺 Browse all", "estate:find"),
-            ("🎛 Actions", "estate:run"),
+            ("🗺 Browse", "estate:find"),
+            ("⚡ Actions", "estate:run"),
         ],
         [
             ("⚙️ Tune", "estate:tune"),
-            ("🔎 Find", "estate:find"),
         ],
     ]
     buttons = with_nav(buttons, "help")

@@ -540,7 +540,7 @@ def render_brains_panel(show_all: bool = False) -> Tuple[str, List[ButtonRow]]:
             "set `operator_shell.role_model_allowlist` to restrict it._"
         )
 
-    buttons.append([("🧠 Change agent brain", "estate:brain")])
+    buttons.append([("🧠 Brain", "estate:brain")])
     if overridden:
         buttons.append([("↺ Reset all overrides", "estate:brains_reset")])
     buttons = with_nav(buttons, "brains")

@@ -105,8 +105,8 @@ def render_health(project_key: str = "") -> Tuple[str, List[ButtonRow]]:
     lines.append(f"• {raw.get('total_firings','?')} policy enforcements fired")
 
     buttons: List[ButtonRow] = [
-        [("📊 Details", "estate:otto_health"), ("📜 Compliance", "estate:compliance")],
-        [("📋 Policies", "estate:find"), ("🛠 Fix All", "estate:fix_all")],
+        [("🧠 Otto health", "estate:otto_health"), ("📜 Compliance", "estate:compliance")],
+        [("🗺 Browse", "estate:find"), ("🛠 Fix all", "estate:fix_all")],
     ]
     return "\n".join(lines), with_nav(buttons)
 
@@ -192,6 +192,6 @@ def render_weekly_digest() -> Tuple[str, List[ButtonRow]]:
         pass
 
     buttons: List[ButtonRow] = [
-        [("🧠 Full Health", "estate:health"), ("📊 Dashboard", "estate:otto_health")],
+        [("🩺 Health", "estate:health"), ("🧠 Otto health", "estate:otto_health")],
     ]
     return "\n".join(lines), with_nav(buttons)

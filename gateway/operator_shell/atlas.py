@@ -145,7 +145,7 @@ def all_room_destinations() -> List[Tuple[str, str]]:
                 if cb.startswith("estate:"):
                     out.append((label, cb))
     # Atlas-level Brief
-    out.append(("Brief", "estate:brief"))
+    out.append(("📋 Brief", "estate:brief"))
     return out
 
 
@@ -262,11 +262,11 @@ def render_room(room_id: str, probes: bool = True) -> Tuple[str, List[ButtonRow]
         groups = [
             Group("👁 Look", [
                 [("💹 Engine", "estate:signal_engine"), ("⛽ Fuel", "estate:system_fuel")],
-                [("🔭 Prospector", "estate:prospector_daemon"), ("💵 Spend", "estate:tune:spend")],
+                [("🔭 Prospector", "estate:prospector_daemon"), ("💵 Spend cap", "estate:tune:spend")],
                 [
                     ("🛒 Store", "estate:st_status"),
                     ("🩺 Health", "estate:st_health"),
-                    ("📦 Reconcile", "estate:st_reconcile"),
+                    ("🧾 Reconcile", "estate:st_reconcile"),
                 ],
             ], note="verbs for these live on Run"),
         ]
@@ -297,7 +297,7 @@ def render_room(room_id: str, probes: bool = True) -> Tuple[str, List[ButtonRow]
     # brain — Look only; arm/disarm live on the RSI panel itself
     groups = [
         Group("👁 Look", [
-            [("🧠 RSI", "estate:rsi"), ("🎛 Brain", "estate:brain")],
+            [("🧠 RSI", "estate:rsi"), ("🧠 Brain", "estate:brain")],
         ]),
     ]
     return compose(
@@ -323,7 +323,7 @@ def _render_code_room(glyph: str, title: str, blurb: str) -> Tuple[str, List[But
     header.append("")
     header.append(panel_stamp("room:code"))
 
-    assign_row: ButtonRow = [("✍️ Assign", "estate:code_prompt")]
+    assign_row: ButtonRow = [("📝 Assign", "estate:code_prompt")]
     assign_row.extend(_inflight_task_buttons(limit=2))
     # One row of up to 3: Assign + up to 2 inflight
     groups: List[Group] = [

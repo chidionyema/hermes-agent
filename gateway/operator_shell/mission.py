@@ -355,7 +355,7 @@ def _primary_cta(conn, C, verdict: str) -> Tuple[str, str]:
 _SURFACES: List[ButtonRow] = [
     [("🛒 Store", "estate:st_status"), ("🗓 Cron", "estate:pd_cron"), ("📥 Inbox", "estate:inbox")],
     [("🚀 Fleet", "estate:fleet"), ("📋 Missions", "estate:missions"), ("🏗 CI", "estate:builds")],
-    [("⚙️ Daemons", "estate:daemons"), ("🧠 RSI", "estate:rsi"), ("📸 Changed", "estate:diff")],
+    [("⚙️ Daemons", "estate:daemons"), ("🧠 RSI", "estate:rsi"), ("📸 Diff", "estate:diff")],
 ]
 
 _MAX_CONCERNS = 2
@@ -390,7 +390,7 @@ def mission_buttons(
     rows: List[ButtonRow] = [[c] for c in live[:_MAX_CONCERNS]]
 
     if not cron_ok:
-        rows.append([("🗓 Fix cron delivery", "estate:setup_cron_topic")])
+        rows.append([("🗓 Cron delivery", "estate:setup_cron_topic")])
 
     # NOTE: SDLC button removed from the action rows — the SPINE
     # (panel_chrome.nav()) carries 'estate:sdlc' as the third spine button,
@@ -495,9 +495,9 @@ def _render_unavailable_card() -> Tuple[str, bool, List[ButtonRow]]:
     ]
     text = "\n".join(lines)
     buttons: List[ButtonRow] = [
-        [("💻 Full SDLC pipeline", "estate:sdlc")],
+        [("💻 SDLC", "estate:sdlc")],
         [
-            ("♻️ Restart GW", "estate:daemon_restart_now:gateway"),
+            ("♻️ Restart gateway now", "estate:daemon_restart_now:gateway"),
             # ♻️ not 🔄, "coord" not "Coord": the button beside it and the same callback in
             # command_palette.py:37 both already read "♻️ Restart coord". One destination
             # wearing two glyphs in one row is how an operator learns to distrust the glyph.

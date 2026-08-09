@@ -341,7 +341,7 @@ def render_otto_health() -> Tuple[str, List[ButtonRow]]:
 
     buttons: List[ButtonRow] = [
         [("📊 Status", "estate:status"), ("📜 Activity", "estate:activity:7")],
-        [("📝 Policies", "estate:find"), ("🧠 RSI", "estate:rsi")],
+        [("🗺 Browse", "estate:find"), ("🧠 RSI", "estate:rsi")],
     ]
     buttons = with_nav(buttons, "otto_health")
 

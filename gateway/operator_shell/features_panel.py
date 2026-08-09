@@ -9,11 +9,11 @@ FEATURES = {
                 ("📋 Missions", "estate:missions"), ("⚙️ Daemons", "estate:daemons")],
     "Diagnose": [("🔍 Diagnose", "estate:diagnose_panel"), ("🔮 Predict", "estate:predict_panel"),
                  ("💳 Fix credits", "estate:fix_guide:credits"), ("🛠 Fix all", "estate:fix_all")],
-    "Improve": [("🧠 Health", "estate:otto_health"), ("📈 Score", "estate:score"),
+    "Improve": [("🧠 Otto health", "estate:otto_health"), ("📈 Score", "estate:score"),
                 ("🧠 RSI", "estate:rsi"), ("📜 Activity", "estate:activity:7")],
     "Info": [("📋 Features", "estate:features_panel"), ("❓ Help", "estate:help"),
              ("🗺 Browse", "estate:find"), ("📸 Diff", "estate:diff")],
-    "Actions": [("🎛 Run", "estate:run"), ("⚙️ Tune", "estate:tune"),
+    "Actions": [("⚡ Actions", "estate:run"), ("⚙️ Tune", "estate:tune"),
                 ("💻 SDLC", "estate:sdlc"), ("🏠 Home", "estate:refresh")],
 }
 

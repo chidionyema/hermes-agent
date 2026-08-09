@@ -228,7 +228,7 @@ def _render_snapshot(snap: dict) -> Tuple[str, List[ButtonRow]]:
     # operator can see whether the engine state changed without leaving the screen.
     buttons: List[ButtonRow] = [
         [("🔄 Refresh", "estate:prospector_now")],
-        [("⚙️ Daemons", "estate:daemons"), ("🔧 Params", "estate:tune")],
+        [("⚙️ Daemons", "estate:daemons"), ("⚙️ Tune", "estate:tune")],
         [("🗓 Cron", "estate:pd_cron")],
         nav(),
     ]

@@ -639,7 +639,7 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
         # original ask and the roles half had no renderer on any surface. Added as an
         # extra row rather than replacing this panel: personality/reasoning/busy live
         # here too and removing them to make room would be a silent feature removal.
-        buttons = [[("🤖 Brains — all 13 roles", "estate:brains")]] + list(buttons)
+        buttons = [[("🤖 Brains", "estate:brains")]] + list(buttons)
         return _finish(
             PanelView(
                 text=text,
@@ -1383,7 +1383,7 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
         view.buttons = [
             [("✅ Keep cron in this chat", "estate:cron_use_main_dm")],
             [("🔄 Try create topic anyway", "estate:setup_cron_topic_force")],
-            [("🚀 Missions", "estate:missions")],
+            [("📋 Missions", "estate:missions")],
             nav(),
         ]
         return _finish(view)

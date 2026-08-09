@@ -66,7 +66,7 @@ def render_smart_home() -> Tuple[str, bool, List[ButtonRow]]:
         ]
         buttons = [
             [("🛠 Fix all", "estate:fix_all"), ("🔍 Diagnose", "estate:diagnose_panel")],
-            [("⏸ Pause Prospector", "estate:pd_pause"), ("📋 Fix credits", "estate:fix_guide:credits")],
+            [("⏸ Pause Prospector", "estate:pd_pause"), ("💳 Fix credits", "estate:fix_guide:credits")],
         ]
         paused = False
         

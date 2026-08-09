@@ -43,8 +43,8 @@ _TUNE_GROUPS: List[Tuple[str, str, str]] = [
     ("⚡ Execution", "tune:exec", "which rail — sim, testnet, or real capital"),
     ("🎚 Sizing", "tune:sizing", "how big each position is allowed to get"),
     ("🛡 Safety", "tune:safety", "when the engine stops itself"),
-    ("💵 Spend", "tune:spend", "daily ceilings — LLM and Prospector"),
-    ("📦 Prospector", "tune:prospector", "batch size, concurrency, cadence"),
+    ("💵 Spend cap", "tune:spend", "daily ceilings — LLM and Prospector"),
+    ("📦 Throughput", "tune:prospector", "batch size, concurrency, cadence"),
     ("🚦 Rails", "tune:rails", "when the engine throttles its own generation"),
 ]
 
@@ -119,7 +119,7 @@ _KNOBS: Dict[str, Tuple[str, str, List[Tuple[str, ButtonRow]]]] = {
         ],
     ),
     "spend": (
-        "💵 Spend",
+        "💵 Spend cap",
         "Daily ceilings. Prospector's cap is the automated liability backstop — it is what "
         "makes unattended generation permissible, so lowering it is always safe.",
         [
@@ -137,7 +137,7 @@ _KNOBS: Dict[str, Tuple[str, str, List[Tuple[str, ButtonRow]]]] = {
         ],
     ),
     "prospector": (
-        "📦 Prospector",
+        "📦 Throughput",
         "Throughput and cadence. None of these touch the moat — verification always runs "
         "the full six checks regardless of what is set here.",
         [
@@ -514,7 +514,7 @@ def render_run() -> Tuple[str, List[ButtonRow]]:
         se_row.append(("⏹ Stop engine", "estate:se_stop"))
     else:
         se_row.append(("💹 Engine", "estate:signal_engine"))
-    se_row.append(("♻️ Restart", "estate:se_restart_now"))
+    se_row.append(("♻️ Restart engine", "estate:se_restart_now"))
     groups.append(Group(
         "💹 Signal engine", [se_row],
         status=_tri(se_up, "`running`", "`stopped`"),
@@ -528,12 +528,12 @@ def render_run() -> Tuple[str, List[ButtonRow]]:
         # itself labels pd_unpause "▶️ Clear PAUSE" (prospector_daemon.py:459).
         pd_rows.append([
             ("▶️ Clear Prospector PAUSE", "estate:pd_unpause"),
-            ("♻️ Restart", "estate:pd_restart_now:scheduler"),
+            ("♻️ Restart Prospector", "estate:pd_restart_now:scheduler"),
         ])
     else:
         pd_rows.append([
             ("⏸ Pause Prospector", "estate:pd_pause"),
-            ("♻️ Restart", "estate:pd_restart_now:scheduler"),
+            ("♻️ Restart Prospector", "estate:pd_restart_now:scheduler"),
         ])
     groups.append(Group(
         "🔭 Prospector", pd_rows,
@@ -546,7 +546,7 @@ def render_run() -> Tuple[str, List[ButtonRow]]:
     groups.append(Group("⚙️ Daemons", [
         [
             ("♻️ Coordinator", "estate:daemon_restart_now:coordinator"),
-            ("♻️ Gateway", "estate:daemon_restart_now:gateway"),
+            ("♻️ Restart gateway now", "estate:daemon_restart_now:gateway"),
         ],
         [
             ("▶️ Run watchdog", "estate:daemon_run_now:watchdog"),
