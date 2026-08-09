@@ -633,6 +633,13 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             current_provider_label=provider_label,
             switches=switches,
         )
+        # The door the founder actually reaches (`/agent_model` is one of the 14 live
+        # Telegram menu entries) must lead to the ROLE brains, not only the agent one —
+        # "see and change the model of the hermes agent/coordinator etc roles" was the
+        # original ask and the roles half had no renderer on any surface. Added as an
+        # extra row rather than replacing this panel: personality/reasoning/busy live
+        # here too and removing them to make room would be a silent feature removal.
+        buttons = [[("🤖 Brains — all 13 roles", "estate:brains")]] + list(buttons)
         return _finish(
             PanelView(
                 text=text,
@@ -661,6 +668,111 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
                 text=receipt + "\n\n" + text,
                 buttons=buttons,
                 toast="🧠 switched" if ok else "⚠️ Failed",
+                ok=ok,
+            )
+        )
+
+    if action == "brains":
+        # 🤖 BRAINS — the per-role panel the founder asked for on 2026-08-08.
+        # `estate:brains` previews; `estate:brains:all` expands. An explicit expander,
+        # never silent truncation.
+        from gateway.operator_shell.brains import render_brains_panel
+
+        text, buttons = render_brains_panel(show_all=(arg or "").strip().lower() == "all")
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Brains",
+                proof_receipt=_proof("brains", "done", "Brains panel", request_id=rid),
+            )
+        )
+
+    if action == "brains_role":
+        from gateway.operator_shell.brains import render_role_picker
+
+        text, buttons = render_role_picker(arg or "")
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast=arg or "role",
+                proof_receipt=_proof(
+                    "brains_role", "done", f"Role `{arg}`", request_id=rid
+                ),
+            )
+        )
+
+    if action == "brains_confirm":
+        # Second tap for a safety-bearing role (spec R2). The fence is enforced in the
+        # writer as well — this screen is the courtesy, not the control.
+        from gateway.operator_shell.brains import render_confirm
+
+        role, _, key = (arg or "").partition("|")
+        text, buttons = render_confirm(role, key)
+        return _finish(
+            PanelView(
+                text=text,
+                buttons=buttons,
+                toast="Confirm",
+                proof_receipt=_proof(
+                    "brains_confirm", "pending_confirm", f"{role} → {key}", request_id=rid
+                ),
+            )
+        )
+
+    if action == "brains_set":
+        from gateway.operator_shell.brains import render_role_picker, set_role_model
+
+        role, _, key = (arg or "").partition("|")
+        ok, detail, reverse = set_role_model(role, key)
+        token = ""
+        if ok and reverse:
+            token = push_undo("brains_set", reverse, f"{role} → {key}")
+        receipt = _proof(
+            "brains_set",
+            "done" if ok else "failed",
+            f"`{role}` → `{key}`",
+            request_id=rid,
+            undoable=bool(token),
+            undo_token=token,
+            evidence=[detail],
+        )
+        text, buttons = render_role_picker(role)
+        if token:
+            buttons = [[("↩ Undo", f"estate:undo:{token}")]] + list(buttons)
+        return _finish(
+            PanelView(
+                text=receipt + "\n\n" + text,
+                buttons=buttons,
+                toast="🤖 switched" if ok else "⚠️ Refused",
+                ok=ok,
+            )
+        )
+
+    if action == "brains_reset":
+        from gateway.operator_shell.brains import render_brains_panel, reset_all_roles
+
+        ok, detail, reverse = reset_all_roles()
+        token = ""
+        if ok and reverse:
+            token = push_undo("brains_reset", reverse, detail)
+        receipt = _proof(
+            "brains_reset",
+            "done" if ok else "failed",
+            detail,
+            request_id=rid,
+            undoable=bool(token),
+            undo_token=token,
+        )
+        text, buttons = render_brains_panel(show_all=True)
+        if token:
+            buttons = [[("↩ Undo", f"estate:undo:{token}")]] + list(buttons)
+        return _finish(
+            PanelView(
+                text=receipt + "\n\n" + text,
+                buttons=buttons,
+                toast="↺ Reset" if ok else "⚠️ Failed",
                 ok=ok,
             )
         )
@@ -1140,24 +1252,40 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             view.toast = "No undo"
             return _finish(view)
         rev = rec.get("reverse") or {}
-        if "set_paused" in rev:
-            C.set_estate_paused(bool(rev["set_paused"]))
-        elif rev.get("cron_action") == "resume" and rev.get("job_id"):
-            from gateway.operator_shell.cron_ops import format_cron_command
+        # L3: one registry, not an if/elif chain. This used to know exactly two
+        # families (set_paused, cron_action), which is why every other state-changing
+        # action recorded no undo — there was nowhere for its reverse to be applied.
+        # See gateway/operator_shell/undo_ops.py.
+        from gateway.operator_shell.undo_ops import apply_reverse_record, known_keys
 
-            format_cron_command(f"resume {rev['job_id']}")
-        elif rev.get("cron_action") == "pause" and rev.get("job_id"):
-            from gateway.operator_shell.cron_ops import format_cron_command
-
-            format_cron_command(f"pause {rev['job_id']}")
+        undone, applied = apply_reverse_record(rev)
         view = render_panel_view()
+        if not undone:
+            # The honest failure. Previously an unrecognised reverse fell through the
+            # chain silently and still rendered "Undone" over a refreshed panel, so a
+            # failed undo was indistinguishable from a successful one.
+            view.toast = "⚠️ Cannot undo"
+            view.ok = False
+            view.proof_receipt = _proof(
+                "undo",
+                "failed",
+                f"Nothing reversible in: {rec.get('summary')}",
+                request_id=rid,
+                evidence=[
+                    f"token={rec.get('token')}",
+                    f"reverse_keys={sorted(rev)}",
+                    f"known={list(known_keys()) + ['cron_action']}",
+                ],
+            )
+            view.text = view.proof_receipt + "\n\n" + view.text
+            return _finish(view)
         view.toast = "Undone"
         view.proof_receipt = _proof(
             "undo",
             "done",
             f"Reverted: {rec.get('summary')}",
             request_id=rid,
-            evidence=[f"token={rec.get('token')}"],
+            evidence=[f"token={rec.get('token')}", f"applied={applied}"],
         )
         view.text = view.proof_receipt + "\n\n" + view.text
         return _finish(view)

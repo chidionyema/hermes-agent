@@ -1,4 +1,4 @@
-"""Operator Telegram Bot menu profile (≤12 commands)."""
+"""Operator Telegram Bot menu profile (≤30 commands)."""
 
 from __future__ import annotations
 
@@ -6,6 +6,26 @@ from typing import Any, Dict, Optional, Sequence, Tuple
 
 # Tier-0 operator shell — must fit Telegram's practical menu and stay typed-first.
 # Keep in sync with ~/.hermes/scripts/set-cockpit-menu.py (chat-scoped wins).
+#
+# P0 of the Operator UX programme (OPERATOR_UX_SPEC.md, §1): both `agent_model` and `model`
+# are Tier-0 operator intent (one global brain switch, one session-scoped switch) and were
+# previously invisible on the Telegram menu because the operator profile hard-capped this
+# list at 12 names. MAX_COMMANDS_PER_SCOPE in gateway/platforms/telegram.py is 30, so the
+# scarcity that justified hiding them does not exist. Both render current state before
+# offering a change (state-before-verb, principle 3 of the spec):
+#   - `agent_model` → gateway.operator_shell.estate:handle_estate_action("agent_model")
+#     → render_agent_model_panel, which prints the resolved current model + provider in a
+#     "NOW" chip grid (text_mode_cards.py:198-205) before any change affordance.
+#     CORRECTION 2026-08-08: an earlier draft of this comment claimed the panel also prints
+#     a "role table". It does not. `switches` is four hardcoded behaviour toggles —
+#     agent_model, personality, reasoning, busy (estate.py:619-624). The 13 per-role models
+#     in config.yaml:119-212 have NO Telegram renderer; that is P2, still unbuilt. The claim
+#     is left here as a correction rather than deleted because a comment asserting an
+#     unbuilt capability is the exact defect class the programme exists to kill.
+#   - `model`       → gateway/slash_commands._handle_model_command, which prints
+#     current_label (model + provider) at the top of the picker and the text fallback.
+# Both stay typed-dispatchable when removed from the menu; the spec for P1 is the
+# persistent reply keyboard, which renders the operator shell rather than this list.
 OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     "panel",
     # See ~/.hermes/scripts/set-cockpit-menu.py: dashboard took sethome's slot,
@@ -20,6 +40,12 @@ OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     "notify",
     "revert",
     "missions",
+    # `agent_model` and `model` are the two brain-switch doors. `agent_model` is the
+    # global/role switch (operator_shell/estate.py), `model` is the session-scoped switch
+    # (slash_commands._handle_model_command). Both were registered but never advertised;
+    # both jump straight to a state-before-verb surface that names the current model.
+    "agent_model",
+    "model",
     "help",
 )
 

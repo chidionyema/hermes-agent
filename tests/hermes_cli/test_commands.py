@@ -1154,6 +1154,41 @@ class TestTelegramMenuCommands:
         ):
             assert name in names
 
+    def test_operator_profile_honours_caller_cap(self, tmp_path, monkeypatch):
+        """
+        P0 of OPERATOR_UX_SPEC.md: the operator menu used to hard-cap at 12 regardless of the
+        caller's ``max_commands``, which hid two Tier-0 commands — ``agent_model`` and ``model``
+        — from the visible Telegram menu. The 12-slot ceiling was a holdover from when
+        Telegram's documented limit was 12; that limit is now 30 (gateway/platforms/telegram.py:
+        MAX_COMMANDS_PER_SCOPE). The caller now controls the cap, bounded by
+        MAX_COMMANDS_PER_SCOPE.
+
+        Regression test: if the 12-cap ever returns, this fails — the operator would lose
+        ``agent_model`` and ``model`` again, exactly the P0 defect.
+        """
+        (tmp_path / "config.yaml").write_text(
+            "operator_shell:\n  menu_profile: operator\n"
+        )
+        # ``resolve_telegram_menu_profile`` reads via ``gateway.run._load_gateway_config``,
+        # which resolves to ``_hermes_home / config.yaml`` — bound at gateway.run import
+        # time, *before* monkeypatch runs. Patch the module attribute directly so this test
+        # does not depend on the env var being set before the gateway module loads.
+        import gateway.run as gateway_run_mod
+        monkeypatch.setattr(gateway_run_mod, "_hermes_home", tmp_path)
+
+        menu, _ = telegram_menu_commands(max_commands=30)
+        names = {name for name, _ in menu}
+
+        # Both P0 surfaces are visible:
+        assert "agent_model" in names
+        assert "model" in names
+        # And the count is no longer pinned to 12:
+        from gateway.platforms.telegram import MAX_COMMANDS_PER_SCOPE
+        assert len(menu) <= MAX_COMMANDS_PER_SCOPE
+        assert len(menu) > 12, (
+            "operator profile must surface more than the old 12-slot ceiling"
+        )
+
     def test_includes_plugin_commands_via_lazy_discovery(self, tmp_path, monkeypatch):
         """Telegram menu generation should discover plugin slash commands on first access."""
         from unittest.mock import patch

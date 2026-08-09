@@ -2572,6 +2572,20 @@ DEFAULT_CONFIG = {
     "_config_version": 29,
 }
 
+# Canonical auxiliary task keys, in config order. THE single source of truth for
+# "which roles have a switchable brain" — every surface that renders the roles
+# derives from this rather than keeping its own copy.
+#
+# Measured 2026-08-08, which is why this exists: three hardcoded lists disagreed.
+# DEFAULT_CONFIG had 13, hermes_cli/main.py `_AUX_TASKS` had 12 (no `monitor`),
+# and hermes_cli/web_server.py `_AUX_TASK_SLOTS` had 11 (no `monitor`, no
+# `tts_audio_tags`) — while both missing roles are live in code
+# (tools/tts_tool.py:194, cron/scripts/classify_items.py:167). A role you can
+# configure but cannot see is a hidden control panel. Adding a 14th role to
+# DEFAULT_CONFIG["auxiliary"] now fails tests/hermes_cli/test_auxiliary_role_coverage.py
+# until it has a home on every surface, so the drift cannot silently return.
+AUXILIARY_TASK_KEYS: tuple[str, ...] = tuple(DEFAULT_CONFIG["auxiliary"].keys())
+
 # =============================================================================
 # Config Migration System
 # =============================================================================

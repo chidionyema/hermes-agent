@@ -3117,6 +3117,11 @@ _AUX_TASKS: list[tuple[str, str, str]] = [
     ("kanban_decomposer", "Kanban decomposer", "task decomposition"),
     ("profile_describer", "Profile describer", "auto profile descriptions"),
     ("curator", "Curator", "skill-usage review pass"),
+    # `monitor` was configurable and live (cron/scripts/classify_items.py:167)
+    # but absent from this picker, so the only way to retarget it was hand-editing
+    # config.yaml. Coverage is now asserted, not remembered:
+    # tests/hermes_cli/test_auxiliary_role_coverage.py.
+    ("monitor", "Monitor", "urgency/importance scoring"),
 ]
 
 
