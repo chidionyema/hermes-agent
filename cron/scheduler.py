@@ -928,13 +928,25 @@ def _scan_produced(since: float) -> tuple[list[str], list[str]]:
     return sorted(artifacts), sorted(logs)
 
 
-def _write_receipt(script_path: str, started: float, exit_code: int, stdout: str) -> None:
+def _write_receipt(script_path: str, started: float, exit_code: int, stdout: str,
+                   stderr: str = "") -> None:
     """Record what a cron job PRODUCED, not merely that it ran.
 
     Every health signal on this estate measured liveness. On 2026-08-05 the coordinator
     heartbeated for 3d 4.5h while doing no work, and 18 of 28 capabilities had no way to
     answer "did it work" at all. A receipt per run makes production measurable by
     construction, so the answer stops depending on a hand-maintained registry that rots.
+
+    `error_tail` (2026-08-07) is why the receipt now takes stderr. A job registered
+    deliver="local" resolves NO delivery target (:570), so the composed
+    "Script exited with code N / stderr: ..." text was built and discarded — the failure
+    was counted but never explained. hermes-config-auto-push failed 10 of 24 runs that
+    way, and the cause of its exit 128 could not be recovered afterwards from anything on
+    disk. The receipt is the one artifact that always survives, so the diagnosis lives here.
+
+    CALLERS MUST PASS ALREADY-REDACTED TEXT. This is written verbatim to an append-only
+    ledger; `_run_job_script` redacts stdout/stderr before calling, and that ordering is
+    load-bearing, not incidental.
 
     Best-effort by design: observing a job must never be able to fail it.
     """
@@ -952,6 +964,12 @@ def _write_receipt(script_path: str, started: float, exit_code: int, stdout: str
             "log_count": len(logs),
             "attribution": "window",
         }
+        if exit_code != 0:
+            # stderr first: a script that fails usually says why there. Bounded so one
+            # pathological traceback cannot bloat the ledger every run.
+            tail = ((stderr or "").strip() or (stdout or "").strip())
+            if tail:
+                rec["error_tail"] = tail[-2000:]
         path = _get_hermes_home() / _RECEIPTS_PATH
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "a", encoding="utf-8") as fh:
@@ -1055,7 +1073,6 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
         )
         stdout = (result.stdout or "").strip()
         stderr = (result.stderr or "").strip()
-        _write_receipt(str(path), _started, result.returncode, stdout)
 
         # Redact secrets from both stdout and stderr before any return path.
         try:
@@ -1064,6 +1081,12 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
             stderr = redact_sensitive_text(stderr)
         except Exception:
             pass
+
+        # AFTER redaction, deliberately. The receipt now persists `error_tail` on a failing
+        # run, and the ledger is append-only — writing it before this block would archive
+        # unredacted script output forever. The old call site sat above the redaction and
+        # was safe only because it recorded a byte COUNT rather than the text.
+        _write_receipt(str(path), _started, result.returncode, stdout, stderr)
 
         if result.returncode != 0:
             parts = [f"Script exited with code {result.returncode}"]
@@ -1075,14 +1098,33 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
 
         return True, stdout
 
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         # A hung job that leaves no receipt is indistinguishable from a job that was
         # never scheduled — the exact silence this instrumentation exists to remove.
         # 124 matches timeout(1)'s convention.
-        _write_receipt(str(path), _started, 124, "")
+        #
+        # TimeoutExpired carries whatever the script managed to emit before the kill, and
+        # that partial output is often the entire diagnosis ("cloning...", "Enter
+        # passphrase"). It used to be thrown away, which is why 4 exit-124 auto-push runs
+        # left nothing to look at. Decoded defensively: these are bytes when the child was
+        # started without text mode, and this handler must never raise.
+        def _partial(stream) -> str:
+            if not stream:
+                return ""
+            if isinstance(stream, bytes):
+                stream = stream.decode("utf-8", "replace")
+            return str(stream).strip()
+
+        _t_out, _t_err = _partial(exc.stdout), _partial(exc.stderr)
+        try:
+            from agent.redact import redact_sensitive_text
+            _t_out, _t_err = redact_sensitive_text(_t_out), redact_sensitive_text(_t_err)
+        except Exception:
+            pass
+        _write_receipt(str(path), _started, 124, _t_out, _t_err)
         return False, f"Script timed out after {script_timeout}s: {path}"
     except Exception as exc:
-        _write_receipt(str(path), _started, -1, "")
+        _write_receipt(str(path), _started, -1, "", f"{type(exc).__name__}: {exc}")
         return False, f"Script execution failed: {exc}"
 
 

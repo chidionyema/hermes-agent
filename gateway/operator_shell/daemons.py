@@ -17,13 +17,20 @@ from gateway.operator_shell.panel_chrome import nav, panel_stamp
 
 ButtonRow = List[Tuple[str, str]]
 
-# Raised from 8 to 9 on founder instruction, 2026-08-09. The cap was written when the
-# shared spine was 5 buttons, leaving 3 action slots; `🗂 Projects` joined the spine on
-# 2026-08-06 (`panel_chrome._PROJECTS`) and silently took one, so the recovery panel had to
-# hide `▶️ Start coord` to fit. Nine restores the three action slots this panel was designed
-# around. The trim below still exists and still binds — the point of a cap is that something
-# principled happens at the boundary, not that the number is 8.
-MAX_BUTTONS = 9
+# Raised 8 -> 9 -> 10, same day (2026-08-09), same root cause each time: this comment's own
+# button count was wrong, not the cap's intent. The 8->9 raise assumed a 6-button spine
+# (`🗂 Projects` had joined on 2026-08-06), but `⚙️ Tune` had been silently missing from the
+# spine since 2026-08-02 (39402e463f — see panel_chrome.py's own regression tests) and no one
+# had counted `nav("daemons")`'s own trailing 🔄 self-refresh button either — so the real
+# spine contribution here was never 6, it was 5 (buggy) then 7 (once Tune came back and the
+# self-refresh glyph is counted), and 9 only ever "worked" by masking two miscounts that
+# happened to cancel out: 3 actions + (5 spine + 1 self-refresh) = 9 == the cap, so nothing
+# ever tripped the trim and the shortfall stayed invisible. Ten restores the three action
+# slots this panel was designed around against the ACTUAL 7-item nav("daemons") output
+# (verified: `len(nav("daemons")) == 7`), not an assumed one. The trim below still exists
+# and still binds — the point of a cap is that something principled happens at the
+# boundary, not that the number is any particular value.
+MAX_BUTTONS = 10
 
 # kind: keepalive | interval | calendar
 _ESTATE: Tuple[Tuple[str, str, str, Tuple[Path, ...]], ...] = (
@@ -371,21 +378,21 @@ def render_daemons() -> Tuple[str, List[ButtonRow]]:
     lines.append("_Gateway start fenced. Prospect gen → Prospect daemons._")
     lines.append(panel_stamp("daemons"))
 
-    # Cap: MAX_BUTTONS. The spine (nav) below contributes 6 (Home · Projects · Actions ·
-    # SDLC · Browse · 🔄 daemons), leaving 3 action slots. The previous 16-button grid crammed
-    # restart/start/stop/logs/run_now across every daemon onto one screen — most of those
-    # verbs live on the Run verbs panel (cockpit.py `⚙️ Daemons` group) and run via direct
-    # callback. What stays HERE is the recovery path for the three KeepAlive jobs that
-    # take the operator panel itself down when they crash: coord (start / restart) and
-    # gateway (bounce; fenced, so this is the only phone-reachable door). Oneshots
-    # (watch / RSI / Progress / TIE) and other cross-panel links are surfaced from Run —
-    # dropping them here is a navigation change, not a feature loss.
+    # Cap: MAX_BUTTONS. The spine (nav) below contributes 7 (Home · Projects · Actions ·
+    # SDLC · Tune · Browse · 🔄 daemons — the trailing 🔄 is nav()'s own self-refresh glyph
+    # for a panel whose self_action doesn't match a spine callback, see panel_chrome.py),
+    # leaving 3 action slots. The previous 16-button grid crammed restart/start/stop/
+    # logs/run_now across every daemon onto one screen — most of those verbs live on the
+    # Run verbs panel (cockpit.py `⚙️ Daemons` group) and run via direct callback. What
+    # stays HERE is the recovery path for the three KeepAlive jobs that take the operator
+    # panel itself down when they crash: coord (start / restart) and gateway (bounce;
+    # fenced, so this is the only phone-reachable door). Oneshots (watch / RSI / Progress /
+    # TIE) and other cross-panel links are surfaced from Run — dropping them here is a
+    # navigation change, not a feature loss.
     # Ordered by what an operator loses if it is missing, because the trim below drops from
-    # the end. The spine grew from 5 buttons to 6 when `🗂 Projects` was added on 2026-08-06
-    # (panel_chrome.py `_PROJECTS`), which silently ate one of the three action slots this
-    # comment budgets for — 3 actions + 6 spine = 9, over the cap. Gateway first: it is the
-    # only phone-reachable door to a gateway that has stopped answering, so it must never be
-    # the button that degradation removes.
+    # the end. 3 actions + 7-item nav = 10 = MAX_BUTTONS exactly, so nothing trims. Gateway
+    # first: it is the only phone-reachable door to a gateway that has stopped answering, so
+    # it must never be the button that degradation removes.
     buttons: List[ButtonRow] = [
         [
             ("♻️ Bounce gateway", "estate:daemon_restart:gateway"),

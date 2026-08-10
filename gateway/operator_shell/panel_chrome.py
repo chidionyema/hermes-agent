@@ -79,7 +79,7 @@ def nav(self_action: Optional[str] = None) -> ButtonRow:
     `self_action` re-renders the CURRENT panel as bare 🔄. On Map itself the 🗺 glyph
     already re-opens Atlas, so no duplicate 🔄 is added.
     """
-    row: ButtonRow = [_NOW, _PROJECTS, _RUN, _SDLC, _MAP]
+    row: ButtonRow = [_NOW, _PROJECTS, _RUN, _SDLC, _TUNE, _MAP]
     if self_action:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").
