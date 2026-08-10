@@ -107,6 +107,7 @@ def test_role_picker_is_routed(dispatch):
     assert "vision" in view.text
 
 
+@pytest.mark.cockpit_sweep  # 36.24s — dispatches every button the panel emits. Runs at pre-push.
 def test_every_button_the_brains_panel_emits_is_a_handled_action(dispatch):
     """No dead ends (Principle 6) and no dead buttons."""
     seen = set()
