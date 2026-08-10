@@ -392,6 +392,14 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     "compliance":     ("estate_intel",    "render_compliance",        "Compliance",      _ARG_NONE),
     "score":          ("estate_intel",    "render_score",             "Score",           _ARG_NONE),
     "logs":           ("estate_intel",    "render_log_picker",        "Logs",            _ARG_NONE),
+    # 2026-08-10: the founder had to ask, in words, whether that morning's change was live —
+    # and answering it took eight hand-run shell calls comparing a file mtime to a process
+    # start time. Nothing was broken; there was simply no surface that said so, while a
+    # ledger asserted `NOT STARTED` for work that had already shipped. `deployed` is that
+    # surface: every row a probe of the live process table / filesystem / git / network, and
+    # never a stored status. It is the slowest panel in this table by design — it holds a
+    # ~12s wall clock (`deployed.py:_DEADLINE_S`) because it reaches the network.
+    "deployed":       ("deployed",        "render_deployed",          "Deployed",        _ARG_NONE),
 }
 
 

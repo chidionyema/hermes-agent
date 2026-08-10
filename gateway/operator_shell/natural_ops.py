@@ -52,6 +52,16 @@ _PATTERNS = [
         r"how'?s\s+the\s+(estate|ship|system)|"
         r"estate\s+overview)\s*\??\s*$", re.I),
      "status", "", "Estate status"),
+    # "Is it deployed / is it live / did it ship" — the question the founder had to ask in words
+    # on 2026-08-10, which then took eight hand-run shell calls to answer. `status` is about
+    # whether things are HEALTHY; this is about whether what is running is the code we shipped.
+    # The phrasings below are the ones actually used, not invented ones.
+    (re.compile(
+        r"^\s*(deployed|deploy(ment)?s?|is\s+it\s+(deployed|live|shipped|out)|"
+        r"what'?s\s+deployed|whats\s+deployed|did\s+it\s+(ship|deploy|go\s+out)|"
+        r"are\s+we\s+(deployed|live)|is\s+it\s+running\s+the\s+new\s+code|"
+        r"what\s+is\s+(running|live))\s*\??\s*$", re.I),
+     "deployed", "", "Deployed — estate-wide"),
     (re.compile(
         r"^\s*(what'?s\s+on\s+fire|on\s+fire|mission|cockpit|panel|otto|"
         r"health|are\s+we\s+(ok|good|clear)|all\s+good|everything\s+ok)\s*\??\s*$",

@@ -11,6 +11,11 @@ ButtonRow = List[Tuple[str, str]]
 # Grouped by user intent, not by implementation module.
 COMMAND_GROUPS = [
     ("🏠 See what's happening", [
+        # First in the palette, deliberately. Only the first three of each group become buttons
+        # (`render_commands` slices `items[:3]`), and "is what's running the code we shipped?"
+        # was the one question the estate could not answer without a human running shell
+        # commands by hand — so it gets a tap, not a scroll.
+        ("🚀 Deployed", "estate:deployed"),
         ("📊 Status", "estate:status"),
         ("🏠 Home", "estate:refresh"),
         ("📋 Brief", "estate:brief"),
