@@ -46,6 +46,12 @@ _TUNE_GROUPS: List[Tuple[str, str, str]] = [
     ("💵 Spend cap", "tune:spend", "daily ceilings — LLM and Prospector"),
     ("📦 Throughput", "tune:prospector", "batch size, concurrency, cadence"),
     ("🚦 Rails", "tune:rails", "when the engine throttles its own generation"),
+    # Every group above answers "how hard is it running / when does it stop". Neither answers
+    # "at what", and until 2026-08-10 nothing on the phone did: `active_profile` was absent from
+    # config.yaml, so the engine generated blue-sky across unrelated sectors and no screen could
+    # show that, or change it.
+    ("🎯 Focus", "tune:focus", "what the engine generates ideas ABOUT"),
+    ("🌍 Market", "tune:market", "which country it researches and prices for"),
 ]
 
 # Every allowlisted value, including the 6 that had no button before this module.
@@ -179,6 +185,55 @@ _KNOBS: Dict[str, Tuple[str, str, List[Tuple[str, ButtonRow]]]] = {
             ]),
         ],
     ),
+    # Presets, not free text — a founder decision, and the right one for a binding constraint:
+    # `focus` is injected verbatim into the generation prompt, so a typo does not fail, it
+    # generates a whole batch against nonsense and bills for it.
+    "focus": (
+        "🎯 Focus",
+        "What the engine generates ideas ABOUT. This is the only knob that changes the SUBJECT; "
+        "everything in Throughput and Rails changes the volume. It cannot lower the bar — a "
+        "focused candidate still faces all six checks and is killed by the same gates.\n\n"
+        "Expect a lower pass rate at first on the tech/AI profiles: AI ideas are harder to "
+        "evidence than statutory ones. Judge a steered batch on whether `moat_ungrounded` falls "
+        "in Last run, not on the pass count.",
+        [
+            ("active_profile — tech + AI", [
+                ("🌐 all three", "estate:pd_set:focus:tech_ai_all"),
+                ("🤖 AI-native", "estate:pd_set:focus:ai_native"),
+            ]),
+            ("…narrower readings of the same ask", [
+                ("🏭 tech vertical", "estate:pd_set:focus:tech_vertical"),
+                ("🎯 sells to tech", "estate:pd_set:focus:sells_to_tech"),
+            ]),
+            ("…other shipped profiles", [
+                ("📜 compliance packs", "estate:pd_set:focus:statutory_compliance_pack"),
+                ("🦈 predator", "estate:pd_set:focus:online_autonomous_predator"),
+            ]),
+            ("…or none", [
+                ("⭕ no focus (blue-sky)", "estate:pd_set:focus:off"),
+            ]),
+        ],
+    ),
+    "market": (
+        "🌍 Market",
+        "Which country the engine researches and prices for. A market changes where it LOOKS "
+        "and how it frames the prompt — never how strictly it judges (gates, thresholds and "
+        "weights inside a market block are a load error by design).\n\n"
+        "`active_market` is single-valued because one batch uses one retrieval corpus and one "
+        "currency. To work two, rotate: one market per tick, alternating. Rotation wins over "
+        "`active_market` for new batches, and the backlog drain never rotates.",
+        [
+            ("active_market", [
+                ("🇬🇧 UK", "estate:pd_set:market:uk"),
+                ("🇺🇸 US", "estate:pd_set:market:us"),
+                ("🐻 California", "estate:pd_set:market:us-ca"),
+            ]),
+            ("schedule.market_rotation", [
+                ("🔁 rotate UK ⇄ US", "estate:pd_set:rotate:uk_us"),
+                ("⛔ stop rotating", "estate:pd_set:rotate:off"),
+            ]),
+        ],
+    ),
 }
 
 # Which live value to print beside each knob row. Read is best-effort: a knob whose current
@@ -204,7 +259,15 @@ _PD_KEYS = {
     "batch_size": "batch_size",
     "concurrency": "concurrency",
     "interval": "interval_s",
+    "active_profile — tech + AI": "focus",
+    "active_market": "market",
+    "schedule.market_rotation": "rotation",
 }
+
+# A knob label starting with this is a CONTINUATION row: more buttons for the knob named above
+# it, not a knob of its own. It renders without a value, because repeating `active_profile = X`
+# four times down one screen reads as four settings that happen to agree.
+_CONTINUATION = "…"
 
 
 def _se_params() -> Dict[str, object]:
@@ -280,7 +343,19 @@ def _current(label: str, se: Dict[str, object], pd: Dict[str, object]) -> str:
     if key:
         val = se.get(key)
         return str(val) if val not in (None, "") else "?"
-    val = pd.get(_PD_KEYS.get(label, label))
+    pd_key = _PD_KEYS.get(label, label)
+    val = pd.get(pd_key)
+    # For the three steering knobs `""` is a REAL value, not a failed read: no focus,
+    # markets.default, rotation off. Only `None` means "could not read it". Collapsing them
+    # would print `?` on a correctly-configured engine and invite the operator to go looking.
+    if pd_key in ("focus", "market", "rotation"):
+        if val is None:
+            return "?"
+        if pd_key == "focus":
+            return str(val) if val else "off (blue-sky)"
+        if pd_key == "market":
+            return str(val) if val else "default"
+        return str(val) if val else "off"
     if val in (None, ""):
         return "?"
     if label == "interval":  # stored in seconds; nobody thinks in seconds
@@ -360,13 +435,13 @@ def render_tune() -> Tuple[str, List[ButtonRow]]:
     lines.append(f"*🧠 Brain* — which model thinks · now `{_brain_label()}`")
     lines += ["", "_Rail changes still require the two-screen ARM confirmation._"]
 
+    # Two per row, derived from _TUNE_GROUPS rather than indexed into it. The six entries were
+    # unrolled by hand as _TUNE_GROUPS[0]..[5]; adding a seventh group there would have rendered
+    # a header and a description for a button that did not exist — the panel would have read as
+    # complete while the new group was unreachable.
+    pairs = [_TUNE_GROUPS[i:i + 2] for i in range(0, len(_TUNE_GROUPS), 2)]
+    rows += [[(label, f"estate:{action}") for label, action, _what in pair] for pair in pairs]
     rows += [
-        [(_TUNE_GROUPS[0][0], f"estate:{_TUNE_GROUPS[0][1]}"),
-         (_TUNE_GROUPS[1][0], f"estate:{_TUNE_GROUPS[1][1]}")],
-        [(_TUNE_GROUPS[2][0], f"estate:{_TUNE_GROUPS[2][1]}"),
-         (_TUNE_GROUPS[3][0], f"estate:{_TUNE_GROUPS[3][1]}")],
-        [(_TUNE_GROUPS[4][0], f"estate:{_TUNE_GROUPS[4][1]}"),
-         (_TUNE_GROUPS[5][0], f"estate:{_TUNE_GROUPS[5][1]}")],
         [("🗓 Cron delivery", "estate:setup_cron_topic")],
         [("🧠 Brain", "estate:brain")],
         nav("tune"),
@@ -416,7 +491,10 @@ def render_tune_group(group: str) -> Tuple[str, List[ButtonRow]]:
     lines = [f"⚙️ *{title}*", "", blurb, ""]
     rows: List[ButtonRow] = []
     for label, buttons in knobs:
-        lines.append(f"• `{label}` = *{_current(label, se, pd)}*")
+        if label.startswith(_CONTINUATION):
+            lines.append(f"  {label}")
+        else:
+            lines.append(f"• `{label}` = *{_current(label, se, pd)}*")
         rows.append(list(buttons))
     lines += ["", f"_{_apply_note(knobs)}_"]
 

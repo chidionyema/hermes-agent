@@ -52,7 +52,6 @@ def render_welcome():
     buttons = [
         [("🎛 All commands", "estate:commands"), ("📊 Status", "estate:status")],
         [("🔍 Diagnose", "estate:diagnose_panel"), ("❓ Help", "estate:help")],
-        [("⚙️ Setup wizard", "estate:setup_wizard")],
     ]
     buttons = with_nav(buttons, "welcome")
     mark_first_run_complete()

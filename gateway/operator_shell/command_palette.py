@@ -23,19 +23,18 @@ COMMAND_GROUPS = [
         ("🔍 Diagnose", "estate:diagnose_panel"),
         ("🔮 Predict", "estate:predict_panel"),
         ("💳 Fix credits", "estate:fix_guide:credits"),
-        ("🛠 Fix all", "estate:fix_all"),
+        ("🛠 Restart stuck jobs", "estate:fix_all"),
         ("🧠 Otto health", "estate:otto_health"),
         ("📈 Score", "estate:score"),
-        ("🔗 Estate health", "estate:estate_health"),
+        ("🩺 Estate health", "estate:estate_health"),
         ("🔗 Dependencies", "estate:dependencies"),
-        ("🔗 Correlate failures", "estate:correlate"),
+        ("🔗 Linked failures", "estate:correlate"),
     ]),
     ("⚡ Take action", [
         ("⚡ Actions", "estate:run"),
         ("⏸ Pause estate spend", "estate:pause"),
         ("▶️ Resume estate spend", "estate:resume"),
         ("♻️ Restart coord", "estate:restart"),
-        ("🛠 Fix all safe", "estate:fix_all_safe"),
         ("🧠 RSI", "estate:rsi"),
     ]),
     ("🔭 Inspect projects", [
@@ -48,6 +47,7 @@ COMMAND_GROUPS = [
         ("🛒 Store", "estate:st_status"),
         ("🏗 CI", "estate:builds"),
         ("📸 Diff", "estate:diff"),
+        ("➕ Onboard a repo", "estate:onboard"),
     ]),
     ("⚙️ Configure", [
         ("⚙️ Tune", "estate:tune"),
@@ -58,7 +58,7 @@ COMMAND_GROUPS = [
     ("🛠 Machine", [
         ("⚙️ Daemons", "estate:daemons"),
         ("🖥 Host", "estate:host"),
-        ("📜 Log search", "estate:logs"),
+        ("📜 Find a log", "estate:logs"),
     ]),
     ("💻 Code", [
         ("💻 SDLC", "estate:sdlc"),

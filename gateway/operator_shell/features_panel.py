@@ -8,7 +8,7 @@ FEATURES = {
                 ("🚀 Fleet", "estate:fleet"), ("📥 Inbox", "estate:inbox"),
                 ("📋 Missions", "estate:missions"), ("⚙️ Daemons", "estate:daemons")],
     "Diagnose": [("🔍 Diagnose", "estate:diagnose_panel"), ("🔮 Predict", "estate:predict_panel"),
-                 ("💳 Fix credits", "estate:fix_guide:credits"), ("🛠 Fix all", "estate:fix_all")],
+                 ("💳 Fix credits", "estate:fix_guide:credits"), ("🛠 Restart stuck jobs", "estate:fix_all")],
     "Improve": [("🧠 Otto health", "estate:otto_health"), ("📈 Score", "estate:score"),
                 ("🧠 RSI", "estate:rsi"), ("📜 Activity", "estate:activity:7")],
     "Info": [("📋 Features", "estate:features_panel"), ("❓ Help", "estate:help"),

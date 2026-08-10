@@ -102,78 +102,50 @@ def _declared() -> dict[str, list[str]]:
 # count is ratcheted (`test_the_quarantine_does_not_grow`), so adding to it is a visible,
 # deliberate edit in the diff.
 _UNBUILT: dict[str, str] = {
-    "fix_all": (
-        "12 buttons, 4+ unrelated problem domains (moat checks, incidents, Otto policy, "
-        "per-project CI) and no arg to tell them apart. The only callable, "
-        "auto_fixer.py:177 auto_fix_all(), fixes cron/coordinator/config-push — none of "
-        "those domains. A shared handler would be silently wrong at most of the 12 sites."
-    ),
-    "fix_all_safe": (
-        "Nothing on disk. feature_registry.py:36 claims built:2026-08-02 citing test "
-        "`test_fix_all_safe`, which does not exist anywhere in the repo."
-    ),
-    "onboard": (
-        "Root renderer exists (projects.py:345) but sub-verbs new_product/client/template "
-        "have no handler at all, and add/add_all call onboard_project() which writes "
-        "projects.json (projects.py:41-44) with no confirm screen."
-    ),
-    "score": "score_driver.py:84/191 return dicts; needs a renderer and a choice of which.",
-    "dependencies": "cross_project.py:70 dependency_map() returns a dict; needs a renderer.",
-    "correlate": (
-        "Ambiguous: two non-overlapping candidates, predictor.py:129 correlate_failures() "
-        "and cross_project.py:54 correlate_estate(). Which one 'correlate' means is a decision."
-    ),
-    "compliance": (
-        "auto_close_identity.py:671 compliance_report() returns a dict; needs a renderer."
-    ),
-    "logs": (
-        "Three render_logs() exist (daemons.py:391, prospector_daemon.py:789, "
-        "signal_engine.py:816) but each needs a unit prefix the bare button does not send. "
-        "Needs a chooser panel or a declared default."
-    ),
-    "estate_health": "No renderer of any name.",
-    # BUILT 2026-08-06 — web_dashboard.render_web_dashboard(), registered in
-    # estate._PANELS. It takes no project_key: the thing it opens is the estate's
-    # one web UI, not a per-project view, which is why the old namesake never fit.
-    # "dashboard": removed from quarantine.
+    # EMPTY as of 2026-08-10. All 15 remaining entries were dispositioned in one pass — six
+    # built as read-only panels, three built behind the two-screen confirm, two repointed at
+    # the working action they duplicated, and five buttons deleted because nothing existed
+    # behind them. Kept as an empty dict, not deleted, so the ratchet below still runs and the
+    # next unwired button has to be a visible, argued edit rather than a new list.
     #
-    # DROPPED 2026-08-06 — the only button emitting `project_config` was
-    # projects.py's ⚙️ Config tile; it was removed rather than built, so the entry
-    # is now stale and test_the_quarantine_has_no_stale_entries would fail on it.
-    # "project_config": removed from quarantine.
-    "operator_mode": (
-        "commercial_ui.py:267 ClientMode.set_operator() exists but ClientMode is never "
-        "instantiated anywhere — grep for 'ClientMode(' returns nothing."
-    ),
-    "setup_wizard": (
-        "Only hermes_cli/setup.py:2899 run_setup_wizard(), an interactive TTY-prompt CLI "
-        "that would block on a stdin Telegram cannot give it."
-    ),
-    # The four below are MUTATING. Wiring them is not just a renderer — each needs the
-    # two-screen confirm pattern the daemon-stop path already uses (estate.py:934-961).
-    "rsi_run": (
-        "MUTATES. rsi_control.py:176 trigger_cycle() shells out to self_improve_runner.py "
-        "--all, a real code-generating cycle. Needs the confirm pattern, not a wire."
-    ),
-    "rsi_pause": (
-        "MUTATES THE WRONG FILE. rsi_control.py:163 toggle_learning() writes "
-        "logs/meta-improver/OFF_SWITCH, but the live switch is meta/OFF_SWITCH "
-        "(rsi_panel.py:19, the only one present on disk) — and with opposite polarity. "
-        "Wiring as-is would toast 'paused' while learning stayed live. Also duplicates "
-        "the already-working estate:disarm_learning."
-    ),
-    "rsi_resume": "MUTATES THE WRONG FILE — same toggle_learning() as rsi_pause; duplicates estate:arm_learning.",
-    # DELETED 2026-08-07 — the sole button emitting `idle_start` was rsi_control.py:272,
-    # removed when `render_idle_status` was finally given a door (estate._PANELS
-    # "idle_status"). Nothing was built: no start function ever existed. The button went,
-    # so the entry had to go too or test_the_quarantine_has_no_stale_entries fails.
-    # "idle_start": removed from quarantine.
-    "deploy": (
-        "MUTATES. No deploy function exists; the only deploy-adjacent code is read-only CI "
-        "status. Triggering a real deployment from a tap needs the confirm pattern."
-    ),
+    #   BUILT, read-only (estate_intel.py, registered in estate._PANELS):
+    #     estate_health  cross_project.estate_health_score()
+    #     dependencies   cross_project.dependency_map()
+    #     correlate      predictor.correlate_failures() AND cross_project.correlate_estate() —
+    #                    the ambiguity was resolved by rendering both under headings that say
+    #                    which is which, rather than by picking one and losing the other half
+    #                    of the evidence.
+    #     compliance     AgentIdentity().compliance_report() — a METHOD, not a module
+    #                    function, rendered generically so a new section cannot silently
+    #                    render as an empty panel.
+    #     score          score_driver.score_burndown() + check_score_regression()
+    #     logs           the chooser a bare `estate:logs` could never be: three subsystems
+    #                    write logs and every renderer needs a unit the button cannot send.
+    #
+    #   BUILT, mutating, two screens (estate.py, following restart/restart_confirm):
+    #     fix_all        `auto_fixer.auto_fix_all(dry_run=True)` IS screen one, so the confirm
+    #                    card lists the jobs it would kick. Relabelled at all 11 sites to
+    #                    "🛠 Restart stuck jobs": the old "🛠 Fix all" promised four problem
+    #                    domains and delivers three daemon restarts.
+    #     rsi_run        rsi_control.trigger_cycle(), behind a card that says it writes.
+    #     onboard        projects.dispatch_onboard() — root → discover → confirm → write.
+    #
+    #   REPOINTED at the working action they duplicated:
+    #     rsi_pause  -> estate:disarm_learning     rsi_resume -> estate:arm_learning
+    #     toggle_learning() writes logs/meta-improver/OFF_SWITCH; the live switch is
+    #     meta/OFF_SWITCH (rsi_panel.py:19) with the opposite polarity, so wiring it as-is
+    #     would have toasted "paused" while learning stayed live.
+    #
+    #   DELETED (button removed; nothing existed to build):
+    #     fix_all_safe   feature_registry.py:36 claims built:2026-08-02 citing a test that
+    #                    does not exist. The dry-run screen of fix_all is what it promised.
+    #     setup_wizard   only hermes_cli/setup.py:2899, a TTY-prompt CLI that would block on
+    #                    a stdin Telegram cannot give it.
+    #     operator_mode  ClientMode.set_operator() exists; ClientMode is never instantiated.
+    #     deploy         no deploy function exists estate-wide — and it sat on the CLIENT card.
+    #     onboard:new_product / :client / :template — no renderer, no handler, no template
+    #                    store. Discovery is the only real path into the registry.
 }
-
 
 def _dead() -> dict[str, list[str]]:
     exact, prefixes = _handled()
@@ -221,7 +193,8 @@ def test_the_quarantine_does_not_grow():
     """A ratchet. New unwired buttons must not be absorbed by widening the exemption."""
     # 18 -> 15 on 2026-08-07: `idle_start` left the list (its button was deleted), and a
     # ratchet that keeps its old headroom after a win is not a ratchet.
-    assert len(_UNBUILT) <= 15, (
+    # 15 -> 0 on 2026-08-10: every remaining entry was built, repointed or deleted.
+    assert len(_UNBUILT) <= 0, (
         f"quarantine grew to {len(_UNBUILT)}. Build it or delete the button; if you are "
         f"deliberately deferring, lower this number in the same commit and say why."
     )

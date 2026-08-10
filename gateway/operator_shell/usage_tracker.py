@@ -60,7 +60,7 @@ def get_suggestions(action: str) -> List[Tuple[str, str]]:
         label_map = {
             "fix_guide:credits": ("💳 Fix credits", "estate:fix_guide:credits"),
             "predict_panel": ("🔮 Predict", "estate:predict_panel"),
-            "fix_all": ("🛠 Fix all", "estate:fix_all"),
+            "fix_all": ("🛠 Restart stuck jobs", "estate:fix_all"),
             "pd_pause": ("⏸ Pause Prospector", "estate:pd_pause"),
             "pd_cron": ("🗓 Cron", "estate:pd_cron"),
             "diagnose_panel": ("🔍 Diagnose", "estate:diagnose_panel"),
@@ -79,7 +79,7 @@ def get_suggestions(action: str) -> List[Tuple[str, str]]:
             "otto_health": ("🧠 Otto health", "estate:otto_health"),
             "score": ("📈 Score", "estate:score"),
             "rsi": ("🧠 RSI", "estate:rsi"),
-            "correlate": ("🔗 Correlate failures", "estate:correlate"),
+            "correlate": ("🔗 Linked failures", "estate:correlate"),
             "dependencies": ("🔗 Dependencies", "estate:dependencies"),
             "approve": ("📥 Inbox", "estate:inbox"),
         }
