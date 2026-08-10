@@ -70,6 +70,24 @@ def dispatch(
                     )
                 )
 
+            # In flight: the sub-tick view (R5). One level FINER than `last_run` — that shows
+            # the last COMPLETED batch, this shows the candidate and the check in progress now.
+            # Matched before the generic op handling for the same reason `last_run` is.
+            if rest == "in_flight":
+                from gateway.operator_shell.prospector_inflight import render_in_flight
+
+                text, buttons = render_in_flight()
+                return _finish(
+                    PanelView(
+                        text=text,
+                        buttons=buttons,
+                        toast="In flight",
+                        proof_receipt=_proof(
+                            "pd_in_flight", "done", "Sub-tick engine progress", request_id=rid
+                        ),
+                    )
+                )
+
             # Nodes: which brain does which step, and which of them are benched
             if rest == "nodes":
                 text, buttons = render_nodes()

@@ -1448,8 +1448,14 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
     if control_row:
         buttons.append(control_row)
     # Last run leads the row: on a zero-yield tick it is the only control that answers WHY,
-    # and the warning above now names it.
-    buttons.append([("📊 Last run", "estate:pd_last_run")])
+    # and the warning above now names it. `In flight` sits beside it as the finer grain — the
+    # same question one level down: Last run is the last COMPLETED batch, In flight is the
+    # candidate and check in progress right now. Between ticks only the first has content;
+    # mid-tick only the second does, which is why neither replaces the other.
+    buttons.append([
+        ("📊 Last run", "estate:pd_last_run"),
+        ("🔬 In flight", "estate:pd_in_flight"),
+    ])
     buttons.append([
         ("⚙️ Params", "estate:pd_params"),
         ("🗓 Cron", "estate:pd_cron"),

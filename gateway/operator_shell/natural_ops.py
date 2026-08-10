@@ -62,6 +62,16 @@ _PATTERNS = [
         r"are\s+we\s+(deployed|live)|is\s+it\s+running\s+the\s+new\s+code|"
         r"what\s+is\s+(running|live))\s*\??\s*$", re.I),
      "deployed", "", "Deployed — estate-wide"),
+    # "What is it doing RIGHT NOW" — the sub-tick question (R5). Distinct from `deployed`
+    # (is the running code the code we shipped) and from `last run` (the last COMPLETED batch):
+    # this one is answered from the live audit trail, mid-vet, between tick summaries.
+    # `what is running` deliberately stays with `deployed` above — it asks about processes.
+    (re.compile(
+        r"^\s*(in\s*flight|inflight|what\s+is\s+it\s+doing|what'?s\s+it\s+doing|"
+        r"what\s+are\s+you\s+doing|current\s+(work|candidate|check)|"
+        r"progress|what'?s\s+in\s+flight|whats\s+in\s+flight|"
+        r"what\s+is\s+being\s+(vetted|worked\s+on))\s*(now|right\s+now)?\s*\??\s*$", re.I),
+     "pd_in_flight", "", "In flight — sub-tick"),
     (re.compile(
         r"^\s*(what'?s\s+on\s+fire|on\s+fire|mission|cockpit|panel|otto|"
         r"health|are\s+we\s+(ok|good|clear)|all\s+good|everything\s+ok)\s*\??\s*$",
