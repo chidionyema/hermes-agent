@@ -106,7 +106,7 @@ def render_health(project_key: str = "") -> Tuple[str, List[ButtonRow]]:
 
     buttons: List[ButtonRow] = [
         [("🧠 Otto health", "estate:otto_health"), ("📜 Compliance", "estate:compliance")],
-        [("🗺 Browse", "estate:find"), ("🛠 Fix all", "estate:fix_all")],
+        [("🗺 Browse", "estate:find"), ("🛠 Restart stuck jobs", "estate:fix_all")],
     ]
     return "\n".join(lines), with_nav(buttons)
 

@@ -11,6 +11,11 @@ ButtonRow = List[Tuple[str, str]]
 # Grouped by user intent, not by implementation module.
 COMMAND_GROUPS = [
     ("🏠 See what's happening", [
+        # First in the palette, deliberately. Only the first three of each group become buttons
+        # (`render_commands` slices `items[:3]`), and "is what's running the code we shipped?"
+        # was the one question the estate could not answer without a human running shell
+        # commands by hand — so it gets a tap, not a scroll.
+        ("🚀 Deployed", "estate:deployed"),
         ("📊 Status", "estate:status"),
         ("🏠 Home", "estate:refresh"),
         ("📋 Brief", "estate:brief"),
@@ -23,19 +28,18 @@ COMMAND_GROUPS = [
         ("🔍 Diagnose", "estate:diagnose_panel"),
         ("🔮 Predict", "estate:predict_panel"),
         ("💳 Fix credits", "estate:fix_guide:credits"),
-        ("🛠 Fix all", "estate:fix_all"),
+        ("🛠 Restart stuck jobs", "estate:fix_all"),
         ("🧠 Otto health", "estate:otto_health"),
         ("📈 Score", "estate:score"),
-        ("🔗 Estate health", "estate:estate_health"),
+        ("🩺 Estate health", "estate:estate_health"),
         ("🔗 Dependencies", "estate:dependencies"),
-        ("🔗 Correlate failures", "estate:correlate"),
+        ("🔗 Linked failures", "estate:correlate"),
     ]),
     ("⚡ Take action", [
         ("⚡ Actions", "estate:run"),
         ("⏸ Pause estate spend", "estate:pause"),
         ("▶️ Resume estate spend", "estate:resume"),
         ("♻️ Restart coord", "estate:restart"),
-        ("🛠 Fix all safe", "estate:fix_all_safe"),
         ("🧠 RSI", "estate:rsi"),
     ]),
     ("🔭 Inspect projects", [
@@ -48,6 +52,7 @@ COMMAND_GROUPS = [
         ("🛒 Store", "estate:st_status"),
         ("🏗 CI", "estate:builds"),
         ("📸 Diff", "estate:diff"),
+        ("➕ Onboard a repo", "estate:onboard"),
     ]),
     ("⚙️ Configure", [
         ("⚙️ Tune", "estate:tune"),
@@ -58,7 +63,7 @@ COMMAND_GROUPS = [
     ("🛠 Machine", [
         ("⚙️ Daemons", "estate:daemons"),
         ("🖥 Host", "estate:host"),
-        ("📜 Log search", "estate:logs"),
+        ("📜 Find a log", "estate:logs"),
     ]),
     ("💻 Code", [
         ("💻 SDLC", "estate:sdlc"),

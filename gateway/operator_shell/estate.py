@@ -379,6 +379,27 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     # tick; this is the on-demand counterpart. Pure read-only (no subprocess), loads the engine
     # path-based the same way `prospector/scheduler/alerts.py:_load_hermes_sender` does.
     "prospector_now": ("prospector_now", "render_prospector_now",     "Now",        _ARG_NONE),
+    # 2026-08-10: six buttons whose reports were written and never given a door. Each wraps a
+    # dict-returning function under `~/.hermes/scripts/` that no panel ever called —
+    # `cross_project.estate_health_score` / `dependency_map` / `correlate_estate`,
+    # `predictor.correlate_failures`, `AgentIdentity.compliance_report`,
+    # `score_driver.score_burndown`. All read-only. `logs` is the chooser the bare button
+    # never had: three subsystems write logs and every renderer needs a unit to open one,
+    # which a bare `estate:logs` cannot send.
+    "estate_health":  ("estate_intel",    "render_estate_health",     "Estate health",   _ARG_NONE),
+    "dependencies":   ("estate_intel",    "render_dependencies",      "Dependencies",    _ARG_NONE),
+    "correlate":      ("estate_intel",    "render_correlate",         "Linked failures", _ARG_NONE),
+    "compliance":     ("estate_intel",    "render_compliance",        "Compliance",      _ARG_NONE),
+    "score":          ("estate_intel",    "render_score",             "Score",           _ARG_NONE),
+    "logs":           ("estate_intel",    "render_log_picker",        "Logs",            _ARG_NONE),
+    # 2026-08-10: the founder had to ask, in words, whether that morning's change was live —
+    # and answering it took eight hand-run shell calls comparing a file mtime to a process
+    # start time. Nothing was broken; there was simply no surface that said so, while a
+    # ledger asserted `NOT STARTED` for work that had already shipped. `deployed` is that
+    # surface: every row a probe of the live process table / filesystem / git / network, and
+    # never a stored status. It is the slowest panel in this table by design — it holds a
+    # ~12s wall clock (`deployed.py:_DEADLINE_S`) because it reaches the network.
+    "deployed":       ("deployed",        "render_deployed",          "Deployed",        _ARG_NONE),
 }
 
 
@@ -1530,6 +1551,126 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
         view.toast = "♻️ Restarted" if ok else "⚠️ Failed"
         view.ok = ok
         return _finish(view)
+
+    # ── The three MUTATING buttons that were quarantined, each behind two screens ──────────
+    # Wiring a mutating button is not the same job as wiring a renderer: the first tap must
+    # show what is about to happen and the second must do it. `restart`/`restart_confirm`
+    # above is the shape all three follow.
+
+    if action == "fix_all":
+        # Screen one is a REAL dry run (`auto_fix_all(dry_run=True)`), not a generic warning,
+        # so the card names the jobs it would kick. 2026-08-10: this button existed at eleven
+        # sites and reached no handler at all.
+        from gateway.operator_shell.estate_intel import render_fix_preview
+
+        text, buttons = render_fix_preview()
+        return _finish(PanelView(text=text, buttons=buttons, toast="Auto-fix"))
+
+    if action == "fix_all_confirm":
+        from gateway.operator_shell.estate_intel import auto_fix, render_fix_result
+
+        results, err = auto_fix(False)
+        fixed = len((results or {}).get("fixed") or []) if isinstance(results, dict) else 0
+        failed = len((results or {}).get("failed") or []) if isinstance(results, dict) else 0
+        ok = not err and failed == 0
+        text, buttons = render_fix_result(results, err)
+        receipt = _proof(
+            "fix_all",
+            "done" if ok else "failed",
+            f"Restarted {fixed} stuck job(s)" if ok else "Auto-fix hit a failure",
+            request_id=rid,
+            evidence=[err or f"fixed={fixed} failed={failed}"],
+        )
+        return _finish(
+            PanelView(
+                text=receipt + "\n\n" + text,
+                buttons=buttons,
+                toast="🛠 Done" if ok else "⚠️ Failed",
+                ok=ok,
+                proof_receipt=receipt,
+            )
+        )
+
+    if action == "rsi_run":
+        return _finish(
+            PanelView(
+                text=(
+                    "🔄 *Run a learning cycle?*\n\n"
+                    "Runs `self_improve_runner.py --all`: Otto looks for gaps in its own "
+                    "behaviour and writes policies for them.\n\n"
+                    "This WRITES — new policy files, a velocity row, a regression run. It is "
+                    "not a read. It also blocks this chat until it finishes.\n\n"
+                    "_Nothing is deployed by it; policies take effect on the next injection._"
+                ),
+                buttons=[
+                    [("✅ Confirm", "estate:rsi_run_confirm"), ("✗ Cancel", "estate:refresh")]
+                ],
+                toast="",
+            )
+        )
+
+    if action == "rsi_run_confirm":
+        from gateway.operator_shell.rsi_control import trigger_cycle
+
+        try:
+            result = trigger_cycle() or {}
+            err = str(result.get("error") or "")
+        except Exception as exc:  # noqa: BLE001
+            result, err = {}, f"{type(exc).__name__}: {exc}"
+        ok = not err
+        lines = ["🔄 *Learning cycle* — finished" if ok else "🔄 *Learning cycle* — failed", ""]
+        if ok:
+            lines += [
+                f"• Gaps found: {result.get('gaps_found', '?')}",
+                f"• Velocity: {result.get('velocity', '?')}",
+                f"• Regression: {result.get('regression_pass', '?')} pass / "
+                f"{result.get('regression_fail', '?')} fail",
+                f"• Took {result.get('elapsed', '?')}s",
+            ]
+        else:
+            lines.append(f"`{err[:200]}`")
+        receipt = _proof(
+            "rsi_run",
+            "done" if ok else "failed",
+            "Self-improvement cycle run" if ok else "Cycle failed",
+            request_id=rid,
+            evidence=[err[:200] or f"gaps={result.get('gaps_found')}"],
+        )
+        return _finish(
+            PanelView(
+                text=receipt + "\n\n" + "\n".join(lines),
+                buttons=[
+                    [("📋 Recent changes", "estate:rsi_changes"), ("🧠 RSI", "estate:rsi")],
+                    nav("rsi_run"),
+                ],
+                toast="🔄 Cycle done" if ok else "⚠️ Failed",
+                ok=ok,
+                proof_receipt=receipt,
+            )
+        )
+
+    if action == "onboard":
+        # `onboard` is a small flow, not one panel: root → discover → confirm → add. It lives
+        # in projects.py beside `onboard_project()`, the function that does the writing, so the
+        # confirm screen and the write cannot drift apart. Before 2026-08-10 the whole subtree
+        # was unreachable — six buttons, no handler, and no door into the root either.
+        from gateway.operator_shell.projects import dispatch_onboard
+
+        text, buttons, ok, detail = dispatch_onboard(arg or "")
+        receipt = (
+            _proof("onboard", "done" if ok else "failed", detail, request_id=rid,
+                   evidence=[detail])
+            if detail else ""
+        )
+        return _finish(
+            PanelView(
+                text=(receipt + "\n\n" + text) if receipt else text,
+                buttons=buttons,
+                toast="Onboard" if not detail else ("✅ Added" if ok else "⚠️ Failed"),
+                ok=ok,
+                proof_receipt=receipt or None,
+            )
+        )
 
     if action == "system_fuel":
         from gateway.operator_shell.budget import check_budget

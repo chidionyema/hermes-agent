@@ -25,6 +25,8 @@ def dispatch(
             cron_action as pd_cron_action,
             render_cron as pd_render_cron,
             render_logs as pd_logs,
+            render_last_run,
+            render_nodes,
             render_params as pd_render_params,
             render_prospector_daemon,
             run_op as pd_run,
@@ -48,6 +50,54 @@ def dispatch(
                         toast="Params",
                         proof_receipt=_proof(
                             "pd_params", "done", "Prospector params", request_id=rid
+                        ),
+                    )
+                )
+
+            # Last run: the batch diagnostics the engine has always written and nothing read.
+            # Matched here, ahead of the generic op handling below, because `run` is also an op
+            # prefix (`pd_run_now:<unit>`) and a later match would hand this to launchctl.
+            if rest == "last_run":
+                text, buttons = render_last_run(unit or "")
+                return _finish(
+                    PanelView(
+                        text=text,
+                        buttons=buttons,
+                        toast="Last run",
+                        proof_receipt=_proof(
+                            "pd_last_run", "done", "Last batch diagnostics", request_id=rid
+                        ),
+                    )
+                )
+
+            # In flight: the sub-tick view (R5). One level FINER than `last_run` — that shows
+            # the last COMPLETED batch, this shows the candidate and the check in progress now.
+            # Matched before the generic op handling for the same reason `last_run` is.
+            if rest == "in_flight":
+                from gateway.operator_shell.prospector_inflight import render_in_flight
+
+                text, buttons = render_in_flight()
+                return _finish(
+                    PanelView(
+                        text=text,
+                        buttons=buttons,
+                        toast="In flight",
+                        proof_receipt=_proof(
+                            "pd_in_flight", "done", "Sub-tick engine progress", request_id=rid
+                        ),
+                    )
+                )
+
+            # Nodes: which brain does which step, and which of them are benched
+            if rest == "nodes":
+                text, buttons = render_nodes()
+                return _finish(
+                    PanelView(
+                        text=text,
+                        buttons=buttons,
+                        toast="Nodes",
+                        proof_receipt=_proof(
+                            "pd_nodes", "done", "Brain chains per step", request_id=rid
                         ),
                     )
                 )
@@ -130,8 +180,13 @@ def dispatch(
                     evidence=evidence,
                 )
                 # Same as the Signal Engine knobs: land in the group, so the next change is
-                # one tap rather than three.
-                text, buttons = _knob_landing(key, pd_render_params)
+                # one tap rather than three. `nodes` has no Tune group — its screen IS the
+                # Nodes panel — so it lands there rather than being dumped on Params, where
+                # the operator would have to find their way back to see what they changed.
+                if key == "nodes":
+                    text, buttons = render_nodes()
+                else:
+                    text, buttons = _knob_landing(key, pd_render_params)
                 return _finish(
                     PanelView(
                         text=receipt + "\n\n" + text,

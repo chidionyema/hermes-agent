@@ -65,7 +65,7 @@ def render_smart_home() -> Tuple[str, bool, List[ButtonRow]]:
             "",
         ]
         buttons = [
-            [("🛠 Fix all", "estate:fix_all"), ("🔍 Diagnose", "estate:diagnose_panel")],
+            [("🛠 Restart stuck jobs", "estate:fix_all"), ("🔍 Diagnose", "estate:diagnose_panel")],
             [("⏸ Pause Prospector", "estate:pd_pause"), ("💳 Fix credits", "estate:fix_guide:credits")],
         ]
         paused = False
@@ -80,7 +80,7 @@ def render_smart_home() -> Tuple[str, bool, List[ButtonRow]]:
             "",
         ]
         buttons = [
-            [("🚨 View incidents", "estate:incidents"), ("🛠 Fix all", "estate:fix_all")],
+            [("🚨 View incidents", "estate:incidents"), ("🛠 Restart stuck jobs", "estate:fix_all")],
         ]
         paused = False
         

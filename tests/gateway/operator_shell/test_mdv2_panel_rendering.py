@@ -163,6 +163,7 @@ def _panel_text(result):
     return str(result)
 
 
+@pytest.mark.cockpit_sweep  # 159.54s — renders all ~62 panels for real. Runs at pre-push.
 def test_every_panel_survives_the_send_path():
     """No panel may lose a bold, lose an italic, or change its visible text.
 

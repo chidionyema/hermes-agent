@@ -26,7 +26,15 @@ import importlib
 import inspect
 import pkgutil
 
+import pytest
+
 import gateway.operator_shell as pkg
+
+
+# BOTH tests here go through `_render_everything`, and it is module-cached — marking only the
+# slow-looking one would just move the 135s onto the other. The mark is therefore file-wide.
+# Measured 2026-08-10: 135.30s. It runs at pre-push, not on every commit.
+pytestmark = pytest.mark.cockpit_sweep
 
 
 # Labels whose entire job is "this panel again" / "the panel you came from". Two of these on one

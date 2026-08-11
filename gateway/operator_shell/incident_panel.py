@@ -32,6 +32,6 @@ def render_incidents():
         lines.append(f"Avg MTTR: {history.get('avg_mttr_min',0)} min")
     
     lines.append(""); lines.append(panel_stamp("incidents"))
-    buttons = [[("🔍 Diagnose", "estate:diagnose_panel"), ("🛠 Fix all", "estate:fix_all")]]
+    buttons = [[("🔍 Diagnose", "estate:diagnose_panel"), ("🛠 Restart stuck jobs", "estate:fix_all")]]
     buttons = with_nav(buttons, "incidents")
     return "\n".join(lines), buttons

@@ -299,7 +299,53 @@ _SAFE_PARAMS = {
     "daily_cap": ("yaml_scalar", ("10", "20", "40")),
     "backlog_cap": ("yaml_scalar", ("0", "50", "200")),
     "grounding_gate": ("yaml_scalar", ("on", "off")),
+    # STEERING. Everything above this line is throughput or a rail — how much, how often, when
+    # to stop. None of it decides WHAT gets generated, which is why an operator could change
+    # every phone knob and still get the same blue-sky mix. These three are the steering wheel.
+    # Presets, not free text: `focus` is a binding constraint on the generation prompt, and a
+    # typo'd constraint does not fail, it silently generates against nonsense for a whole batch.
+    "focus": ("yaml_scalar", (
+        "off", "tech_ai_all", "ai_native", "tech_vertical", "sells_to_tech",
+        "statutory_compliance_pack", "online_autonomous_predator",
+    )),
+    "market": ("yaml_scalar", ("uk", "us", "us-ca")),
+    # "US as well as UK" — the founder's ask — is a ROTATION, not a set. `active_market` selects
+    # one market's retrieval corpus and prompt framing for a whole batch, so two at once has no
+    # meaning; this alternates them between ticks instead. See the config.yaml prose.
+    "rotate": ("yaml_scalar", ("off", "uk_us")),
+    # NODES. Which brain does the ancillary work — generation, prescreen, scoring. A LIST, not a
+    # scalar, and the only list knob on this panel: reordering it is the whole control, so the
+    # values are whole orders under plain names rather than a head to insert.
+    "nodes": ("yaml_list", ("cheapest", "quality", "thrift")),
 }
+
+# The verdict chain must stay LED by a trusted brain (CLAUDE.md). These are the only names
+# `is_provisional_provider` treats as trusted-final; anything else that rules is stamped
+# `provisional`. Mirrored here rather than imported because the engine runs on its own
+# interpreter and venv — the gateway cannot import `prospector.operator` — and `_fence_chain`
+# below refuses any write that would put a name outside this set at the head of `operator:`.
+_MOAT_PRIMARY = ("claude_cli", "claude")
+
+# Preset orders for `noncritical_operator`. The SET is fixed and only the order moves: a preset
+# that dropped a tier would quietly shorten the chain, and a chain with one tier left has no
+# failover at all — which is the failure the tiering exists to prevent.
+_NODE_ORDERS = {
+    "cheapest": ["standardcompute", "claude_cli", "minimax"],
+    "quality": ["claude_cli", "standardcompute", "minimax"],
+    "thrift": ["minimax", "standardcompute", "claude_cli"],
+}
+
+# What each preset costs and buys, in the operator's terms. Shown on the panel and on the
+# confirm screen, because "standardcompute first" is not a decision anyone can make from the
+# name alone.
+_NODE_BLURB = {
+    "cheapest": "cheap API brain first, Claude as failover — the 2026-08-08 default",
+    "quality": "Claude CLI first: best candidates, but it queues behind the moat's own calls",
+    "thrift": "MiniMax first: cheapest of the three, least deterministic on structured output",
+}
+
+# knob → the config.yaml LIST key it rewrites.
+_YAML_LIST_KEYS = {"nodes": "noncritical_operator"}
 
 # knob → (the config.yaml key it patches, how the value is written). One row per
 # scalar, so adding a knob is a table entry rather than another branch in set_param.
@@ -315,6 +361,18 @@ _YAML_KEYS = {
     "grounding_gate": (
         "gate_generation_on_grounding",
         lambda v: "true" if str(v).strip().lower() == "on" else "false",
+    ),
+    # Written QUOTED, including the empty string. `active_profile: ""` is how config.yaml ships
+    # it, and `_patch_yaml_scalar` refuses on 0 assignments — so an unquoted `off` written as a
+    # bare empty value would leave `active_profile:` with no token at all and the next set would
+    # find nothing to rewrite. Quoting keeps the line self-similar however many times it is set.
+    "focus": ("active_profile", lambda v: '""' if str(v).strip().lower() == "off" else f'"{v}"'),
+    "market": ("active_market", lambda v: f'"{v}"'),
+    # The one knob whose value contains a comma — which is what `_YAML_VALUE` exists for, since
+    # `market_rotation` lives inside the `schedule:` flow mapping where a bare comma terminates.
+    "rotate": (
+        "market_rotation",
+        lambda v: '""' if str(v).strip().lower() == "off" else '"uk,us"',
     ),
 }
 
@@ -356,15 +414,36 @@ def _yaml_assign_lines(text: str, key: str) -> List[int]:
     ]
 
 
+# A YAML scalar value as it appears on the line. The bare form stops at whitespace, a comma or
+# a closing brace because `schedule:` is a FLOW MAPPING — `{a: 1, b: 2}` — so the comma is a
+# real terminator there. But a QUOTED scalar is one token no matter what it contains, and
+# `schedule.market_rotation: "uk,us"` is exactly that: the bare pattern read it back as `"uk`,
+# truncated at the comma, which is the same defect class as the URL extractor that cut at `)`.
+# The quoted alternatives come first so they win the match.
+_YAML_VALUE = r"""("[^"]*"|'[^']*'|[^\s,}]+)"""
+
+
+def _unquote(v: str | None) -> str:
+    """A quoted YAML scalar's contents. `""` -> `""` (empty), `"uk,us"` -> `uk,us`."""
+    s = (v or "").strip()
+    if len(s) >= 2 and s[0] == s[-1] and s[0] in "\"'":
+        return s[1:-1]
+    return s
+
+
 def _read_yaml_scalar(text: str, key: str) -> str | None:
-    """The assigned value, or None when the key is absent or ambiguous."""
+    """The assigned value, or None when the key is absent or ambiguous.
+
+    Returned WITH its quotes if it had them — `_unquote` is the caller's decision, because the
+    numeric knobs want `int(raw)` and the string knobs want the contents.
+    """
     import re
 
     hits = _yaml_assign_lines(text, key)
     if len(hits) != 1:
         return None
     line = text.splitlines()[hits[0]].split("#", 1)[0]
-    m = re.search(r"(?<![\w.])" + re.escape(key) + r":\s*([^\s,}]+)", line)
+    m = re.search(r"(?<![\w.])" + re.escape(key) + r":\s*" + _YAML_VALUE, line)
     return m.group(1) if m else None
 
 
@@ -384,7 +463,7 @@ def _patch_yaml_scalar(text: str, key: str, written: str) -> str | None:
     lines = text.splitlines(keepends=True)
     body, sep, comment = lines[hits[0]].partition("#")
     new_body, n = re.subn(
-        r"((?<![\w.])" + re.escape(key) + r":\s*)[^\s,}]+",
+        r"((?<![\w.])" + re.escape(key) + r":\s*)(?:" + _YAML_VALUE + r")",
         lambda m: m.group(1) + written,
         body,
         count=1,
@@ -393,6 +472,94 @@ def _patch_yaml_scalar(text: str, key: str, written: str) -> str | None:
         return None
     lines[hits[0]] = new_body + sep + comment
     return "".join(lines)
+
+
+def _read_yaml_list(text: str, key: str) -> List[str] | None:
+    """A one-line flow list — `key: [a, b, c]` — as its members. None if not uniquely found.
+
+    Only the flow form is read, and that is deliberate rather than a shortcut: the writer below
+    can only rewrite what it can locate on ONE line, so a reader that also understood the block
+    form (`- a` on its own line) would display chains the setter cannot touch, and the panel
+    would offer a control that silently fails on exactly those configs.
+    """
+    import re
+
+    hits = _yaml_assign_lines(text, key)
+    if len(hits) != 1:
+        return None
+    line = text.splitlines()[hits[0]].split("#", 1)[0]
+    m = re.search(r"(?<![\w.])" + re.escape(key) + r":\s*\[([^\]]*)\]", line)
+    if not m:
+        return None
+    return [_unquote(p).strip() for p in m.group(1).split(",") if p.strip()]
+
+
+def _fence_chain(yaml_key: str, values: List[str]) -> str | None:
+    """The reason this chain write is refused, or None to allow it.
+
+    The fence lives in the WRITER, not in the button table. A panel that only offers safe
+    presets is a fence at selection time, and a selection-time fence misses a runtime
+    substitution — the same defect class that let a refusal be routed around by a caller the
+    button list never saw. Anything that reaches this function is checked, whoever called it.
+    """
+    if not values:
+        return "an empty chain has no brain in it"
+    if yaml_key == "operator" and values[0] not in _MOAT_PRIMARY:
+        return (
+            f"`{values[0]}` cannot LEAD the verdict chain — only "
+            f"{', '.join(_MOAT_PRIMARY)} rule finally, and anything else that rules is stamped "
+            "provisional and re-vetted. Refused."
+        )
+    return None
+
+
+def _patch_yaml_list(text: str, key: str, values: List[str]) -> str | None:
+    """`text` with `key`'s flow list replaced. None if not uniquely locatable or fenced."""
+    import re
+
+    if _fence_chain(key, values) is not None:
+        return None
+    hits = _yaml_assign_lines(text, key)
+    if len(hits) != 1:
+        return None
+    lines = text.splitlines(keepends=True)
+    body, sep, comment = lines[hits[0]].partition("#")
+    written = "[" + ", ".join(values) + "]"
+    new_body, n = re.subn(
+        r"((?<![\w.])" + re.escape(key) + r":\s*)\[[^\]]*\]",
+        lambda m: m.group(1) + written,
+        body,
+        count=1,
+    )
+    if n != 1:
+        return None
+    lines[hits[0]] = new_body + sep + comment
+    return "".join(lines)
+
+
+def _dead_brains(filename: str) -> Dict[str, float]:
+    """`{brain: dead_until}` from a provider-health file, for the marks that are still live.
+
+    Reads `dead_until` raw rather than asking "is it dead", which is what the engine's own
+    bookkeeping checks do: `health.is_dead` claims the half-open probe slot, and a status panel
+    consuming that slot would spend the one re-probe a real call should get.
+    """
+    path = REPO / "store" / filename
+    if not path.is_file():
+        return {}
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8", errors="replace"))
+        provs = raw.get("providers") if isinstance(raw, dict) else None
+        now = time.time()
+        out = {}
+        for name, row in (provs or {}).items():
+            until = (row or {}).get("dead_until") if isinstance(row, dict) else None
+            if isinstance(until, (int, float)) and until > now:
+                out[str(name)] = float(until)
+        return out
+    except Exception as exc:  # noqa: BLE001 — health is advisory here, never a panel breaker
+        logger.warning("provider health unreadable (%s): %s", filename, exc)
+        return {}
 
 
 def read_params() -> Dict[str, object]:
@@ -404,6 +571,18 @@ def read_params() -> Dict[str, object]:
         "daily_cap_usd": None,
         "backlog_cap": None,
         "grounding_gate": None,
+        # Steering. `""` is a real, meaningful value here ("no focus" / "markets.default"), so
+        # these start as None — the "could not read it" answer — and only become "" if the file
+        # actually says so. Collapsing the two would print "no focus" for an unreadable config.
+        "focus": None,
+        "focus_text": None,
+        "market": None,
+        "rotation": None,
+        # The three chains, each None when unreadable. `noncritical` was a module constant in
+        # the engine's run.py until 2026-08-10 and could not be read from here at all.
+        "verdict_chain": None,
+        "noncritical_chain": None,
+        "artifact_chain": None,
         "paused": _PAUSE.is_file(),
         "watchdog_interval_s": 900,
     }
@@ -433,9 +612,50 @@ def read_params() -> Dict[str, object]:
         raw = _read_yaml_scalar(text, "gate_generation_on_grounding")
         if raw is not None:
             out["grounding_gate"] = raw.strip().lower() == "true"
+        raw = _read_yaml_scalar(text, "active_profile")
+        if raw is not None:
+            out["focus"] = _unquote(raw)
+        raw = _read_yaml_scalar(text, "active_market")
+        if raw is not None:
+            out["market"] = _unquote(raw)
+        raw = _read_yaml_scalar(text, "market_rotation")
+        if raw is not None:
+            out["rotation"] = _unquote(raw)
+        for field, yaml_key in (("verdict_chain", "operator"),
+                                ("noncritical_chain", "noncritical_operator"),
+                                ("artifact_chain", "artifact_operator")):
+            chain = _read_yaml_list(text, yaml_key)
+            if chain is not None:
+                out[field] = chain
     except Exception as exc:
         out["config_err"] = str(exc)[:60]
+    out["focus_text"] = _focus_text(out.get("focus"))
     return out
+
+
+def _focus_text(profile: str | None) -> str | None:
+    """The focus directive the engine is ACTUALLY given, read from the profile it names.
+
+    The knob shows a profile name; the prompt receives a paragraph. Showing only the name means
+    the operator cannot tell a profile that constrains generation from one that says nothing —
+    `active_profile` was absent from config.yaml entirely until 2026-08-10, so "the steering is
+    set" and "the steering does anything" had never once been the same question.
+
+    Parsed with a real YAML loader rather than the line regexes above: this is a READ of a
+    nested block, and the regexes exist only because a WRITE must preserve comments. `None` on
+    any failure — never a guess about what the engine was told.
+    """
+    if not profile:
+        return None
+    try:
+        import yaml
+
+        raw = yaml.safe_load(_CONFIG.read_text(encoding="utf-8")) or {}
+        prof = ((raw.get("profiles") or {}).get(profile) or {})
+        focus = ((prof.get("generation") or {}).get("focus"))
+        return " ".join(str(focus).split()) if focus else None
+    except Exception:
+        return None
 
 
 def _params_lines() -> List[str]:
@@ -449,13 +669,41 @@ def _params_lines() -> List[str]:
     # 0 is the documented "brake off" value, not a cap of zero. Printing the number would
     # read as "generation is capped at nothing", which is the opposite of what it means.
     cap_s = "?" if cap is None else ("off" if cap == 0 else str(cap))
-    return [
+    lines = [
         "*Params* (safe knobs — no secrets)",
         f"• interval `{iv}`s ({iv_h}) · concurrency `{p.get('concurrency')}`",
         f"• batch_size `{p.get('batch_size')}` · daily_cap `${p.get('daily_cap_usd')}`",
         f"• backlog_cap `{cap_s}` · grounding gate `{gate_s}`",
         f"• PAUSE file `{pause}` · watchdog every `{p.get('watchdog_interval_s')}s`",
     ]
+    return lines + _steering_lines(p)
+
+
+def _steering_lines(p: Dict[str, object]) -> List[str]:
+    """What the engine is aimed at — and, when it is aimed, the words it was actually given.
+
+    Separate from the throughput lines above because it answers a different question. Those say
+    how hard the engine is running; these say what at. Until 2026-08-10 the phone could only
+    answer the first, which is why a daemon generating blue-sky ideas across unrelated sectors
+    looked, from every screen the operator had, exactly like one that was being steered.
+    """
+    focus, market, rot = p.get("focus"), p.get("market"), p.get("rotation")
+    focus_s = "?" if focus is None else (f"`{focus}`" if focus else "off (blue-sky)")
+    # "" is not "unset" here: it means markets.default, which is a real market with a real
+    # corpus. Printing it as blank would read as "no market", and there is no such state.
+    market_s = "?" if market is None else (f"`{market}`" if market else "`default`")
+    lines = [f"• focus {focus_s} · market {market_s}"]
+    if rot:
+        # Rotation OVERRIDES active_market for generation, so showing them side by side without
+        # saying which wins is how an operator concludes the knob is broken.
+        lines.append(f"• 🔁 rotating `{rot}` per tick — this wins over market for new batches")
+    text = p.get("focus_text")
+    if focus and text:
+        s = str(text)
+        lines.append(f"• engine is told: _{s[:180]}{'…' if len(s) > 180 else ''}_")
+    elif focus:
+        lines.append("• ⚠️ that profile declares no `generation.focus` — it steers nothing")
+    return lines
 
 
 def set_param(key: str, value: str) -> Tuple[bool, str, bool]:
@@ -511,6 +759,25 @@ def set_param(key: str, value: str) -> Tuple[bool, str, bool]:
         _CONFIG.write_text(new, encoding="utf-8")
         return True, f"{yaml_key} {old} → {written} (config.yaml; next tick)", False
 
+    if kind == "yaml_list":
+        yaml_key = _YAML_LIST_KEYS[key]
+        values = list(_NODE_ORDERS.get(value) or [])
+        refusal = _fence_chain(yaml_key, values)
+        if refusal:
+            return False, refusal, False
+        text = _CONFIG.read_text(encoding="utf-8")
+        old = _read_yaml_list(text, yaml_key)
+        new = _patch_yaml_list(text, yaml_key, values)
+        if new is None:
+            return (
+                False,
+                f"could not uniquely locate `{yaml_key}: [...]` in config.yaml — not written",
+                False,
+            )
+        _CONFIG.write_text(new, encoding="utf-8")
+        old_s = ", ".join(old or []) or "?"
+        return True, f"{yaml_key} [{old_s}] → [{', '.join(values)}] (config.yaml; next tick)", False
+
     return False, "unhandled kind", False
 
 
@@ -536,6 +803,25 @@ def confirm_set_param(key: str, value: str) -> Tuple[str, List[ButtonRow]]:
         "concurrency": f"{_CONC_ENV} → `{value}` (needs restart)",
         "batch_size": f"schedule.batch_size → `{value}` (next tick)",
         "daily_cap": f"spend.daily_cap_usd → `${value}` (next tick)",
+        "focus": (
+            "blue-sky generation — no constraint on subject (next tick)"
+            if value == "off"
+            else f"`active_profile` → `{value}` — every new candidate is generated "
+                 f"against that constraint (next tick)"
+        ),
+        "market": f"`active_market` → `{value}` — changes where the engine LOOKS and how it "
+                  f"frames the prompt, never how strictly it judges (next tick)",
+        "rotate": (
+            "`schedule.market_rotation` off — generation follows `active_market` again"
+            if value == "off"
+            else "`schedule.market_rotation` → `uk,us` — one market per tick, alternating. "
+                 "This wins over `active_market` for new batches; the drain does not rotate"
+        ),
+        "nodes": (
+            f"`noncritical_operator` → `{', '.join(_NODE_ORDERS.get(value) or [])}` — "
+            f"{_NODE_BLURB.get(value, '')}. Generation, prescreen and scoring only; "
+            "the verdict chain is untouched (next tick)"
+        ),
     }
     if key not in _SAFE_PARAMS:
         return (
@@ -548,11 +834,29 @@ def confirm_set_param(key: str, value: str) -> Tuple[str, List[ButtonRow]]:
             f"Value `{value}` not in allowlist: {', '.join(allowed)}",
             [[("⚙️ Params", "estate:pd_params")]],
         )
+    # The "Current:" line must be about the knob being changed. Printing throughput numbers
+    # under a focus change asks the operator to confirm against figures that cannot tell them
+    # whether they are about to repoint the engine or re-point it at what it already had.
+    if key == "nodes":
+        chain = cur.get("noncritical_chain")
+        now = ("Current: generation runs `"
+               + (" → ".join(chain) if isinstance(chain, list) and chain else "?") + "`")
+    elif key in ("focus", "market", "rotate"):
+        rot = cur.get("rotation")
+        now = (
+            f"Current: focus `{cur.get('focus') or 'off'}` · "
+            f"market `{cur.get('market') or 'default'}` · "
+            f"rotation `{rot or 'off'}`"
+        )
+    else:
+        now = (
+            f"Current: interval `{cur.get('interval_s')}` · conc `{cur.get('concurrency')}` · "
+            f"batch `{cur.get('batch_size')}` · cap `${cur.get('daily_cap_usd')}`"
+        )
     text = (
         f"⚙️ *Set Prospector `{key}` = `{value}`?*\n\n"
         f"{labels.get(key, key)}\n"
-        f"Current: interval `{cur.get('interval_s')}` · conc `{cur.get('concurrency')}` · "
-        f"batch `{cur.get('batch_size')}` · cap `${cur.get('daily_cap_usd')}`"
+        f"{now}"
     )
     return text, [
         [
@@ -582,9 +886,281 @@ def render_params() -> Tuple[str, List[ButtonRow]]:
         # on this screen as well as on Run — the same reasoning as estate pause on the home card.
         [pause_btn],
         [("🔭 Prospector", "estate:prospector_daemon"), ("🗓 Cron", "estate:pd_cron")],
+        [("📊 Last run", "estate:pd_last_run"), ("🧠 Nodes", "estate:pd_nodes")],
         nav("pd_params"),
     ]
     return "\n".join(lines), buttons
+
+
+# ── Nodes: which brain does which step, and which of them are down ──────────
+#
+# Three chains do the engine's thinking and they are not interchangeable. The VERDICT chain
+# rules; only `claude_cli`/`claude` rule FINALLY, and anything else that rules is stamped
+# provisional and re-vetted. The NON-CRITICAL chain does generation, prescreen and scoring — it
+# can never rule, which is exactly why its head may be the cheapest live brain. The ARTIFACT
+# chain writes the customer-facing pack prose.
+#
+# The phone could see none of it. A dead head is the failure mode that hides itself: the chain
+# fails over, the run succeeds, nothing looks wrong, and every call pays a guaranteed failure
+# (and, until the breaker trips, a full timeout) before it starts.
+
+_NODE_STEPS = (
+    ("Verdict", "verdict_chain", "provider_health.json",
+     "rules PASS/KILL — only Claude rules finally"),
+    ("Generation", "noncritical_chain", "provider_health_noncritical.json",
+     "candidates, prescreen, scoring — never rules"),
+    ("Pack prose", "artifact_chain", "provider_health_noncritical.json",
+     "the words the buyer pays for"),
+)
+
+
+def _node_preset(chain: List[str] | None) -> str | None:
+    """Which preset the live `noncritical_operator` corresponds to, if any."""
+    for name, order in _NODE_ORDERS.items():
+        if list(chain or []) == order:
+            return name
+    return None
+
+
+def render_nodes() -> Tuple[str, List[ButtonRow]]:
+    """Per-step brain chains, live health, and the one chain that is safe to reorder."""
+    p = read_params()
+    dead_by_file = {f: _dead_brains(f) for _l, _k, f, _d in _NODE_STEPS}
+
+    lines = ["🧠 *Nodes* — which brain does which step", ""]
+    for label, field, health_file, what in _NODE_STEPS:
+        chain = p.get(field)
+        if not isinstance(chain, list) or not chain:
+            lines.append(f"*{label}*  _could not read the chain from config.yaml_")
+            lines.append("")
+            continue
+        dead = dead_by_file.get(health_file) or {}
+        # The HEAD is the one that matters: every call pays it first. A dead head is a
+        # guaranteed failure before every single call, and the chain hides it by succeeding.
+        rendered = " → ".join(
+            ("🔴 " if name in dead else "") + name for name in chain
+        )
+        lines.append(f"*{label}*  {rendered}")
+        lines.append(f"  _{what}_")
+        if chain[0] in dead:
+            lines.append(f"  ⚠️ _the head is benched — every {label.lower()} call fails to it "
+                         "first, then falls through_")
+        lines.append("")
+
+    preset = _node_preset(p.get("noncritical_chain") if isinstance(p.get("noncritical_chain"), list)
+                          else None)
+    if preset:
+        lines.append(f"Generation is on *{preset}* — {_NODE_BLURB[preset]}.")
+    elif isinstance(p.get("noncritical_chain"), list):
+        # A hand-edited order is legitimate and must not be relabelled as one of the presets.
+        lines.append("_Generation is on a custom order — tapping a preset below replaces it._")
+    lines.append("")
+    lines.append("_Only the generation chain is reorderable from here. The verdict chain must "
+                 "stay led by Claude, so it is read-only._")
+    lines.append("")
+    lines.append(panel_stamp("pd_nodes"))
+
+    buttons: List[ButtonRow] = [
+        [(("✅ " if preset == name else "") + label, f"estate:pd_set:nodes:{name}")]
+        for name, label in (("cheapest", "💸 Cheapest first"),
+                            ("quality", "🎯 Best candidates first"),
+                            ("thrift", "🪙 Cheapest of all"))
+    ]
+    buttons.append([("📊 Last run", "estate:pd_last_run"), ("⚙️ Params", "estate:pd_params")])
+    buttons.append([("🔭 Prospector", "estate:prospector_daemon")])
+    buttons.append(nav("pd_nodes"))
+    return "\n".join(lines), buttons
+
+
+# ── Last run: what the last batch did, and why ──────────────────────────────
+#
+# The engine has computed this since before the daemon existed — `diagnose_batch()` writes a
+# full funnel, a kill-gate histogram, the unverifiable rate and the closest-to-passing kills to
+# `batch_diagnostics.jsonl` after every batch, and renders the same thing to
+# `DIAGNOSTICS_LATEST.txt`. Nothing read either file. The operator's phone could say a tick ran
+# and stocked nothing; it could not say why, which is the only question a steering change can
+# be judged on: a tech/AI focus is EXPECTED to cut the pass rate before it lifts it, so "0
+# passes" is not evidence either way, while the top kill gate moving off `moat_ungrounded` is.
+
+_DIAG_JSONL = STORE / "batch_diagnostics.jsonl"
+_DIAG_TEXT = STORE / "DIAGNOSTICS_LATEST.txt"
+
+
+def _last_batch() -> Dict[str, object]:
+    """The last row of `batch_diagnostics.jsonl`. `{}` when unreadable.
+
+    Reads line by line: the file is append-only and grows with the daemon's uptime, so slurping
+    it to take one row is a cost that scales with how long the estate has been healthy.
+    """
+    if not _DIAG_JSONL.is_file():
+        return {}
+    try:
+        row = None
+        with _DIAG_JSONL.open("r", encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if line.strip():
+                    row = line
+        if not row:
+            return {}
+        rec = json.loads(row)
+        return rec if isinstance(rec, dict) else {}
+    except Exception as exc:  # noqa: BLE001 — a diagnostics read never breaks a panel
+        logger.warning("last-batch diagnostics unreadable: %s", exc)
+        return {}
+
+
+def _plain(s: object, limit: int = 44) -> str:
+    """A candidate title as panel text. Titles are model output and arrive with `*`, `_` and
+    backticks in them; authored panel markup is MarkdownV2, so one stray marker unbalances the
+    whole message and Telegram rejects the send with a 400."""
+    t = " ".join(str(s or "").split())
+    for ch in "*_`[]()~>#+=|{}":
+        t = t.replace(ch, "")
+    return (t[: limit - 1] + "…") if len(t) > limit else t
+
+
+def _bar(n: int, top: int, width: int = 10) -> str:
+    """A proportional bar. `top` is the largest count on the panel, so the biggest gate always
+    fills the width and the rest are read against it — an absolute scale would render every bar
+    as one block on a 5-candidate batch."""
+    if top <= 0:
+        return ""
+    return "█" * max(1, round(width * n / top))
+
+
+def render_last_run(view: str = "") -> Tuple[str, List[ButtonRow]]:
+    """The last batch's funnel, kill gates and closest misses. `view="full"` = the raw report."""
+    rec = _last_batch()
+    buttons: List[ButtonRow] = []
+
+    if view == "full":
+        # The engine's own rendering, verbatim. Everything the compact panel leaves out lives
+        # here — the per-check verdict matrix, confidence stats, sources-per-check, token cost.
+        # Tail, not head: the report is written top-down and the operator wants the end of it.
+        try:
+            body = _DIAG_TEXT.read_text(encoding="utf-8", errors="replace")
+        except Exception:
+            body = ""
+        if body.strip():
+            tail = "\n".join(body.rstrip().splitlines()[-42:])
+            text = "📊 *Last run* — full report\n\n```\n" + tail + "\n```"
+        else:
+            text = (
+                "📊 *Last run* — full report\n\n"
+                "_No report on disk yet. It is written after the first batch completes._"
+            )
+        buttons = [
+            # One destination, one name — `estate:pd_last_run` is "📊 Last run" on every screen
+            # that offers it. A second name for the same place ("Summary") reads as a second
+            # place, and `test_destination_vocabulary` holds the whole surface to BASELINE = 0.
+            [("📊 Last run", "estate:pd_last_run")],
+            [("🔭 Prospector", "estate:prospector_daemon"), ("📜 Logs", "estate:pd_logs:scheduler")],
+            nav("pd_last_run_full"),
+        ]
+        return text, buttons
+
+    lines: List[str] = ["📊 *Last run*"]
+    if not rec:
+        lines += [
+            "",
+            "_No batch diagnostics on disk yet._",
+            "",
+            "The daemon writes them after every batch it completes. If the daemon has been "
+            "running for a while and this is still empty, the ticks are not reaching "
+            "generation — check Logs.",
+        ]
+        return "\n".join(lines), [
+            [("🔭 Prospector", "estate:prospector_daemon"), ("📜 Logs", "estate:pd_logs:scheduler")],
+            nav("pd_last_run"),
+        ]
+
+    age = _ago_iso(str(rec.get("ts") or "")) if rec.get("ts") else "—"
+    lines[0] = f"📊 *Last run* · _{age}_"
+
+    # Which market this batch was generated for. With `schedule.market_rotation` on, two
+    # consecutive batches are different populations, and a kill-gate mix read across both
+    # without attribution is an average of two answers to different questions.
+    by_market = rec.get("by_market")
+    if isinstance(by_market, dict) and by_market:
+        lines.append("*Market*  " + " · ".join(f"{k} {_market_count(v)}"
+                                               for k, v in sorted(by_market.items())))
+
+    funnel = rec.get("funnel")
+    if isinstance(funnel, dict) and "note" not in funnel:
+        order = [("generated", "generated"), ("dedup_dropped", "deduped"),
+                 ("prescreened_out", "prescreened out"), ("novelty_selected", "selected"),
+                 ("vetted", "vetted")]
+        bits = [f"{label} {funnel[k]}" for k, label in order if k in funnel]
+        if bits:
+            lines += ["", "*Funnel*  " + " → ".join(bits)]
+
+    dec = rec.get("decisions")
+    if isinstance(dec, dict):
+        prov = int(dec.get("provisional", 0) or 0)
+        line = (f"*Outcome*  {int(dec.get('pass', 0) or 0)} passed · "
+                f"{int(dec.get('kill', 0) or 0)} killed · "
+                f"{int(dec.get('defer', 0) or 0)} deferred")
+        if prov:
+            # A provisional row is not a result. It was ruled by a brain outside MOAT_PRIMARY,
+            # never publishes on PASS, and is re-vetted later — so counting it as an outcome
+            # overstates what this batch actually settled.
+            line += f" · {prov} provisional (not final)"
+        lines += ["", line]
+
+    gates = rec.get("kill_gates")
+    if isinstance(gates, dict) and gates:
+        ordered = sorted(gates.items(), key=lambda kv: (-int(kv[1] or 0), kv[0]))
+        top = int(ordered[0][1] or 0)
+        width = max(len(str(k)) for k, _ in ordered[:6])
+        lines += ["", "*Why they were killed*", "```"]
+        for name, count in ordered[:6]:
+            n = int(count or 0)
+            lines.append(f"{str(name):<{width}}  {n:>2}  {_bar(n, top)}")
+        lines.append("```")
+
+    pct = rec.get("unverifiable_pct")
+    if isinstance(pct, (int, float)):
+        # The single number that separates "the ideas are bad" from "retrieval could not see
+        # them". A high unverifiable rate with `moat_ungrounded` on top is a grounding problem,
+        # and no amount of steering the subject matter will move it.
+        verdict = "retrieval is the bottleneck" if float(pct) >= 40 else "grounding is holding"
+        lines += ["", f"*Grounding*  {float(pct):g}% of checks unverifiable — {verdict}"]
+
+    closest = rec.get("closest_kills")
+    thresholds = rec.get("thresholds") if isinstance(rec.get("thresholds"), dict) else {}
+    bar = thresholds.get("min_composite_to_pass")
+    if isinstance(closest, list) and closest:
+        head = "*Closest to passing*"
+        if isinstance(bar, (int, float)):
+            head += f"  (bar {float(bar):g})"
+        lines += ["", head]
+        for item in closest[:3]:
+            try:
+                comp, title = item[0], item[1]
+            except Exception:  # noqa: BLE001 — an older row shape must not blank the panel
+                continue
+            score = f"{float(comp):.2f}" if isinstance(comp, (int, float)) else "?"
+            lines.append(f"• {score}  {_plain(title)}")
+
+    lines.append("")
+    lines.append(panel_stamp("pd_last_run"))
+    buttons = [
+        [("📄 Full report", "estate:pd_last_run:full")],
+        [("🔭 Prospector", "estate:prospector_daemon"), ("📜 Logs", "estate:pd_logs:scheduler")],
+        [("🎯 Focus", "estate:tune:focus"), ("🌍 Market", "estate:tune:market")],
+        nav("pd_last_run"),
+    ]
+    return "\n".join(lines), buttons
+
+
+def _market_count(v: object) -> str:
+    """`by_market` values are per-market sub-dicts; the panel wants one number from each."""
+    if isinstance(v, dict):
+        for key in ("vetted", "count", "n", "dossiers"):
+            if isinstance(v.get(key), int):
+                return str(v[key])
+        return str(sum(x for x in v.values() if isinstance(x, int)) or len(v))
+    return str(v)
 
 
 # ── Cron + tick outcomes ────────────────────────────────────────────────────
@@ -868,8 +1444,18 @@ def render_prospector_daemon() -> Tuple[str, List[ButtonRow]]:
         lines.append(
             "⚠️ _Zero yield: the last 3 ticks produced dossiers but no passes._"
         )
+        lines.append("_Last run says which gate killed them._")
     if control_row:
         buttons.append(control_row)
+    # Last run leads the row: on a zero-yield tick it is the only control that answers WHY,
+    # and the warning above now names it. `In flight` sits beside it as the finer grain — the
+    # same question one level down: Last run is the last COMPLETED batch, In flight is the
+    # candidate and check in progress right now. Between ticks only the first has content;
+    # mid-tick only the second does, which is why neither replaces the other.
+    buttons.append([
+        ("📊 Last run", "estate:pd_last_run"),
+        ("🔬 In flight", "estate:pd_in_flight"),
+    ])
     buttons.append([
         ("⚙️ Params", "estate:pd_params"),
         ("🗓 Cron", "estate:pd_cron"),

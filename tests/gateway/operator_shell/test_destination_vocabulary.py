@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import ast
 import collections
+import functools
 import pathlib
 
 import gateway.operator_shell as _pkg
@@ -74,8 +75,9 @@ _DESIGNED: dict[tuple[str, str], str] = {
 BASELINE = 0
 
 
-def _labels(apply_designed: bool = True) -> dict[str, set[str]]:
-    """callback -> every label any panel renders it under."""
+@functools.lru_cache(maxsize=None)
+def _scan_labels(apply_designed: bool) -> dict[str, set[str]]:
+    """The scan itself. Cached — see `_labels`."""
     out: dict[str, set[str]] = collections.defaultdict(set)
     for path in sorted(PANEL_DIR.glob("*.py")):
         try:
@@ -98,6 +100,18 @@ def _labels(apply_designed: bool = True) -> dict[str, set[str]]:
                 continue
             out[cb.value].add(label.value)
     return out
+
+
+def _labels(apply_designed: bool = True) -> dict[str, set[str]]:
+    """callback -> every label any panel renders it under.
+
+    Memoised, because the scan AST-parses every module in the cockpit — ~11s — and the five
+    tests below all want the same snapshot of the same unchanging source tree. Measured
+    2026-08-10: this file cost 54.85s, of which ~44s was re-parsing the identical files four
+    more times. Returns a fresh copy each call so a caller that mutates the result cannot
+    poison the next test.
+    """
+    return {k: set(v) for k, v in _scan_labels(apply_designed).items()}
 
 
 def _conflicts() -> dict[str, set[str]]:

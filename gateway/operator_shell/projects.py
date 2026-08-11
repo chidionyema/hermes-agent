@@ -338,8 +338,9 @@ def render_project_dashboard(project_key: str, client_mode: bool = False) -> Tup
     if client_mode:
         lines.append("*What would you like to do?*")
         buttons: List[ButtonRow] = [
-            [("📊 Status", f"estate:project:{project_key}"),
-             ("🚢 Deploy", f"estate:deploy:{project_key}")],
+            # 🚢 Deploy dropped 2026-08-10: no deploy function exists estate-wide, and a
+            # dead button on the client-facing card is the worst place to keep one.
+            [("📊 Status", f"estate:project:{project_key}")],
             [("📜 History", f"estate:activity:{project_key}"),
              ("💬 Feedback", "estate:inbox")],
         ]
@@ -386,28 +387,32 @@ def render_onboarding() -> Tuple[str, List[ButtonRow]]:
         "*What kind of project?*",
     ]
 
+    # 2026-08-10: "🆕 New Product", "👤 Client Project" and "📋 From Template" were removed
+    # rather than wired. Nothing existed behind any of the three — no renderer, no handler, no
+    # template store — and the only real path into the registry is discovery: find a git repo
+    # under ~/Documents/code that is not registered, and register it. Three buttons promising
+    # three flows that do not exist is worse than one that works.
     buttons: List[ButtonRow] = [
-        [("🆕 New Product", "estate:onboard:new_product"),
-         ("👤 Client Project", "estate:onboard:client")],
-        [("🔍 Discover Repos", "estate:onboard:discover"),
-         ("📋 From Template", "estate:onboard:template")],
+        [("🔍 Discover Repos", "estate:onboard:discover")],
         [("🏠 Cancel", "estate:refresh")],
     ]
     buttons = with_nav(buttons)
     return "\n".join(lines), buttons
 
 
-def render_onboard_discover() -> Tuple[str, List[ButtonRow]]:
-    """Auto-discover unregistered git repos in ~/Documents/code."""
-    from gateway.operator_shell.panel_chrome import nav, with_nav
+def _discover_unregistered() -> List[dict]:
+    """Git repos under ~/Documents/code that the registry does not know about.
 
-    registered_keys = {p["key"] for p in load_registry().get("projects", [])}
+    Extracted from `render_onboard_discover` so the confirm screen and the write see the same
+    list the operator was shown. Two independent copies of this scan would let "📦 Add All"
+    register a repo that never appeared on the panel.
+    """
     registered_repos = set()
     for p in load_registry().get("projects", []):
         for r in p.get("repos", []):
             registered_repos.add(r)
 
-    discovered = []
+    discovered: List[dict] = []
     for d in sorted(CODE.iterdir()):
         if not d.is_dir():
             continue
@@ -421,16 +426,20 @@ def render_onboard_discover() -> Tuple[str, List[ButtonRow]]:
         if d.name in registered_repos:
             continue
 
-        branch = _repo_branch(d)
-        commit_age = _repo_last_commit(d)
-        has_ci = (d / ".github" / "workflows").is_dir()
-
         discovered.append({
             "name": d.name,
-            "branch": branch,
-            "commit_age": commit_age,
-            "has_ci": has_ci,
+            "branch": _repo_branch(d),
+            "commit_age": _repo_last_commit(d),
+            "has_ci": (d / ".github" / "workflows").is_dir(),
         })
+    return discovered
+
+
+def render_onboard_discover() -> Tuple[str, List[ButtonRow]]:
+    """Auto-discover unregistered git repos in ~/Documents/code."""
+    from gateway.operator_shell.panel_chrome import nav, with_nav
+
+    discovered = _discover_unregistered()
 
     if not discovered:
         lines = [
@@ -537,3 +546,113 @@ def onboard_project(repo_name: str, project_type: str = "incubating") -> dict:
     save_registry(reg)
 
     return project
+
+
+def dispatch_onboard(arg: str) -> Tuple[str, List[ButtonRow], bool, str]:
+    """The onboarding flow: root → discover → confirm → write. Returns (text, buttons, ok, detail).
+
+    `detail` is empty for the read-only screens and non-empty exactly when something was
+    written, which is what tells `estate.py` whether to stamp a proof receipt. A receipt on a
+    screen that changed nothing is noise; a write with no receipt is the thing receipts exist
+    for.
+
+    Adding a project WRITES `projects.json`, so `add` and `add_all` are two-tap, matching
+    `restart`/`restart_confirm`. Before 2026-08-10 they were one tap and reached no handler at
+    all — the panel was built, the buttons were rendered, and `estate:onboard` had no branch.
+    """
+    from gateway.operator_shell.panel_chrome import nav, with_nav
+
+    verb, _, rest = arg.partition(":")
+
+    if verb == "discover":
+        text, buttons = render_onboard_discover()
+        return text, buttons, True, ""
+
+    if verb == "add" and rest:
+        known = {d["name"] for d in _discover_unregistered()}
+        if rest not in known:
+            return (
+                f"⚠️ *{rest}* is not an unregistered repo.\n\n"
+                "_It may already be in the registry, or the folder is gone. "
+                "Re-run discovery to see the current list._",
+                with_nav([[("🔍 Discover Repos", "estate:onboard:discover")]]),
+                False,
+                "",
+            )
+        return (
+            f"➕ *Register {rest}?*\n\n"
+            "Writes a new entry to `projects.json`: name, type, risk, repos, CI provider.\n\n"
+            "_Reversible only by editing that file — there is no un-register button._",
+            [
+                [("✅ Confirm", f"estate:onboard:add_confirm:{rest}"),
+                 ("✗ Cancel", "estate:onboard:discover")]
+            ],
+            True,
+            "",
+        )
+
+    if verb == "add_confirm" and rest:
+        try:
+            result = onboard_project(rest)
+            err = str((result or {}).get("error") or "")
+        except Exception as exc:  # noqa: BLE001
+            result, err = {}, f"{type(exc).__name__}: {exc}"
+        ok = not err
+        text = (
+            f"✅ *{result.get('name', rest)}* registered\n\n"
+            f"• key `{result.get('key', '?')}`\n"
+            f"• {result.get('status', '?')} · risk {result.get('risk', '?')}\n"
+            f"• CI: {result.get('ci_provider') or 'none'}"
+            if ok else f"⚠️ Could not register *{rest}*\n\n`{err[:200]}`"
+        )
+        buttons = with_nav([
+            [("🗂 Projects", "estate:projects"),
+             ("🔍 Discover Repos", "estate:onboard:discover")],
+        ])
+        return text, buttons, ok, (f"Registered {rest}" if ok else f"Register {rest} failed: {err[:80]}")
+
+    if verb == "add_all":
+        discovered = _discover_unregistered()
+        if not discovered:
+            return (
+                "✅ *Nothing to add* — every git repo under `~/Documents/code` is registered.",
+                with_nav([[("🗂 Projects", "estate:projects")]]),
+                True,
+                "",
+            )
+        listed = "\n".join(f"• {d['name']}" for d in discovered[:12])
+        more = f"\n_+{len(discovered) - 12} more_" if len(discovered) > 12 else ""
+        return (
+            f"📦 *Register all {len(discovered)} repos?*\n\n{listed}{more}\n\n"
+            "_Each becomes a `projects.json` entry. There is no un-register button._",
+            [
+                [("✅ Confirm", "estate:onboard:add_all_confirm"),
+                 ("✗ Cancel", "estate:onboard:discover")]
+            ],
+            True,
+            "",
+        )
+
+    if verb == "add_all_confirm":
+        added, failed = [], []
+        for d in _discover_unregistered():
+            try:
+                result = onboard_project(d["name"])
+                (failed if (result or {}).get("error") else added).append(d["name"])
+            except Exception:  # noqa: BLE001
+                failed.append(d["name"])
+        ok = not failed
+        lines = [f"📦 *Registered {len(added)} repo(s)*", ""]
+        lines += [f"✅ {n}" for n in added[:12]]
+        if failed:
+            lines += [""] + [f"🔴 {n}" for n in failed[:12]]
+        return (
+            "\n".join(lines),
+            with_nav([[("🗂 Projects", "estate:projects")]]),
+            ok,
+            f"Registered {len(added)}, {len(failed)} failed",
+        )
+
+    # Bare `estate:onboard`, or a sub-verb from an older build that no longer exists.
+    text, buttons = render_onboarding()
+    return text, buttons, True, ""

@@ -103,13 +103,13 @@ def render_rsi_panel() -> Tuple[str, List[ButtonRow]]:
     ]
     
     buttons: List[ButtonRow] = [
-        [("🔄 Run Cycle Now", "estate:rsi_run"),
+        [("🔄 Run a learning cycle", "estate:rsi_run"),
          ("🩺 Health", "estate:health")],
-        [("⏸ Pause Learning" if is_active else "▶ Resume Learning", 
-          "estate:rsi_pause" if is_active else "estate:rsi_resume"),
+        [(("⛔ Disarm", "estate:disarm_learning") if is_active
+          else ("🟢 Arm learning", "estate:arm_learning")),
          ("📋 Recent changes", "estate:rsi_changes")],
         [("📅 Weekly Digest", "estate:weekly_digest"),
-         ("🛠 Fix all", "estate:fix_all")],
+         ("🛠 Restart stuck jobs", "estate:fix_all")],
     ]
     
     return "\n".join(lines), with_nav(buttons)

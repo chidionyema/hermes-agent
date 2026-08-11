@@ -303,8 +303,7 @@ class ClientMode:
         buttons: List[ButtonRow] = [
             [("📊 Full Status", f"estate:project:{project_key}"),
              ("📜 Activity", f"estate:activity:{project_key}")],
-            [("💬 Contact Team", "estate:inbox"),
-             ("👤 Switch to Operator", "estate:operator_mode")],
+            [("💬 Contact Team", "estate:inbox")],
         ]
         return "\n".join(lines), with_nav(buttons)
 
