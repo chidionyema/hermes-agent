@@ -155,6 +155,19 @@ def _search_roots() -> list[Path]:
     return [home / "Documents" / "code", home / ".hermes", home]
 
 
+def git_env() -> dict[str, str]:
+    """The environment for every git call here, with git's own vars stripped.
+
+    `git -C <repo>` is NOT authoritative: `GIT_DIR` / `GIT_INDEX_FILE` and
+    friends outrank it. Anything running inside a git hook or a `git` subprocess
+    inherits those pointing at ANOTHER repo, so a status call reports that
+    repo's index against this repo's worktree — every tracked file reads as
+    deleted. Measured here: a session on a fresh repo reported 5263 changed
+    paths because a pre-commit hook had exported `GIT_INDEX_FILE`.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
 def _is_git_repo(path: Path) -> bool:
     # In a git WORKTREE `.git` is a FILE containing `gitdir:`, not a directory.
     # Testing is_dir() here would reject every worktree.
@@ -192,12 +205,12 @@ def repo_head(repo: Path) -> str:
     try:
         out = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--short", "HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, env=git_env(),
         )
         sha = out.stdout.strip() or "?"
         br = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, env=git_env(),
         )
         branch = br.stdout.strip()
         return f"{branch}@{sha}" if branch else sha
@@ -371,7 +384,7 @@ class PiBackend:
         try:
             out = subprocess.run(
                 ["git", "-C", str(self._repo), "status", "--porcelain"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, text=True, timeout=15, env=git_env(),
             )
         except Exception:
             return set()
@@ -410,9 +423,12 @@ class PiBackend:
         # No `except TimeoutExpired` here on purpose: `run_turn` translates it into
         # the one sentence that says the turn was CUT OFF and points at git status.
         # Swallowing it here would hand back a partial log that reads as finished.
+        # git_env() and not the raw environment: the executor runs git itself, and
+        # an inherited GIT_DIR/GIT_INDEX_FILE would point it at a different repo
+        # than the one it was given — see git_env().
         proc = subprocess.run(
             argv, cwd=str(self._repo), capture_output=True, text=True,
-            stdin=subprocess.DEVNULL, timeout=timeout_s,
+            stdin=subprocess.DEVNULL, timeout=timeout_s, env=git_env(),
         )
 
         after = self._dirty()
@@ -506,13 +522,23 @@ _SESSIONS: dict[str, CodingSession] = {}
 
 
 def session_key(source: Any) -> str:
-    """Stable per-conversation key. A forum topic is its own terminal."""
+    """Stable per-conversation key. A forum topic is its own terminal.
+
+    Every field is coerced to `str` before it reaches the key. A typed `/code`
+    arrives as a MessageEvent whose chat_id may be an int; a BUTTON tap arrives as
+    a callback query, where the same chat is a string. Left uncoerced those two
+    produce different keys for one chat — so "⏹ End" would find nothing to end
+    while the session it was rendered from stayed open. The bug is invisible in
+    any test that uses one ingress.
+    """
     platform = getattr(getattr(source, "platform", None), "value", None) or str(
         getattr(source, "platform", "?")
     )
-    chat = getattr(source, "chat_id", "?")
+    chat = getattr(source, "chat_id", None)
     thread = getattr(source, "thread_id", None)
-    return f"code:{platform}:{chat}:{thread or '-'}"
+    chat_s = str(chat) if chat is not None and str(chat) != "" else "?"
+    thread_s = str(thread) if thread is not None and str(thread) != "" else "-"
+    return f"code:{platform}:{chat_s}:{thread_s}"
 
 
 def get(source: Any) -> CodingSession | None:

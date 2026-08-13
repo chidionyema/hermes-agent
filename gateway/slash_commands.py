@@ -2139,12 +2139,17 @@ class GatewaySlashCommandsMixin:
         preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
         return t("gateway.background.started", preview=preview, task_id=task_id)
 
-    async def _handle_code_command(self, event: MessageEvent) -> str:
+    async def _handle_code_command(self, event: MessageEvent) -> Optional[str]:
         """Handle /code — open, inspect or close a coding-agent session.
 
-            /code                     status of this chat's session
+            /code                     the picker (or this chat's session card)
             /code <repo> [backend]    open one (backend defaults to claude)
             /code end                 close it
+
+        A bare `/code` answers with BUTTONS, not prose. The typed form still
+        works and is still tested, but nothing about it has to be remembered:
+        the repo list is derived from disk, so the only recallable token left is
+        the word `/code` itself, which the command menu already offers.
 
         While a session is open, every plain message in this chat is a TURN for
         the coding agent rather than a message for the Hermes brain. That
@@ -2167,17 +2172,26 @@ class GatewaySlashCommandsMixin:
                 f"Nothing was committed — check `git status` there."
             )
 
-        if not args or sub == "status":
-            sess = cs.get(source)
-            if sess is None:
-                others = cs.active_count()
-                extra = f"\n({others} open in other chats.)" if others else ""
-                return (
-                    "No coding session here.\n"
-                    "Open one: `/code prospector` · `/code hermes-agent`"
-                    + extra
+        if sub in {"pi", "minimax", "claude", "cc", "claude-code"} and len(args.split()) == 1:
+            # `/code pi` reads as "use pi", not "open the repo named pi". Show the
+            # picker already on that brain rather than failing with "no repo pi" —
+            # unless a repo really IS called that, in which case the repo wins,
+            # because opening the thing the operator named is never surprising.
+            from gateway.operator_shell import coding_panel
+
+            _names = {p.name for p in await asyncio.to_thread(coding_panel.discover_repos)}
+            if sub not in _names:
+                text, buttons = await asyncio.to_thread(
+                    coding_panel.render_picker,
+                    "pi" if sub in {"pi", "minimax"} else "claude",
                 )
-            return sess.status_line() + "\n_Just type to send a turn. `end` closes._"
+                return await self._send_operator_view(event, text, buttons)
+
+        if not args or sub == "status":
+            from gateway.operator_shell import coding_panel
+
+            text, buttons = await asyncio.to_thread(coding_panel.render_session, source)
+            return await self._send_operator_view(event, text, buttons)
 
         parts = args.split()
         repo_token = parts[0]
@@ -2214,13 +2228,18 @@ class GatewaySlashCommandsMixin:
             self._background_tasks.add(_t)
             _t.add_done_callback(self._background_tasks.discard)
 
+        from gateway.operator_shell import coding_panel
+
         _note = getattr(sess.backend, "note", "")
-        return (
+        text = (
             f"🟢 Session up · `{sess.repo.name}` @ {cs.repo_head(sess.repo)} · "
             f"{sess.backend.name}\n"
             + (f"⚠️ _{_note}_\n" if _note else "")
             + "_Type normally — every message is a turn. `end` closes it._"
         )
+        # Even the typed door hands back the controls, so ending, checking status
+        # or seeing the diff never requires knowing a second command.
+        return await self._send_operator_view(event, text, coding_panel.controls())
 
     async def _send_to_source(self, event: MessageEvent, text: str) -> None:
         """Send a plain message back into the chat the event came from."""

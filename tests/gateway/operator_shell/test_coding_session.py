@@ -143,6 +143,21 @@ def test_key_is_stable_and_thread_scoped():
     assert a != c, "a forum topic must be its own terminal"
 
 
+def test_key_is_the_same_whether_the_ids_arrive_as_ints_or_strings():
+    """Two ingresses, one chat. A typed /code carries Telegram's numeric ids;
+    a button tap carries the same ids as strings off the callback query. If the
+    key does not coerce, "⏹ End" addresses a session that does not exist while
+    the one it was rendered from stays open — and no single-ingress test sees it.
+    """
+    assert cs.session_key(_source(chat=777, thread=12)) == cs.session_key(
+        _source(chat="777", thread="12")
+    )
+    # An empty string and a missing thread are the same absence, not two chats.
+    assert cs.session_key(_source(chat="1", thread="")) == cs.session_key(
+        _source(chat="1", thread=None)
+    )
+
+
 # --------------------------------------------------------------------------- #
 # lifecycle
 # --------------------------------------------------------------------------- #

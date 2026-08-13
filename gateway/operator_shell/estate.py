@@ -198,7 +198,7 @@ def render_panel_view() -> PanelView:
         )
 
 
-def handle_estate_action(action: str, request_id: str = "") -> PanelView:
+def handle_estate_action(action: str, request_id: str = "", source: Any = None) -> PanelView:
     # `now` is the literal word the mission card footer tells the operator to say
     # ("say `now` to force"). Without this alias, typing `now` falls through every
     # `if action == ...` branch and lands in the unknown-action guard, which prints
@@ -254,7 +254,7 @@ def handle_estate_action(action: str, request_id: str = "") -> PanelView:
             pass  # cache miss / error → fall through to live render
 
     try:
-        view = _dispatch(action, request_id)
+        view = _dispatch(action, request_id, source)
     except Exception as exc:
         record(action, request_id, status="error", error=repr(exc),
                ms=(time.time() - t0) * 1000.0)
@@ -427,7 +427,7 @@ def _render_registered_panel(action: str, arg: str, rid: str) -> PanelView:
     )
 
 
-def _dispatch(action: str, request_id: str = "") -> PanelView:
+def _dispatch(action: str, request_id: str = "", source: Any = None) -> PanelView:
     """Dispatch estate:<action> with idempotency + proof receipts."""
     from gateway.operator_shell.proof import (
         check_idempotent,
@@ -460,6 +460,22 @@ def _dispatch(action: str, request_id: str = "") -> PanelView:
             toast="Already handled",
             pin_edit=True,
             proof_receipt=prior.get("proof") or "",
+        )
+
+    # `code` is answered BEFORE the coordinator loads. A coding session is a local
+    # child process in a local repo and needs nothing from the estate bridge, so a
+    # bridge outage must not also take away the operator's ability to open a shell
+    # and fix it — that is precisely the moment they need it.
+    if action == "code":
+        from gateway.operator_shell.coding_panel import handle as _code_handle
+
+        text, buttons, toast, ok = _code_handle(arg, source)
+        return PanelView(
+            text=text,
+            buttons=buttons,
+            toast=toast,
+            ok=ok,
+            proof_receipt=_proof("code", "done" if ok else "failed", toast, request_id=rid),
         )
 
     try:

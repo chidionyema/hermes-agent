@@ -4478,7 +4478,20 @@ class TelegramAdapter(BasePlatformAdapter):
                     except Exception:
                         pass
 
-                view = await asyncio.to_thread(handle_estate_action, action, rid)
+                # WHICH CHAT tapped. Almost every panel is estate-wide and does not
+                # care, but a coding session is keyed on (platform, chat, thread) —
+                # without this, a tap on "⏹ End" has no way to tell whose session it
+                # is ending. Built here rather than passed as an event because a
+                # callback query is not a MessageEvent; `coding_session.session_key`
+                # reads these three attributes and nothing else.
+                from types import SimpleNamespace as _NS
+
+                _tap_source = _NS(
+                    platform=Platform.TELEGRAM,
+                    chat_id=str(query_chat_id) if query_chat_id is not None else "",
+                    thread_id=str(query_thread_id) if query_thread_id is not None else None,
+                )
+                view = await asyncio.to_thread(handle_estate_action, action, rid, _tap_source)
 
                 # Side effects that need the adapter / gateway runner
                 if getattr(view, "needs_cron_topic_setup", False):
