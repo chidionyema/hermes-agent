@@ -10,6 +10,9 @@ from hermes_cli.cron import cron_command
 
 @pytest.fixture()
 def tmp_cron_dir(tmp_path, monkeypatch):
+    # HERMES_DIR too: `_record_missed_run` writes the operational alert log
+    # `HERMES_DIR/logs/alerts/missed_runs.jsonl`, outside the three cron paths.
+    monkeypatch.setattr("cron.jobs.HERMES_DIR", tmp_path)
     monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
     monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
     monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")

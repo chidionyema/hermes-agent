@@ -179,7 +179,17 @@ class TestComputeNextRun:
 
 @pytest.fixture()
 def tmp_cron_dir(tmp_path, monkeypatch):
-    """Redirect cron storage to a temp directory."""
+    """Redirect cron storage to a temp directory.
+
+    HERMES_DIR too, not just the three cron paths: `_record_missed_run`
+    (`cron/jobs.py:1085`) writes `HERMES_DIR/logs/alerts/missed_runs.jsonl`, and
+    that file is an OPERATIONAL alert log a human reads. Isolating only
+    CRON_DIR/JOBS_FILE/OUTPUT_DIR let the stale-job tests append fixture jobs to
+    the real one — found 2026-08-13 with the row still in it:
+    `{"job": "Stale", "scheduled_for": "2026-08-13T06:51:27", "action": "skipped"}`,
+    a missed run that never happened, sitting beside 177 real ones.
+    """
+    monkeypatch.setattr("cron.jobs.HERMES_DIR", tmp_path)
     monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
     monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
     monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")
@@ -703,6 +713,69 @@ class TestGetDueJobs:
         from cron.jobs import _ensure_aware, _hermes_now
         next_dt = _ensure_aware(datetime.fromisoformat(updated["next_run_at"]))
         assert next_dt > _hermes_now()
+
+    def _make_late(self, minutes: int, **fields):
+        """A job whose scheduled time is `minutes` in the past, beyond its grace."""
+        job = create_job(prompt="Late", schedule="every 1h")
+        jobs = load_jobs()
+        jobs[0]["next_run_at"] = (datetime.now() - timedelta(minutes=minutes)).isoformat()
+        jobs[0].update(fields)
+        save_jobs(jobs)
+        return job
+
+    def test_catch_up_without_a_window_still_runs_however_late(self, tmp_cron_dir):
+        """No `catch_up_window_s` = unbounded, i.e. exactly the old behaviour.
+
+        The bounded-window change must not silently start dropping runs for the
+        24 live jobs that set `catch_up` and no window.
+        """
+        job = self._make_late(46 * 60, catch_up=True)          # 46 hours late
+        due = get_due_jobs()
+        assert [j["id"] for j in due] == [job["id"]]
+
+    def test_catch_up_inside_the_window_runs_late(self, tmp_cron_dir):
+        """Late but still true: run it. 2h late, 4h window (the live digest setting)."""
+        job = self._make_late(120, catch_up=True, catch_up_window_s=14400)
+        due = get_due_jobs()
+        assert [j["id"] for j in due] == [job["id"]]
+
+    def test_catch_up_beyond_the_window_is_dropped_and_recorded(self, tmp_cron_dir):
+        """Beyond the window a "late run" is misinformation, not a late briefing.
+
+        Measured 2026-08-13: the host slept 08-11 09:06 → 08-13 07:11, so the 9am
+        digest of "yesterday's stats" woke 46h late. Dropping it is right — but
+        dropping it SILENTLY is how a job goes dark for two days, so the drop is
+        recorded in job state and in the alert log.
+        """
+        job = self._make_late(46 * 60, catch_up=True, catch_up_window_s=14400)
+        assert get_due_jobs() == []
+
+        updated = get_job(job["id"])
+        from cron.jobs import _ensure_aware, _hermes_now
+        assert _ensure_aware(datetime.fromisoformat(updated["next_run_at"])) > _hermes_now()
+        assert updated["missed_runs"] == 1
+        assert updated.get("last_missed_at")
+
+        alerts = tmp_cron_dir / "logs" / "alerts" / "missed_runs.jsonl"
+        assert alerts.is_file(), "the drop left no alert — this is the silent failure itself"
+        import json as _json
+        rows = [_json.loads(ln) for ln in alerts.read_text().splitlines() if ln.strip()]
+        assert [r["action"] for r in rows] == ["skipped"]
+
+    def test_a_missed_run_alert_never_lands_in_the_real_alert_log(self, tmp_cron_dir):
+        """The fixture must own the alert path, not just the jobs file.
+
+        `{"job": "Stale", "action": "skipped"}` was found in the production
+        `~/.hermes/logs/alerts/missed_runs.jsonl` on 2026-08-13 — written by
+        `test_stale_past_due_skipped`, a missed run that never happened sitting
+        beside 177 real ones. Isolating CRON_DIR/JOBS_FILE/OUTPUT_DIR was not
+        enough because the alert log hangs off HERMES_DIR.
+        """
+        import cron.jobs as jobs_mod
+        assert jobs_mod.HERMES_DIR == tmp_cron_dir
+        self._make_late(46 * 60)                      # no catch_up -> dropped
+        assert get_due_jobs() == []
+        assert (tmp_cron_dir / "logs" / "alerts" / "missed_runs.jsonl").is_file()
 
     def test_future_not_returned(self, tmp_cron_dir):
         create_job(prompt="Not yet", schedule="every 1h")
