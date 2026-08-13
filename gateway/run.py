@@ -6823,7 +6823,24 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         #   {"action": "allow"}   /   None          -> normal dispatch
         # Hook runs BEFORE auth so plugins can handle unauthorized senders
         # (e.g. customer handover ingest) without triggering the pairing flow.
-        if not is_internal:
+        # An open coding session outranks the plugin hook for PLAIN text. The
+        # otto-inbound plugin answers `pre_gateway_dispatch` with {"action":
+        # "skip"} for phrases it recognises as CEO verbs and returns None below —
+        # ~1700 lines before the coding-session interception ever runs. Without
+        # this bypass the operator types an ordinary instruction into an open
+        # terminal, the plugin swallows it, and the coding agent looks alive while
+        # receiving nothing. Slash commands are deliberately NOT bypassed: they
+        # are dispatched further down and must keep working mid-session.
+        _coding_session_active = False
+        if not is_internal and not (event.text or "").lstrip().startswith("/"):
+            try:
+                from gateway.operator_shell import coding_session as _coding
+                _coding_session_active = _coding.get(source) is not None
+            except Exception:
+                logger.warning("coding-session precedence check failed", exc_info=True)
+                _coding_session_active = False
+
+        if not is_internal and not _coding_session_active:
             try:
                 from hermes_cli.plugins import invoke_hook as _invoke_hook
                 _hook_results = _invoke_hook(
@@ -7591,6 +7608,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _cmd_def = _resolve_cmd(command) if command else None
                     canonical = _cmd_def.name if _cmd_def else command
                     break
+
+        if canonical == "code":
+            return await self._handle_code_command(event)
 
         if canonical == "new":
             if self._is_telegram_topic_root_lobby(source):
@@ -8492,6 +8512,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _raw_text.startswith("🎙️"):
                 _from_voice = True
                 _raw_text = _raw_text.lstrip("🎙️").strip().strip('"')
+
+            # An explicitly-opened coding session outranks every heuristic below.
+            # The operator asked for a terminal, so "run the tests" is a TURN for
+            # the agent, not a match for the estate router. Placed ahead of
+            # match_natural_op deliberately: a phrase matcher that runs first
+            # would silently swallow the most ordinary coding instructions.
+            if _raw_text:
+                from gateway.operator_shell import coding_session as _coding
+                _code_sess = _coding.get(source)
+                if _code_sess is not None:
+                    await self._run_coding_turn(event, _code_sess, _raw_text)
+                    return
 
             if source.platform == _OpPlatform.TELEGRAM and _raw_text:
                 # Plugin already owns CEO verbs on Telegram text path.

@@ -2139,6 +2139,139 @@ class GatewaySlashCommandsMixin:
         preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
         return t("gateway.background.started", preview=preview, task_id=task_id)
 
+    async def _handle_code_command(self, event: MessageEvent) -> str:
+        """Handle /code — open, inspect or close a coding-agent session.
+
+            /code                     status of this chat's session
+            /code <repo> [backend]    open one (backend defaults to claude)
+            /code end                 close it
+
+        While a session is open, every plain message in this chat is a TURN for
+        the coding agent rather than a message for the Hermes brain. That
+        interception lives in `gateway/run.py`, deliberately ahead of the
+        natural-ops matcher — an explicitly-opened session must outrank a phrase
+        heuristic, or "run the tests" gets eaten by the estate router.
+        """
+        from gateway.operator_shell import coding_session as cs
+
+        args = (event.get_command_args() or "").strip()
+        source = event.source
+        sub = args.split()[0].lower() if args else ""
+
+        if sub in {"end", "stop", "close", "quit", "exit"}:
+            sess = cs.close_session(source)
+            if sess is None:
+                return "No coding session open here."
+            return (
+                f"👋 Closed `{sess.repo.name}` after {sess.turns} turn(s). "
+                f"Nothing was committed — check `git status` there."
+            )
+
+        if not args or sub == "status":
+            sess = cs.get(source)
+            if sess is None:
+                others = cs.active_count()
+                extra = f"\n({others} open in other chats.)" if others else ""
+                return (
+                    "No coding session here.\n"
+                    "Open one: `/code prospector` · `/code hermes-agent`"
+                    + extra
+                )
+            return sess.status_line() + "\n_Just type to send a turn. `end` closes._"
+
+        parts = args.split()
+        repo_token = parts[0]
+        backend_name = parts[1] if len(parts) > 1 else "claude"
+
+        try:
+            sess = await asyncio.to_thread(
+                cs.open_session, source, repo_token, backend_name
+            )
+        except cs.CodingSessionError as exc:
+            return f"⚠️ {exc}"
+        except Exception as exc:  # a broken backend must not look like silence
+            logger.exception("opening coding session failed")
+            return f"⚠️ Could not open the session: {type(exc).__name__}: {exc}"
+
+        # Warm up in the background: the FIRST ACP turn absorbs asynchronous MCP
+        # registration (~30s measured). Paying it now, while the operator is still
+        # typing, is the difference between "seamless" and a 30s stall on the first
+        # real instruction.
+        if os.getenv("HERMES_CODE_WARMUP", "1").strip().lower() not in {"0", "false", "no", "off"}:
+            async def _warm():
+                try:
+                    await cs.run_turn(sess, "Reply with the single word READY and nothing else.")
+                except Exception:
+                    logger.warning("coding session warm-up failed", exc_info=True)
+            _t = asyncio.create_task(_warm())
+            self._background_tasks.add(_t)
+            _t.add_done_callback(self._background_tasks.discard)
+
+        return (
+            f"🟢 Session up · `{sess.repo.name}` @ {cs.repo_head(sess.repo)} · "
+            f"{sess.backend.name}\n"
+            "_Type normally — every message is a turn. `end` closes it._"
+        )
+
+    async def _send_to_source(self, event: MessageEvent, text: str) -> None:
+        """Send a plain message back into the chat the event came from."""
+        source = event.source
+        adapter = self.adapters.get(source.platform)
+        if adapter is None:
+            logger.warning("no adapter for %s — dropping coding-session reply", source.platform)
+            return
+        meta = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))
+        await adapter.send(source.chat_id, text, metadata=meta)
+
+    async def _run_coding_turn(self, event: MessageEvent, sess, raw_text: str) -> None:
+        """One plain message inside an open coding session → one agent turn."""
+        from gateway.operator_shell import coding_session as cs
+
+        text = raw_text.strip()
+        if text.lower() in cs.CLOSE_WORDS:
+            closed = cs.close_session(event.source)
+            turns = closed.turns if closed else 0
+            name = closed.repo.name if closed else "?"
+            await self._send_to_source(
+                event,
+                f"👋 Closed `{name}` after {turns} turn(s). "
+                "Nothing was committed — check `git status` there.",
+            )
+            return
+
+        if text.lower() in {"status", "/status"}:
+            await self._send_to_source(event, sess.status_line())
+            return
+
+        # A turn can legitimately run for minutes. Say so, or silence reads as a
+        # dead bot and the operator sends the message again — straight into the
+        # per-session lock, doubling the work.
+        if sess.turns == 0:
+            await self._send_to_source(
+                event, "⋯ first turn — the agent is starting and registering its tools."
+            )
+        else:
+            await self._send_to_source(event, "⋯ working")
+
+        try:
+            reply = await cs.run_turn(sess, text)
+        except cs.CodingSessionError as exc:
+            await self._send_to_source(event, str(exc))
+            return
+        except Exception as exc:
+            logger.exception("coding turn failed")
+            # Drop the session rather than leave a half-dead child that answers
+            # nothing: a backend that raised has no guarantee its session survived.
+            cs.close_session(event.source)
+            await self._send_to_source(
+                event,
+                f"🔴 The coding session failed and was closed: {type(exc).__name__}: {exc}\n"
+                f"Reopen with `/code {sess.repo.name}`.",
+            )
+            return
+
+        await self._send_to_source(event, reply)
+
     async def _handle_reasoning_command(self, event: MessageEvent) -> str:
         """Handle /reasoning command — manage reasoning effort and display toggle.
 
