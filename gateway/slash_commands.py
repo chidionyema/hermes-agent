@@ -2197,7 +2197,14 @@ class GatewaySlashCommandsMixin:
         # registration (~30s measured). Paying it now, while the operator is still
         # typing, is the difference between "seamless" and a 30s stall on the first
         # real instruction.
-        if os.getenv("HERMES_CODE_WARMUP", "1").strip().lower() not in {"0", "false", "no", "off"}:
+        #
+        # Only for a backend that HAS a cold start. On the one-shot `pi` executor
+        # the same warm-up is a metered third-party call that answers "READY",
+        # edits nothing and buys nothing — so the backend declares which it is
+        # rather than this handler guessing from its name.
+        _warm_needed = getattr(sess.backend, "needs_warmup", True)
+        _warm_enabled = os.getenv("HERMES_CODE_WARMUP", "1").strip().lower() not in {"0", "false", "no", "off"}
+        if _warm_needed and _warm_enabled:
             async def _warm():
                 try:
                     await cs.run_turn(sess, "Reply with the single word READY and nothing else.")
@@ -2207,10 +2214,12 @@ class GatewaySlashCommandsMixin:
             self._background_tasks.add(_t)
             _t.add_done_callback(self._background_tasks.discard)
 
+        _note = getattr(sess.backend, "note", "")
         return (
             f"🟢 Session up · `{sess.repo.name}` @ {cs.repo_head(sess.repo)} · "
             f"{sess.backend.name}\n"
-            "_Type normally — every message is a turn. `end` closes it._"
+            + (f"⚠️ _{_note}_\n" if _note else "")
+            + "_Type normally — every message is a turn. `end` closes it._"
         )
 
     async def _send_to_source(self, event: MessageEvent, text: str) -> None:

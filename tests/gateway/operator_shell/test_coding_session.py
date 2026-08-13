@@ -331,17 +331,233 @@ def test_claude_backend_says_so_when_the_binary_is_missing(monkeypatch, repo):
     assert "npm i -g" in str(exc.value)
 
 
-def test_pi_backend_is_declared_unbuilt_rather_than_silently_wrong():
-    """Phase 2 flips this test. Until then `pi` must refuse, not fall back to
-    claude — a backend that silently substitutes another brain is undetectable."""
-    with pytest.raises(cs.CodingSessionError) as exc:
-        cs.build_backend("pi")
-    assert "not wired yet" in str(exc.value)
-
-
 def test_unknown_backend_is_refused():
     with pytest.raises(cs.CodingSessionError):
         cs.build_backend("gpt")
+
+
+# --------------------------------------------------------------------------- #
+# pi backend
+# --------------------------------------------------------------------------- #
+
+def _pi_ok(stdout="changed a.py", rc=0, stderr=""):
+    return subprocess.CompletedProcess(args=["pi"], returncode=rc, stdout=stdout, stderr=stderr)
+
+
+@pytest.fixture
+def pi(monkeypatch, repo):
+    """A started PiBackend whose subprocess and git status are both fakes."""
+    monkeypatch.setattr(cs.PiBackend, "binary", staticmethod(lambda: "/usr/local/bin/pi"))
+    b = cs.PiBackend()
+    b.start(repo)
+    return b
+
+
+@pytest.mark.parametrize("name", ["pi", "minimax", "PI"])
+def test_pi_is_built_and_is_not_claude(name, monkeypatch):
+    """A backend that silently substitutes another brain is undetectable, so the
+    one thing that must never happen is `pi` returning a ClaudeAcpBackend."""
+    monkeypatch.setattr(cs.PiBackend, "binary", staticmethod(lambda: "/usr/local/bin/pi"))
+    b = cs.build_backend(name)
+    assert isinstance(b, cs.PiBackend)
+    assert b.name == "pi"
+
+
+def test_pi_says_so_when_the_binary_is_missing(monkeypatch, repo):
+    monkeypatch.setattr(cs.PiBackend, "binary", staticmethod(lambda: None))
+    with pytest.raises(cs.CodingSessionError) as exc:
+        cs.PiBackend().start(repo)
+    assert "not on PATH" in str(exc.value)
+    assert "claude" in str(exc.value), "it must name the backend that still works"
+
+
+def test_pi_refuses_an_unversioned_tree(monkeypatch, tmp_path):
+    """A non-interactive executor with --approve writing where there is no diff
+    to read leaves no audit trail at all."""
+    monkeypatch.setattr(cs.PiBackend, "binary", staticmethod(lambda: "/usr/local/bin/pi"))
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(cs.CodingSessionError) as exc:
+        cs.PiBackend().start(plain)
+    assert "not a git repository" in str(exc.value)
+
+
+def test_pi_argv_carries_the_three_load_bearing_flags(pi, monkeypatch):
+    """`-ne` or pi never exits; `--approve` or it blocks on a prompt nobody can
+    answer; `--no-session` or state leaks between two operators' chats."""
+    seen: dict = {}
+
+    def _run(argv, **kw):
+        seen["argv"] = argv
+        seen["kw"] = kw
+        return _pi_ok()
+
+    monkeypatch.setattr(cs.subprocess, "run", _run)
+    monkeypatch.setattr(cs.PiBackend, "_dirty", lambda self: set())
+    pi.turn("add a docstring", timeout_s=42.0)
+
+    assert seen["argv"][:3] == ["pi", "-p", "-ne"]
+    assert "--approve" in seen["argv"]
+    assert "--no-session" in seen["argv"]
+    assert seen["kw"]["timeout"] == 42.0, "the turn cap must reach the child"
+    assert seen["kw"]["cwd"] == str(pi._repo)
+    assert "add a docstring" in seen["argv"][-1]
+
+
+def test_pi_turn_timeout_is_not_swallowed(pi, monkeypatch):
+    """`run_turn` owns the 'the turn was cut off' sentence. Catching the timeout
+    here would hand back a partial work log that reads as a finished one."""
+    def _run(argv, **kw):
+        raise subprocess.TimeoutExpired(cmd="pi", timeout=kw.get("timeout", 1))
+
+    monkeypatch.setattr(cs.subprocess, "run", _run)
+    monkeypatch.setattr(cs.PiBackend, "_dirty", lambda self: set())
+    with pytest.raises(subprocess.TimeoutExpired):
+        pi.turn("do a thing", timeout_s=1.0)
+
+
+def test_pi_needs_no_warmup_and_says_it_has_no_memory():
+    """The warm-up exists to absorb ~30s of ACP MCP registration. On a one-shot
+    executor it is a metered call that answers READY and edits nothing."""
+    assert cs.PiBackend.needs_warmup is False
+    assert cs.ClaudeAcpBackend.needs_warmup is True
+    assert "no memory" in cs.PiBackend.note
+
+
+def test_pi_note_is_on_every_status_line_not_just_the_banner(repo, monkeypatch):
+    monkeypatch.setattr(cs.PiBackend, "binary", staticmethod(lambda: "/usr/local/bin/pi"))
+    sess = cs.open_session(_source(), str(repo), "pi")
+    assert "no memory" in sess.status_line()
+
+
+def test_pi_reports_success_with_no_files_as_unproven(pi, monkeypatch):
+    monkeypatch.setattr(cs.subprocess, "run", lambda argv, **kw: _pi_ok("all done!"))
+    monkeypatch.setattr(cs.PiBackend, "_dirty", lambda self: set())
+    out = pi.turn("do nothing", timeout_s=5)
+    assert "changed NO files" in out
+    assert "unproven" in out
+
+
+def test_pi_surfaces_a_nonzero_exit_rather_than_the_log_alone(pi, monkeypatch):
+    monkeypatch.setattr(
+        cs.subprocess, "run",
+        lambda argv, **kw: _pi_ok("partial work", rc=2, stderr="boom"),
+    )
+    monkeypatch.setattr(cs.PiBackend, "_dirty", lambda self: set())
+    out = pi.turn("break something", timeout_s=5)
+    assert "exited 2" in out
+    assert "unfinished" in out
+    assert "boom" in out
+
+
+# ---- the founder fence ----------------------------------------------------- #
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "update the stripe webhook handler",
+        "fix pricing.py",
+        "add a field to store_platform/src/Store.Api/Auth/TokenService.cs",
+        "write an alembic migration",
+        "rename CheckoutEndpoints",  # no trailing \b: CamelCase gives no non-word char
+    ],
+)
+def test_fence_refuses_money_identity_contract_migration_instructions(pi, instruction):
+    with pytest.raises(cs.CodingSessionError) as exc:
+        pi.turn(instruction, timeout_s=5)
+    assert "Founder fence" in str(exc.value)
+    assert "never leaves Claude" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "ok",
+    [
+        "restyle the storefront facet bar",
+        "add a screenshot harness for store_platform",
+        "fix the catalogue card spacing",
+    ],
+)
+def test_fence_does_not_refuse_ordinary_work(pi, monkeypatch, ok):
+    """A fence that blocks work it was never meant to block gets routed around by
+    hand, which is how it stops being a fence. Banning the `store_platform/`
+    directory refused 414 files in order to protect roughly 40."""
+    monkeypatch.setattr(cs.subprocess, "run", lambda argv, **kw: _pi_ok("ok"))
+    monkeypatch.setattr(cs.PiBackend, "_dirty", lambda self: set())
+    assert cs.fence_violations(ok) == []
+    assert "Founder fence" not in pi.turn(ok, timeout_s=5)
+
+
+def test_fence_runs_again_on_what_git_says_was_written(pi, monkeypatch):
+    """THE fence claim. The pre-check reads only prose: 'update the payment
+    provider adapter' contains no fenced token, so it passes — and the executor is
+    then free to write StripeProvider.cs unchecked. git cannot be talked around.
+    """
+    instruction = "update the payment provider adapter"
+    assert cs.fence_violations(instruction) == [], "the prose check must genuinely pass here"
+
+    written = "store_platform/src/Store.Api/Payments/StripeProvider.cs"
+    calls = {"n": 0}
+
+    def _dirty(self):
+        calls["n"] += 1
+        return set() if calls["n"] == 1 else {written}
+
+    monkeypatch.setattr(cs.subprocess, "run", lambda argv, **kw: _pi_ok("edited it"))
+    monkeypatch.setattr(cs.PiBackend, "_dirty", _dirty)
+    out = pi.turn(instruction, timeout_s=5)
+
+    assert "FENCE BREACH" in out
+    assert written in out
+    assert "git -C" in out and "checkout --" in out, "the revert must be one paste away"
+
+
+def test_a_fence_breach_is_flagged_not_auto_reverted(pi, monkeypatch):
+    """A revert would also destroy the legitimate half of the same run. A silent
+    destructive action is worse than an unmissable flag."""
+    seen = []
+
+    def _run(argv, **kw):
+        seen.append(argv)
+        return _pi_ok("edited it")
+
+    calls = {"n": 0}
+
+    def _dirty(self):
+        calls["n"] += 1
+        return set() if calls["n"] == 1 else {"src/Auth/Login.cs"}
+
+    monkeypatch.setattr(cs.subprocess, "run", _run)
+    monkeypatch.setattr(cs.PiBackend, "_dirty", _dirty)
+    pi.turn("tidy the login screen copy", timeout_s=5)
+
+    assert len(seen) == 1, "exactly the executor ran — nothing reverted anything"
+    assert all("checkout" not in str(a) for a in seen)
+
+
+def test_fence_has_not_drifted_from_the_pi_bridge():
+    """The patterns are COPIED from ~/.claude/mcp/pi_bridge.py rather than
+    imported, so the gateway cannot fail open (or fail to start) because a file
+    outside this repo moved. This is the half a 'keep these in sync' comment
+    cannot do. Skipped where the bridge is not installed — CI has no estate.
+    """
+    bridge = Path.home() / ".claude" / "mcp" / "pi_bridge.py"
+    if not bridge.exists():
+        pytest.skip("pi_bridge.py not installed on this box")
+    import ast
+
+    tree = ast.parse(bridge.read_text(encoding="utf-8"))
+    theirs = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and any(
+            getattr(t, "id", None) == "FENCE_PATTERNS" for t in node.targets
+        ):
+            theirs = ast.literal_eval(node.value)
+            break
+    assert theirs is not None, "pi_bridge.py no longer declares FENCE_PATTERNS"
+    assert sorted(cs.FENCE_PATTERNS) == sorted(theirs), (
+        "the coding-session fence has drifted from the pi bridge's; "
+        "reconcile them deliberately, in both files"
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -11,7 +11,10 @@ Holding the process and the sessionId is the whole point: measured 17.1s spawnin
 turn 1 vs 4.6s on turn 2 against the same pid + sessionId.
 
 Backends are pluggable behind `Backend` so a second flavour (pi) is one class, not
-a second copy of the session machinery.
+a second copy of the session machinery. The two are NOT interchangeable and the
+difference is stated to the operator rather than hidden: the Claude backend holds
+a real conversation, `pi` is one non-interactive shot per turn and starts cold
+every time.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -67,8 +71,76 @@ MAX_SESSIONS = _env_int("HERMES_CODE_MAX_SESSIONS", 2)
 CLOSE_WORDS = {"/end", "end", "exit", "quit", "done", "/quit", "/exit", "end session"}
 
 
+# The pi executor is a metered third-party brain writing to the tree. A cheap
+# executor with a 900s default would spend for 15 minutes on a phone message.
+PI_MODEL = os.getenv("HERMES_CODE_PI_MODEL", "").strip() or "minimax/MiniMax-M3"
+# How much of pi's own report reaches Telegram. Its stdout is a full work log.
+PI_REPORT_CHARS = _env_int("HERMES_CODE_PI_REPORT_CHARS", 2500)
+
+
 class CodingSessionError(RuntimeError):
     """Anything the operator needs told in plain words."""
+
+
+# --------------------------------------------------------------------------- #
+# Founder fence — money rail / identity / contract / migrations never leave Claude
+# --------------------------------------------------------------------------- #
+#
+# `/code prospector pi` puts MiniMax at a shell in a real repo with `--approve`.
+# The estate's standing rule is that money-rail, identity, contract and migration
+# work never leaves Claude, and the pi MCP bridge enforces it in code rather than
+# in prose. This surface needs the same fence for the same reason, so the pattern
+# list is COPIED from `~/.claude/mcp/pi_bridge.py` rather than imported: the
+# gateway must not fail open (or fail to start) because a file outside the repo
+# moved. `test_fence_has_not_drifted_from_the_pi_bridge` reads that file when it
+# is present and fails on any divergence, which is the half that cannot be
+# achieved by writing "keep these in sync" in a comment.
+#
+# Two properties of the patterns are deliberate and were each paid for:
+#   * They name the money SURFACE, not its parent directory. Banning a directory
+#     refused 414 files to protect ~40, and a fence that blocks work it was never
+#     meant to block gets routed around by hand — which deletes it.
+#   * No TRAILING \b on the word patterns: it needs a non-word character, and
+#     CamelCase never gives one, so `\bcheckout\b` silently missed
+#     CheckoutEndpoints.cs. Leading \b only.
+FENCE_PATTERNS = [
+    # the money rail proper
+    r"\bbridge\.py\b",
+    r"\bpricing\.py\b",
+    r"/Payments?/",
+    r"\bstripe",
+    r"\bpaddle",
+    r"\bcheckout",
+    r"\bwebhook",
+    r"\bentitlement",
+    r"PackPrice",
+    r"MoneyRail",
+    # identity
+    r"/Auth/",
+    r"/Identity/",
+    # contract
+    r"/Contracts?/",
+    # migrations
+    r"\bmigrations?/",
+    r"\balembic\b",
+]
+FENCE_RE = re.compile("|".join(FENCE_PATTERNS), re.IGNORECASE)
+
+
+def fence_violations(text: str) -> list[str]:
+    """Fenced tokens in an operator's instruction. A prose check, so evadable."""
+    return sorted({m.group(0) for m in FENCE_RE.finditer(text or "")})
+
+
+def fenced_paths(paths: list[str]) -> list[str]:
+    """The subset of `paths` on fenced surface. Exact, unlike the prose check.
+
+    The pre-check reads only what the operator TYPED, and "update the payment
+    provider adapter" contains no fenced token — so it passes, and the executor
+    is then free to write StripeProvider.cs unchecked. git cannot be talked
+    around, which is why the fence runs a second time on what was written.
+    """
+    return [p for p in paths if FENCE_RE.search(p)]
 
 
 # --------------------------------------------------------------------------- #
@@ -139,6 +211,12 @@ def repo_head(repo: Path) -> str:
 
 class Backend(Protocol):
     name: str
+    # Whether opening a session should burn a throwaway turn to warm the child.
+    # It is worth ~30s of MCP registration on ACP and worth nothing — a paid call
+    # that answers "READY" and edits nothing — on a one-shot executor.
+    needs_warmup: bool
+    # One clause for the status line, when the backend behaves unlike the other.
+    note: str
 
     def start(self, repo: Path) -> None: ...
     def turn(self, prompt: str, *, timeout_s: float) -> str: ...
@@ -161,6 +239,8 @@ class ClaudeAcpBackend:
     """
 
     name = "claude"
+    needs_warmup = True
+    note = ""
 
     def __init__(self, *, mcp_hermes: bool | None = None) -> None:
         self._client: Any = None
@@ -227,15 +307,164 @@ class ClaudeAcpBackend:
                 logger.warning("ACP client close failed", exc_info=True)
 
 
+class PiBackend:
+    """The cheap executor: `pi -p -ne` on MiniMax, one non-interactive shot per turn.
+
+    There is NO held child here, and that is not an omission of the session
+    machinery — `pi -p` is non-interactive and is run `--no-session` deliberately.
+    Each turn therefore starts COLD: it sees the repo, never the conversation. A
+    backend that quietly forgot the last three turns underneath a transcript that
+    looks continuous is indistinguishable from an agent ignoring the operator, so
+    `note` says it on the open banner and on every status line. Give it whole,
+    self-contained instructions; use `claude` when the work needs a conversation.
+
+    Three flags are load-bearing, each measured rather than chosen:
+
+    * `-ne` (no extensions) — without it pi completes the edit and then never
+      exits (observed: work done, process still alive at a 300s timeout). With
+      it: exit 0 in 7s. A held-open child would eat the turn cap every time.
+    * `--no-session` — nothing to resume, and no session state to leak between
+      two operators' chats.
+    * `--approve` — a non-interactive run has nobody to answer the edit prompt,
+      so without it the executor blocks until the timeout and reports nothing.
+
+    The founder fence runs twice: once on what the operator typed, and again on
+    what git says was actually written. The second is the one that cannot be
+    talked around. A breach is FLAGGED, never auto-reverted — a revert would also
+    destroy the legitimate half of the same run, and a silent destructive action
+    is worse than an unmissable flag when the next step is reading the diff.
+    """
+
+    name = "pi"
+    needs_warmup = False
+    note = "no memory between turns — send whole instructions"
+
+    def __init__(self, *, model: str | None = None) -> None:
+        self._repo: Path | None = None
+        self._model = (model or PI_MODEL).strip()
+        self._closed = False
+
+    @staticmethod
+    def binary() -> str | None:
+        return shutil.which("pi")
+
+    def start(self, repo: Path) -> None:
+        if not self.binary():
+            raise CodingSessionError(
+                "`pi` is not on PATH. The pi backend shells out to the pi CLI; "
+                "use `/code <repo> claude` instead."
+            )
+        # A git repo is the only thing that makes a non-interactive executor's
+        # writes reviewable and reversible. `resolve_repo` already requires one;
+        # this is the check at the point of USE, so a backend built by hand in a
+        # test or a future caller cannot skip it.
+        if not _is_git_repo(repo):
+            raise CodingSessionError(
+                f"`{repo}` is not a git repository. Refusing to let a "
+                "non-interactive executor write to an unversioned tree — the "
+                "diff is the entire audit trail."
+            )
+        self._repo = repo
+
+    def _dirty(self) -> set[str]:
+        """Paths git already considers dirty. Never raises — this is bookkeeping."""
+        try:
+            out = subprocess.run(
+                ["git", "-C", str(self._repo), "status", "--porcelain"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except Exception:
+            return set()
+        return {ln[3:] for ln in out.stdout.splitlines() if len(ln) > 3}
+
+    def turn(self, prompt: str, *, timeout_s: float) -> str:
+        if self._repo is None or self._closed:
+            raise CodingSessionError("Session was never started.")
+
+        hits = fence_violations(prompt)
+        if hits:
+            raise CodingSessionError(
+                "⛔ Founder fence — that instruction touches money-rail / identity "
+                f"/ contract / migration surface: {', '.join(hits)}\n"
+                "That work never leaves Claude. Open a `claude` session for it."
+            )
+
+        before = self._dirty()
+        argv = [
+            "pi", "-p", "-ne",
+            "--provider", self._model.split("/", 1)[0],
+            "--model", self._model.split("/", 1)[-1],
+            "--no-session",
+            "--approve",
+            "--no-context-files",
+            "You are the EXECUTOR working in this repository.\n"
+            "Implement exactly what is asked — do NOT redesign, do NOT expand scope.\n"
+            "Match the surrounding code's style, naming and comment density.\n"
+            "Read every file before you edit it. If the instruction is ambiguous or\n"
+            "wrong, STOP and report the ambiguity instead of guessing.\n"
+            "Report every file you changed and what you changed in it. If you skipped\n"
+            "part of it or something did not work, say so explicitly — a verifier\n"
+            "checks your work.\n\n"
+            "=== INSTRUCTION ===\n" + prompt,
+        ]
+        # No `except TimeoutExpired` here on purpose: `run_turn` translates it into
+        # the one sentence that says the turn was CUT OFF and points at git status.
+        # Swallowing it here would hand back a partial log that reads as finished.
+        proc = subprocess.run(
+            argv, cwd=str(self._repo), capture_output=True, text=True,
+            stdin=subprocess.DEVNULL, timeout=timeout_s,
+        )
+
+        after = self._dirty()
+        touched = sorted(after - before)
+        return self._report(proc, touched)
+
+    def _report(self, proc: subprocess.CompletedProcess, touched: list[str]) -> str:
+        head: list[str] = []
+        breaches = fenced_paths(touched)
+        if breaches:
+            head.append(
+                "🚨 FENCE BREACH — the executor wrote to money-rail / identity / "
+                "contract / migration surface:\n"
+                + "\n".join(f"  · {p}" for p in breaches)
+                + "\nThe instruction named none of it, so the pre-check could not "
+                "see it. Review these line by line before anything else, and "
+                "revert unless you are certain:\n"
+                f"  `git -C {self._repo} checkout -- {' '.join(breaches)}`"
+            )
+        if proc.returncode != 0:
+            head.append(f"⚠️ pi exited {proc.returncode} — treat the report below as unfinished.")
+        if proc.returncode == 0 and not touched:
+            # An executor that reports success and changed nothing is the single
+            # commonest way a "done" report is false.
+            head.append("⚠️ pi reported success but changed NO files. Its report is unproven.")
+
+        body = (proc.stdout or "").strip()
+        if len(body) > PI_REPORT_CHARS:
+            body = body[:PI_REPORT_CHARS] + "\n… (report truncated)"
+        files = "\n".join(f"  · {p}" for p in touched) if touched else "  (none)"
+        tail = f"\n--- files touched ---\n{files}"
+        if proc.returncode != 0 and (proc.stderr or "").strip():
+            tail += "\n--- stderr ---\n" + "\n".join(proc.stderr.strip().splitlines()[-10:])
+        return "\n\n".join([*head, body or "_(pi printed nothing)_"]) + tail
+
+    def alive(self) -> bool:
+        # There is no child to outlive the turn, so "alive" means "still open".
+        # The idle reaper is what ends a pi session; `get()`'s dead-child sweep
+        # has nothing to sweep here.
+        return not self._closed and self._repo is not None
+
+    def close(self) -> None:
+        self._closed = True
+
+
 def build_backend(name: str) -> Backend:
     name = (name or "claude").strip().lower()
     if name in {"claude", "cc", "claude-code"}:
         return ClaudeAcpBackend()
     if name in {"pi", "minimax"}:
-        raise CodingSessionError(
-            "`pi` is not wired yet — phase 2. Use `claude` for now."
-        )
-    raise CodingSessionError(f"Unknown backend `{name}`. Known: claude")
+        return PiBackend()
+    raise CodingSessionError(f"Unknown backend `{name}`. Known: claude, pi")
 
 
 # --------------------------------------------------------------------------- #
@@ -261,11 +490,16 @@ class CodingSession:
 
     def status_line(self) -> str:
         state = "🟢" if self.alive() else "🔴"
-        return (
+        line = (
             f"{state} `{self.repo.name}` @ {repo_head(self.repo)} · "
             f"{self.backend.name} · {self.turns} turn(s) · "
             f"idle {int(self.idle_s)}s"
         )
+        # A backend that behaves unlike the other says so EVERY time, not once on
+        # open: the operator reads this line hours later, having forgotten which
+        # flavour they opened.
+        note = getattr(self.backend, "note", "")
+        return f"{line}\n_{note}_" if note else line
 
 
 _SESSIONS: dict[str, CodingSession] = {}
