@@ -49,6 +49,13 @@ _CONTEXTUAL = (
     "⚙️ Back",
     "💹 Back",
     "🧠 Back",
+    # Same meaning, stated with an arrow instead of a per-panel emoji. Added
+    # 2026-08-13 for the `/code` diff leaf ("⬅ Session"), whose destination
+    # `estate:code` is also the SDLC panel's "🛠 Code" — one destination, but on
+    # a leaf screen the word the operator needs is the way back, not the name of
+    # where they are going. A prefix rather than a fourth `X Back` spelling: the
+    # arrow is what carries the meaning, and it generalises to the next leaf.
+    "⬅ ",
 )
 
 # (module, callback) pairs where a second name is the DESIGN. Unlike `_CONTEXTUAL`, which is a

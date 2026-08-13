@@ -2253,6 +2253,7 @@ class GatewaySlashCommandsMixin:
 
     async def _run_coding_turn(self, event: MessageEvent, sess, raw_text: str) -> None:
         """One plain message inside an open coding session → one agent turn."""
+        from gateway.operator_shell import coding_panel
         from gateway.operator_shell import coding_session as cs
 
         text = raw_text.strip()
@@ -2260,15 +2261,19 @@ class GatewaySlashCommandsMixin:
             closed = cs.close_session(event.source)
             turns = closed.turns if closed else 0
             name = closed.repo.name if closed else "?"
-            await self._send_to_source(
+            # Closing lands on the picker, so reopening is a tap and not a recall.
+            picker, buttons = await asyncio.to_thread(coding_panel.render_picker)
+            await self._send_operator_view(
                 event,
                 f"👋 Closed `{name}` after {turns} turn(s). "
-                "Nothing was committed — check `git status` there.",
+                f"Nothing was committed — check `git status` there.\n\n{picker}",
+                buttons,
             )
             return
 
         if text.lower() in {"status", "/status"}:
-            await self._send_to_source(event, sess.status_line())
+            card, buttons = await asyncio.to_thread(coding_panel.render_session, event.source)
+            await self._send_operator_view(event, card, buttons)
             return
 
         # A turn can legitimately run for minutes. Say so, or silence reads as a
@@ -2284,21 +2289,29 @@ class GatewaySlashCommandsMixin:
         try:
             reply = await cs.run_turn(sess, text)
         except cs.CodingSessionError as exc:
-            await self._send_to_source(event, str(exc))
+            # A refused turn (fence hit) or a cut-off one leaves the session OPEN,
+            # so it gets the session controls, not the picker.
+            await self._send_operator_view(event, str(exc), coding_panel.controls())
             return
         except Exception as exc:
             logger.exception("coding turn failed")
             # Drop the session rather than leave a half-dead child that answers
             # nothing: a backend that raised has no guarantee its session survived.
             cs.close_session(event.source)
-            await self._send_to_source(
+            picker, buttons = await asyncio.to_thread(coding_panel.render_picker)
+            await self._send_operator_view(
                 event,
-                f"🔴 The coding session failed and was closed: {type(exc).__name__}: {exc}\n"
-                f"Reopen with `/code {sess.repo.name}`.",
+                f"🔴 The coding session failed and was closed: {type(exc).__name__}: {exc}\n\n"
+                f"{picker}",
+                buttons,
             )
             return
 
-        await self._send_to_source(event, reply)
+        # The reply carries the controls and the cockpit spine. Before this it was
+        # bare prose, so after the first turn the operator's only way to End, see
+        # the Diff or leave /code at all was to remember a command — which is the
+        # exact thing this surface exists to remove.
+        await self._send_operator_view(event, reply, coding_panel.controls())
 
     async def _handle_reasoning_command(self, event: MessageEvent) -> str:
         """Handle /reasoning command — manage reasoning effort and display toggle.

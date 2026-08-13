@@ -9,6 +9,7 @@ handler that Telegram actually calls — not just that the strings look right.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -109,6 +110,47 @@ def test_discovery_is_capped_so_the_keyboard_stays_a_keyboard(roots: Path):
     assert len(cp.discover_repos(limit=3)) == 3
 
 
+def test_the_repo_you_last_touched_is_the_first_button(roots: Path):
+    """Ranked by recency, not by alphabet — the cap makes the order load-bearing.
+
+    Alphabetical + per-root cap was the first version, and on the founder's own
+    machine it filled all ten slots from `~/Documents/code` at `crux` …
+    `modeltrainer_backup`, so `hermes-agent` (a different root) could not be
+    opened from the picker AT ALL.
+    """
+    old = _mkrepo(roots, "aaa-ancient")
+    mid = _mkrepo(roots, "mmm-lastweek")
+    new = _mkrepo(roots, "zzz-today")
+    for repo, when in ((old, 1_000_000), (mid, 2_000_000), (new, 3_000_000)):
+        for probe in (repo / ".git" / "index", repo / ".git" / "HEAD", repo):
+            if probe.exists():
+                os.utime(probe, (when, when))
+
+    assert [p.name for p in cp.discover_repos()] == [
+        "zzz-today", "mmm-lastweek", "aaa-ancient",
+    ]
+
+
+def test_a_worktree_does_not_crowd_out_the_checkout_it_came_from(roots: Path):
+    """Worktrees are the freshest directories on disk and would own the keyboard.
+
+    `wt-176`, `wt-close-loop` and `prospector-latest` are one repo wearing three
+    names. Demoted below real checkouts, never dropped — `/code wt-176` still
+    resolves, because `resolve_repo` matches by name and not through this list.
+    """
+    real = _mkrepo(roots, "prospector")
+    wt = roots / "wt-176"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {real}/.git/worktrees/wt-176\n")
+    # The worktree is the more recently touched of the two.
+    for probe in (real / ".git" / "index", real / ".git" / "HEAD", real):
+        if probe.exists():
+            os.utime(probe, (1_000_000, 1_000_000))
+
+    assert [p.name for p in cp.discover_repos()] == ["prospector", "wt-176"]
+    assert [p.name for p in cp.discover_repos(limit=1)] == ["prospector"]
+
+
 def test_an_unreadable_root_does_not_erase_the_readable_one(tmp_path, monkeypatch):
     good = tmp_path / "good"
     good.mkdir()
@@ -154,7 +196,8 @@ def test_with_no_repos_the_picker_names_the_roots_it_searched(tmp_path, monkeypa
     monkeypatch.setenv("HERMES_CODE_ROOTS", str(tmp_path / "empty"))
     text, rows = cp.render_picker()
     assert str(tmp_path / "empty") in text
-    assert "estate:code" in _callbacks(rows)[0]
+    # Even the empty state is not a dead end: the spine is still under it.
+    assert "estate:refresh" in _callbacks(rows)
 
 
 # --------------------------------------------------------------------------- #
@@ -181,14 +224,17 @@ def test_opening_a_repo_that_is_not_there_re_renders_the_picker(roots, fake_back
     assert "nosuch" in text
 
 
-def test_the_session_card_carries_the_three_controls(roots, fake_backend):
+def test_the_session_card_carries_the_live_controls(roots, fake_backend):
     _mkrepo(roots, "prospector")
     src = _source()
     cp.handle("open:claude:prospector", src)
 
     text, buttons = cp.render_session(src)
     cbs = _callbacks(buttons)
-    assert {"estate:code:end", "estate:code:status", "estate:code:diff"} <= set(cbs)
+    assert {"estate:code:end", "estate:code:diff"} <= set(cbs)
+    # A `Status` button here re-rendered the identical card. The spine's own 🔄
+    # does that, and a button that appears to do nothing reads as a broken one.
+    assert "estate:code:status" not in cbs
     assert "prospector" in text
 
 
@@ -278,6 +324,36 @@ def test_diff_ignores_an_inherited_git_dir(roots, fake_backend, monkeypatch, tmp
     assert "1 path(s) changed" in text
 
 
+def test_the_diff_does_not_eat_the_first_letter_of_a_modified_path(roots, fake_backend):
+    """`modified · EADME.md` — the receipt corrupted the name it exists to prove.
+
+    Porcelain writes a two-column status, so an unstaged change starts with a
+    SPACE; the reader stripped the whole block and then sliced from column 3,
+    losing one character of the first line only. Seen by rendering the card, not
+    by any test: every existing diff test used an untracked file (`?? path`),
+    which has no leading space and so could never fail this way.
+    """
+    repo = _mkrepo(roots, "prospector")
+    (repo / "README.md").write_text("hello\n")
+    env = cs.git_env()
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t",
+         "-c", "commit.gpgsign=false", "commit", "-qm", "init"],
+        check=True, env=env,
+    )
+    (repo / "README.md").write_text("hello\nworld\n")
+
+    src = _source()
+    cp.handle("open:claude:prospector", src)
+    text = cp.handle("diff", src)[0]
+
+    assert "modified · README.md" in text
+    # …and not the truncated name it used to print. (`"EADME" not in text` is
+    # NOT the check: "README" contains it.)
+    assert "· EADME.md" not in text
+
+
 def test_diff_on_a_clean_tree_says_nothing_changed(roots, fake_backend):
     _mkrepo(roots, "prospector")
     src = _source()
@@ -285,6 +361,70 @@ def test_diff_on_a_clean_tree_says_nothing_changed(roots, fake_backend):
     text, _buttons, _toast, ok = cp.handle("diff", src)
     assert ok is True
     assert "clean" in text.lower()
+
+
+# --------------------------------------------------------------------------- #
+# navigation — the founder's report was "no way to navigate backwards"
+# --------------------------------------------------------------------------- #
+
+def _screens(src) -> dict:
+    """Every screen this panel can put in front of the operator."""
+    return {
+        "picker": cp.render_picker("claude"),
+        "picker-pi": cp.render_picker("pi"),
+        "session": cp.render_session(src),
+        "diff": cp.render_diff(src),
+        "controls": ("", cp.controls()),
+    }
+
+
+def test_no_screen_is_a_dead_end(roots, fake_backend):
+    """Every /code screen carries the cockpit spine.
+
+    The first version rendered bespoke rows and omitted `panel_chrome.nav()`, so
+    once the operator was inside /code the only exit was to END the session — the
+    destructive action was the navigation. A panel that skips the spine has
+    silently opted out of the cockpit, and nothing else in the file notices.
+    """
+    _mkrepo(roots, "prospector")
+    src = _source()
+    cp.handle("open:claude:prospector", src)
+
+    for name, (_text, rows) in _screens(src).items():
+        cbs = _callbacks(rows)
+        assert "estate:refresh" in cbs, f"{name} has no way home"
+        assert "estate:sdlc" in cbs, f"{name} is missing the spine"
+        assert rows[-1][0][1] == "estate:refresh", f"{name}: nav must be the LAST row"
+
+
+def test_the_diff_leaf_offers_the_way_back_to_the_session(roots, fake_backend):
+    _mkrepo(roots, "prospector")
+    src = _source()
+    cp.handle("open:claude:prospector", src)
+
+    _text, rows = cp.render_diff(src)
+    labels = {label: cb for row in rows for (label, cb) in row}
+    back = [cb for label, cb in labels.items() if label.startswith("⬅")]
+    assert back == ["estate:code"], "the diff must return to the session it came from"
+
+
+def test_no_screen_offers_the_same_callback_twice(roots, fake_backend):
+    """A duplicate button is the cockpit's own documented defect (nav() guards it)."""
+    _mkrepo(roots, "prospector")
+    src = _source()
+    cp.handle("open:claude:prospector", src)
+
+    for name, (_text, rows) in _screens(src).items():
+        cbs = _callbacks(rows)
+        assert len(cbs) == len(set(cbs)), f"{name} renders a duplicate callback"
+
+
+def test_the_cockpit_offers_a_way_IN_without_typing_the_command(roots):
+    """`/code` reachable only by typing it is the recall this surface removes."""
+    from gateway.operator_shell.sdlc import render_sdlc
+
+    _text, rows = render_sdlc()
+    assert "estate:code" in _callbacks(rows)
 
 
 # --------------------------------------------------------------------------- #
