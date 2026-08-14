@@ -863,6 +863,37 @@ class TelegramAdapter(BasePlatformAdapter):
         return "thread not found" in str(error).lower()
 
     @staticmethod
+    def _is_entity_parse_error(error: Exception) -> bool:
+        """True for Bot API's "can't parse entities" family of rejections.
+
+        Telegram refuses the WHOLE message when the markup is unbalanced —
+        there is no partial render. So on this error the operator receives
+        nothing at all, which is indistinguishable from the agent ignoring
+        them. Callers use this to retry unformatted rather than drop.
+        """
+        text = str(error).lower()
+        return "parse entities" in text or "can't parse" in text
+
+    @staticmethod
+    def _entity_error_context(error: Exception, text: str) -> str:
+        """The text either side of the byte offset Telegram complained about.
+
+        Without this, a parse failure names an offset into a string nobody
+        kept, so the root cause can only be guessed at. With it, the log line
+        carries the offending markup itself.
+        """
+        m = re.search(r"byte offset (\d+)", str(error))
+        if not m:
+            return "<no offset in error>"
+        try:
+            off = int(m.group(1))
+            raw = text.encode("utf-8", "replace")
+            window = raw[max(0, off - 60): off + 60].decode("utf-8", "replace")
+            return f"offset={off} …{window}…"
+        except Exception:  # pragma: no cover - diagnostics must never throw
+            return "<offset unreadable>"
+
+    @staticmethod
     def _is_bad_request_error(error: Exception) -> bool:
         name = error.__class__.__name__.lower()
         if name == "badrequest" or name.endswith("badrequest"):
@@ -6803,12 +6834,38 @@ class TelegramAdapter(BasePlatformAdapter):
                 return
             except Exception:
                 pass
-        sent = await self._send_message_with_thread_fallback(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=markup,
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
+        try:
+            sent = await self._send_message_with_thread_fallback(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+        except Exception as err:
+            # Telegram rejects the WHOLE message on unbalanced markup, so
+            # before this the operator got NOTHING — measured live 2026-08-14
+            # 23:30:12, "can't find end of bold entity at byte offset 1736",
+            # after a 277s wait. An unstyled panel still carries every word and
+            # every button (reply_markup is independent of parse_mode), so
+            # losing the styling beats losing the answer.
+            if not (
+                self._is_bad_request_error(err)
+                and self._is_entity_parse_error(err)
+            ):
+                raise
+            logger.warning(
+                "[%s] operator panel rejected as MarkdownV2, resending "
+                "unformatted (chat=%s): %s | %s",
+                self.name,
+                chat_id,
+                err,
+                self._entity_error_context(err, text),
+            )
+            sent = await self._send_message_with_thread_fallback(
+                chat_id=chat_id,
+                text=getattr(view, "text", "") or text,
+                reply_markup=markup,
+            )
         mid = getattr(sent, "message_id", None)
         if mid:
             thread_id = getattr(event.source, "thread_id", None) if event.source else None
