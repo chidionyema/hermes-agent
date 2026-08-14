@@ -1175,15 +1175,31 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                 # late rather than not at all. Catch-up is opt-in because a late run is
                 # wrong for some jobs (a 06:00 briefing delivered at 14:00 is noise) and
                 # right for others (a daily audit is worth having at any hour).
+                #
+                # Catch-up is also BOUNDED. `catch_up_window_s` caps how late a run
+                # can be and still be worth doing. Measured 2026-08-13: the host slept
+                # 08-11 09:06 → 08-13 07:11, so otto-daily-digest ("yesterday's stats")
+                # woke up 46h late. Running that is not a late briefing, it is
+                # misinformation; dropping it silently is how the job went dark for two
+                # days. Bounded catch-up gives both: run it late while it is still true,
+                # drop + record it beyond the window. No key set = unbounded, i.e.
+                # exactly the previous behaviour.
                 if job.get("catch_up"):
+                    catch_up_window = job.get("catch_up_window_s")
+                    if catch_up_window is None or late_by <= catch_up_window:
+                        logger.info(
+                            "Job '%s' missed its window by %ds (grace=%ds) — running late "
+                            "because catch_up is set.",
+                            job.get("name", job["id"]), int(late_by), grace,
+                        )
+                        _record_missed_run(job, next_run, late_by, grace, recovered=True)
+                        due.append(job)
+                        continue
                     logger.info(
-                        "Job '%s' missed its window by %ds (grace=%ds) — running late "
-                        "because catch_up is set.",
-                        job.get("name", job["id"]), int(late_by), grace,
+                        "Job '%s' missed its window by %ds, beyond catch_up_window_s=%s "
+                        "— dropping the stale run instead of catching up.",
+                        job.get("name", job["id"]), int(late_by), catch_up_window,
                     )
-                    _record_missed_run(job, next_run, late_by, grace, recovered=True)
-                    due.append(job)
-                    continue
 
                 new_next = compute_next_run(schedule, now.isoformat())
                 if new_next:

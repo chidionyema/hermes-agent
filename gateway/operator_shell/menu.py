@@ -46,6 +46,10 @@ OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     # both jump straight to a state-before-verb surface that names the current model.
     "agent_model",
     "model",
+    # `code` opens a coding-agent session on a repo and turns this chat into its
+    # terminal (gateway/operator_shell/coding_session.py). Advertised rather than
+    # typed-only because the whole point is that launching one takes no recall.
+    "code",
     "help",
 )
 

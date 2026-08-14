@@ -2139,6 +2139,180 @@ class GatewaySlashCommandsMixin:
         preview = prompt[:60] + ("..." if len(prompt) > 60 else "")
         return t("gateway.background.started", preview=preview, task_id=task_id)
 
+    async def _handle_code_command(self, event: MessageEvent) -> Optional[str]:
+        """Handle /code — open, inspect or close a coding-agent session.
+
+            /code                     the picker (or this chat's session card)
+            /code <repo> [backend]    open one (backend defaults to claude)
+            /code end                 close it
+
+        A bare `/code` answers with BUTTONS, not prose. The typed form still
+        works and is still tested, but nothing about it has to be remembered:
+        the repo list is derived from disk, so the only recallable token left is
+        the word `/code` itself, which the command menu already offers.
+
+        While a session is open, every plain message in this chat is a TURN for
+        the coding agent rather than a message for the Hermes brain. That
+        interception lives in `gateway/run.py`, deliberately ahead of the
+        natural-ops matcher — an explicitly-opened session must outrank a phrase
+        heuristic, or "run the tests" gets eaten by the estate router.
+        """
+        from gateway.operator_shell import coding_session as cs
+
+        args = (event.get_command_args() or "").strip()
+        source = event.source
+        sub = args.split()[0].lower() if args else ""
+
+        if sub in {"end", "stop", "close", "quit", "exit"}:
+            sess = cs.close_session(source)
+            if sess is None:
+                return "No coding session open here."
+            return (
+                f"👋 Closed `{sess.repo.name}` after {sess.turns} turn(s). "
+                f"Nothing was committed — check `git status` there."
+            )
+
+        if sub in {"pi", "minimax", "claude", "cc", "claude-code"} and len(args.split()) == 1:
+            # `/code pi` reads as "use pi", not "open the repo named pi". Show the
+            # picker already on that brain rather than failing with "no repo pi" —
+            # unless a repo really IS called that, in which case the repo wins,
+            # because opening the thing the operator named is never surprising.
+            from gateway.operator_shell import coding_panel
+
+            _names = {p.name for p in await asyncio.to_thread(coding_panel.discover_repos)}
+            if sub not in _names:
+                text, buttons = await asyncio.to_thread(
+                    coding_panel.render_picker,
+                    "pi" if sub in {"pi", "minimax"} else "claude",
+                )
+                return await self._send_operator_view(event, text, buttons)
+
+        if not args or sub == "status":
+            from gateway.operator_shell import coding_panel
+
+            text, buttons = await asyncio.to_thread(coding_panel.render_session, source)
+            return await self._send_operator_view(event, text, buttons)
+
+        parts = args.split()
+        repo_token = parts[0]
+        backend_name = parts[1] if len(parts) > 1 else "claude"
+
+        try:
+            sess = await asyncio.to_thread(
+                cs.open_session, source, repo_token, backend_name
+            )
+        except cs.CodingSessionError as exc:
+            return f"⚠️ {exc}"
+        except Exception as exc:  # a broken backend must not look like silence
+            logger.exception("opening coding session failed")
+            return f"⚠️ Could not open the session: {type(exc).__name__}: {exc}"
+
+        # Warm up in the background: the FIRST ACP turn absorbs asynchronous MCP
+        # registration (~30s measured). Paying it now, while the operator is still
+        # typing, is the difference between "seamless" and a 30s stall on the first
+        # real instruction.
+        #
+        # Only for a backend that HAS a cold start. On the one-shot `pi` executor
+        # the same warm-up is a metered third-party call that answers "READY",
+        # edits nothing and buys nothing — so the backend declares which it is
+        # rather than this handler guessing from its name.
+        _warm_needed = getattr(sess.backend, "needs_warmup", True)
+        _warm_enabled = os.getenv("HERMES_CODE_WARMUP", "1").strip().lower() not in {"0", "false", "no", "off"}
+        if _warm_needed and _warm_enabled:
+            async def _warm():
+                try:
+                    await cs.run_turn(sess, "Reply with the single word READY and nothing else.")
+                except Exception:
+                    logger.warning("coding session warm-up failed", exc_info=True)
+            _t = asyncio.create_task(_warm())
+            self._background_tasks.add(_t)
+            _t.add_done_callback(self._background_tasks.discard)
+
+        from gateway.operator_shell import coding_panel
+
+        _note = getattr(sess.backend, "note", "")
+        text = (
+            f"🟢 Session up · `{sess.repo.name}` @ {cs.repo_head(sess.repo)} · "
+            f"{sess.backend.name}\n"
+            + (f"⚠️ _{_note}_\n" if _note else "")
+            + "_Type normally — every message is a turn. `end` closes it._"
+        )
+        # Even the typed door hands back the controls, so ending, checking status
+        # or seeing the diff never requires knowing a second command.
+        return await self._send_operator_view(event, text, coding_panel.controls())
+
+    async def _send_to_source(self, event: MessageEvent, text: str) -> None:
+        """Send a plain message back into the chat the event came from."""
+        source = event.source
+        adapter = self.adapters.get(source.platform)
+        if adapter is None:
+            logger.warning("no adapter for %s — dropping coding-session reply", source.platform)
+            return
+        meta = self._thread_metadata_for_source(source, self._reply_anchor_for_event(event))
+        await adapter.send(source.chat_id, text, metadata=meta)
+
+    async def _run_coding_turn(self, event: MessageEvent, sess, raw_text: str) -> None:
+        """One plain message inside an open coding session → one agent turn."""
+        from gateway.operator_shell import coding_panel
+        from gateway.operator_shell import coding_session as cs
+
+        text = raw_text.strip()
+        if text.lower() in cs.CLOSE_WORDS:
+            closed = cs.close_session(event.source)
+            turns = closed.turns if closed else 0
+            name = closed.repo.name if closed else "?"
+            # Closing lands on the picker, so reopening is a tap and not a recall.
+            picker, buttons = await asyncio.to_thread(coding_panel.render_picker)
+            await self._send_operator_view(
+                event,
+                f"👋 Closed `{name}` after {turns} turn(s). "
+                f"Nothing was committed — check `git status` there.\n\n{picker}",
+                buttons,
+            )
+            return
+
+        if text.lower() in {"status", "/status"}:
+            card, buttons = await asyncio.to_thread(coding_panel.render_session, event.source)
+            await self._send_operator_view(event, card, buttons)
+            return
+
+        # A turn can legitimately run for minutes. Say so, or silence reads as a
+        # dead bot and the operator sends the message again — straight into the
+        # per-session lock, doubling the work.
+        if sess.turns == 0:
+            await self._send_to_source(
+                event, "⋯ first turn — the agent is starting and registering its tools."
+            )
+        else:
+            await self._send_to_source(event, "⋯ working")
+
+        try:
+            reply = await cs.run_turn(sess, text)
+        except cs.CodingSessionError as exc:
+            # A refused turn (fence hit) or a cut-off one leaves the session OPEN,
+            # so it gets the session controls, not the picker.
+            await self._send_operator_view(event, str(exc), coding_panel.controls())
+            return
+        except Exception as exc:
+            logger.exception("coding turn failed")
+            # Drop the session rather than leave a half-dead child that answers
+            # nothing: a backend that raised has no guarantee its session survived.
+            cs.close_session(event.source)
+            picker, buttons = await asyncio.to_thread(coding_panel.render_picker)
+            await self._send_operator_view(
+                event,
+                f"🔴 The coding session failed and was closed: {type(exc).__name__}: {exc}\n\n"
+                f"{picker}",
+                buttons,
+            )
+            return
+
+        # The reply carries the controls and the cockpit spine. Before this it was
+        # bare prose, so after the first turn the operator's only way to End, see
+        # the Diff or leave /code at all was to remember a command — which is the
+        # exact thing this surface exists to remove.
+        await self._send_operator_view(event, reply, coding_panel.controls())
+
     async def _handle_reasoning_command(self, event: MessageEvent) -> str:
         """Handle /reasoning command — manage reasoning effort and display toggle.
 

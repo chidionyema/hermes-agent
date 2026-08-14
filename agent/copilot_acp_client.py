@@ -457,6 +457,8 @@ class CopilotACPClient:
         acp_cwd: str | None = None,
         command: str | None = None,
         args: list[str] | None = None,
+        mcp_servers: list[dict[str, Any]] | None = None,
+        reuse_session: bool | None = None,
         **_: Any,
     ):
         self.api_key = api_key or "copilot-acp"
@@ -471,8 +473,16 @@ class CopilotACPClient:
             _explicit_args if _explicit_args is not None else _resolve_args(self._acp_flavor)
         )
         self._acp_cwd = str(Path(acp_cwd or os.getcwd()).resolve())
-        self._mcp_servers = _resolve_mcp_servers()
-        self._reuse_session = _session_reuse_enabled()
+        # Explicit kwargs beat the environment. A caller that holds ONE session per
+        # chat (gateway/operator_shell/coding_session.py) must be able to turn reuse
+        # on for itself without exporting HERMES_ACP_REUSE_SESSION into the whole
+        # gateway process, which would silently change every other ACP client too.
+        self._mcp_servers = (
+            list(mcp_servers) if mcp_servers is not None else _resolve_mcp_servers()
+        )
+        self._reuse_session = (
+            bool(reuse_session) if reuse_session is not None else _session_reuse_enabled()
+        )
         self.chat = _ACPChatNamespace(self)
         self.is_closed = False
         self._active_process: subprocess.Popen[str] | None = None

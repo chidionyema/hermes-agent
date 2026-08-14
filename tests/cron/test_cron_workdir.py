@@ -19,7 +19,13 @@ import pytest
 
 @pytest.fixture()
 def tmp_cron_dir(tmp_path, monkeypatch):
-    """Isolate cron job storage into a temp dir so tests don't stomp on real jobs."""
+    """Isolate cron job storage into a temp dir so tests don't stomp on real jobs.
+
+    HERMES_DIR included: `_record_missed_run` writes the operational alert log
+    `HERMES_DIR/logs/alerts/missed_runs.jsonl`, which the other three paths do
+    not cover. Same note, and the receipt, in tests/cron/test_jobs.py.
+    """
+    monkeypatch.setattr("cron.jobs.HERMES_DIR", tmp_path)
     monkeypatch.setattr("cron.jobs.CRON_DIR", tmp_path / "cron")
     monkeypatch.setattr("cron.jobs.JOBS_FILE", tmp_path / "cron" / "jobs.json")
     monkeypatch.setattr("cron.jobs.OUTPUT_DIR", tmp_path / "cron" / "output")

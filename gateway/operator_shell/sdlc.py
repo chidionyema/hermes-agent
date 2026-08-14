@@ -219,6 +219,10 @@ def render_sdlc() -> Tuple[str, List[ButtonRow]]:
     buttons: List[ButtonRow] = [
         [
             ("📝 Assign", "estate:code_prompt"),
+            # The live coding terminal. Without this row /code was reachable only
+            # by typing it — the one command the operator had to remember, on the
+            # panel whose whole job is "tap any stage to go deep".
+            ("🛠 Code", "estate:code"),
             ("📋 Board", "estate:missions"),
         ],
         [
