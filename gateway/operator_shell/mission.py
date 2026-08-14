@@ -128,6 +128,47 @@ def _burn_today(conn, C) -> str:
         return "n/a"
 
 
+# A title this long with no terminal punctuation is a writer-side clip, not a
+# style choice. The live case measured 2026-08-14 was 119 chars.
+_CLIP_EVIDENCE_LEN = 100
+
+
+def _tidy_title(raw) -> str:
+    """Make an already-severed title read as a phrase, not as corruption.
+
+    Titles here are raw agent prompts written into `tasks.title`, and the writer
+    clips them (observed live 2026-08-14: a 119-char title ending `…/code (README`
+    — cut mid-word, with an unclosed bracket). The cockpit printed that verbatim
+    as its headline, which is most of why the card reads as gibberish.
+
+    This does NOT re-introduce a length clip. The full-title decision at the two
+    call sites was deliberate (see their comments) and stands: nothing readable is
+    removed. All this does is end a string the WRITER already cut so the operator
+    can see it was cut, instead of reading a severed sentence as garbled output.
+    """
+    s = " ".join(str(raw or "").split())
+    if not s:
+        return s
+    # An unclosed bracket means the clip landed inside a parenthetical: the
+    # fragment after it is never a readable phrase on its own.
+    for opener, closer in (("(", ")"), ("[", "]")):
+        cut = s.rfind(opener)
+        if cut > 0 and s.find(closer, cut) == -1:
+            s = s[:cut].rstrip(" ,;:-")
+            return s + "…" if s else s
+    if s[-1] in ".!?…":
+        return s
+    # Only a LONG unpunctuated title is evidence of a writer-side clip. A short
+    # one is simply a title with no full stop, and dropping its last word would
+    # destroy good data to tidy a case that isn't happening.
+    if len(s) < _CLIP_EVIDENCE_LEN:
+        return s
+    head, _, tail = s.rpartition(" ")
+    if head and tail and not tail[-1].isalnum():
+        return s
+    return (head.rstrip(" ,;:-") + "…") if head else s
+
+
 def _top_blocker(conn, C) -> str:
     try:
         # Money/identity fences first — never bury under housekeeping
@@ -142,7 +183,7 @@ def _top_blocker(conn, C) -> str:
                 # away. Money/identity fences never get clipped on the cockpit card.
                 return (
                     f"APPROVE [{(fences['risk_class'] or '').upper()}] "
-                    f"`{fences['id'][:8]}` {fences['title']}"
+                    f"`{fences['id'][:8]}` {_tidy_title(fences['title'])}"
                 )
         except Exception:
             pass
@@ -158,7 +199,10 @@ def _top_blocker(conn, C) -> str:
             tag = "APPROVE" if _row_val(d, "status") == "awaiting_approval" else "BLOCKED"
             risk = str(_row_val(d, "risk_class") or "").upper()
             risk_bit = f" [{risk}]" if risk in ("MONEY", "IDENTITY", "CONTRACT") else ""
-            return f"{tag}{risk_bit} `{str(_row_val(d, 'id'))[:8]}` {_row_val(d, 'title')}"
+            return (
+                f"{tag}{risk_bit} `{str(_row_val(d, 'id'))[:8]}` "
+                f"{_tidy_title(_row_val(d, 'title'))}"
+            )
         # Blocked product missions (often quota) — surface on card
         try:
             import flight
