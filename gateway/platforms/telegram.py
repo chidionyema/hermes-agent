@@ -2335,9 +2335,43 @@ class TelegramAdapter(BasePlatformAdapter):
                 # Store reference for retry use in _handle_polling_conflict
                 self._polling_error_callback_ref = _polling_error_callback
 
+                # Deliver messages that arrived while this process was down.
+                #
+                # This was True, and it is why the operator's chats vanished:
+                # `drop_pending_updates=True` tells Telegram to BIN every update
+                # queued during the gap, so a message sent mid-restart is not
+                # delayed — it is destroyed, and never reaches a log line.
+                # gateway.source_watch restarts this process on any source edit
+                # (210 times to 2026-08-14, 3 inside one 40-minute window), and
+                # on 2026-08-14 21:59 the gateway came up with no connected
+                # platforms for ~14 minutes. Every message in those windows was
+                # silently discarded, which reads exactly as "Otto is totally
+                # unresponsive to my chats".
+                #
+                # False is what the rest of this file already does: both
+                # reconnect paths (:1611 network recovery, :1738 conflict retry)
+                # and the delete_webhook call ten lines above pass False. Cold
+                # start was the lone outlier. It is also what the /restart
+                # offset machinery assumes — _build_message_event threads
+                # update_id through specifically so a restart can advance PAST
+                # the triggering update (see its docstring); that bookkeeping is
+                # only meaningful if pending updates survive at all.
+                #
+                # Escape hatch for the long-outage case, where replaying hours of
+                # stale commands is worse than losing them:
+                #   TELEGRAM_DROP_PENDING_UPDATES=1
+                drop_pending = os.getenv(
+                    "TELEGRAM_DROP_PENDING_UPDATES", ""
+                ).strip().lower() in ("1", "true", "yes")
+                if drop_pending:
+                    logger.warning(
+                        "[%s] TELEGRAM_DROP_PENDING_UPDATES is set — messages "
+                        "sent while this process was down will be DISCARDED.",
+                        self.name,
+                    )
                 await self._app.updater.start_polling(
                     allowed_updates=Update.ALL_TYPES,
-                    drop_pending_updates=True,
+                    drop_pending_updates=drop_pending,
                     error_callback=_polling_error_callback,
                 )
             
