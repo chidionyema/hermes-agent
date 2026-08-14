@@ -66,9 +66,42 @@ VERDICT_GLYPHS = {
 }
 
 
+# The lexicon — action → the words the operator reads. Seeded from the spine so the
+# breadcrumb can never disagree with the button that got you there, and extended as panels
+# adopt it. A screen that wants a name asks HERE; it does not invent one at the call site.
+#
+# This is the smallest useful version of "one lexicon": today it feeds the breadcrumb, and
+# it is the table `test_destination_vocabulary` should eventually read INSTEAD of ratcheting
+# a baseline of violations. A name that is not in this table is not yet standardised — which
+# `unlabelled_actions()` below reports as data rather than asserting.
+LABELS = {
+    "refresh": "🏠 Home",
+    "projects": "🗂 Projects",
+    "run": "⚡ Actions",
+    "sdlc": "💻 SDLC",
+    "tune": "⚙️ Tune",
+    "find": "🗺 Browse",
+}
+
+
+def label_for(action: str) -> str:
+    """The human name for an action. Falls back to the action itself, never to "".
+
+    Falling back to the raw action is deliberate and visible: a breadcrumb reading
+    `st_reconcile` is a defect the operator can SEE and report, whereas a blank crumb hides
+    the gap. The fallback is the finding, not a patch over it.
+    """
+    act = (action or "").strip().removeprefix("estate:")
+    return LABELS.get(act, act)
+
+
+_BACK = ("←", "estate:back")
+
+
 def nav(self_action: Optional[str] = None) -> ButtonRow:
     """The one navigation row — the cockpit's spine. Always last, always this order.
 
+        ←         back (only when there is somewhere to go back TO)
         🏠 Home   fires (concerns, approve, estate pause)
         🗂 Projects  subject (which of the 14 registered projects)
         ⚡ Actions   verbs (start, stop, restart, run now)
@@ -78,8 +111,24 @@ def nav(self_action: Optional[str] = None) -> ButtonRow:
 
     `self_action` re-renders the CURRENT panel as bare 🔄. On Map itself the 🗺 glyph
     already re-opens Atlas, so no duplicate 🔄 is added.
+
+    **← is conditional on history existing**, which is why adding it did not break the
+    spine-membership tests: with an empty nav stack (every fresh `HERMES_HOME`, including
+    each test's tempdir) the row is exactly the six it has always been. A Back button on
+    the home card would point at nothing, and a control that does nothing is the defect
+    class this whole spine exists to remove.
     """
     row: ButtonRow = [_NOW, _PROJECTS, _RUN, _SDLC, _TUNE, _MAP]
+    try:
+        from gateway.operator_shell import nav_stack
+
+        if nav_stack.can_go_back():
+            row.insert(0, _BACK)
+    except Exception:
+        # History is a convenience. A panel must never fail to draw because the BACK
+        # button could not be computed — that trades a missing affordance for a missing
+        # screen, which is strictly worse.
+        pass
     if self_action:
         # removeprefix, NOT lstrip: lstrip takes a character SET, so "se_params" would come
         # back as "_params" (leading 's' and 'e' are both in "estate:").

@@ -198,16 +198,38 @@ def render_panel_view() -> PanelView:
         )
 
 
-def handle_estate_action(action: str, request_id: str = "", source: Any = None) -> PanelView:
-    # `now` is the literal word the mission card footer tells the operator to say
-    # ("say `now` to force"). Without this alias, typing `now` falls through every
-    # `if action == ...` branch and lands in the unknown-action guard, which prints
-    # `Unknown action \`now\`` — the exact case the founder reported. Resolved here
-    # at the outer entry so the cache check and the pre-flight key both see the
-    # canonical action.
-    if (action or "").strip().lower() == "now":
-        action = "refresh"
+def _nav_target(verb: str) -> Optional[str]:
+    """Resolve `back`/`forward` to the action they land on, or None when there is none.
 
+    Total by contract: a broken history file must not cost the operator their tap, so any
+    failure resolves to None and the caller falls back to the home card.
+    """
+    try:
+        from gateway.operator_shell import nav_stack
+
+        entry = nav_stack.go_back() if verb == "back" else nav_stack.go_forward()
+        return (entry or {}).get("action") or None
+    except Exception:
+        logger.warning("nav %s could not resolve; landing on home", verb, exc_info=True)
+        return None
+
+
+def _remember(action: str) -> None:
+    """Push a SUCCESSFULLY rendered panel onto history. Never raises into the render path.
+
+    Called after the render, never before: a screen that crashed must not enter history,
+    or Back walks the operator straight back into the crash.
+    """
+    try:
+        from gateway.operator_shell import nav_stack
+        from gateway.operator_shell.panel_chrome import label_for
+
+        nav_stack.push_nav(action, label_for(action))
+    except Exception:
+        logger.warning("could not record nav history for %s", action, exc_info=True)
+
+
+def handle_estate_action(action: str, request_id: str = "", source: Any = None) -> PanelView:
     """Public entry point: dispatch, and record what happened.
 
     The recording lives HERE rather than inside `_dispatch` because `_dispatch` has dozens of
@@ -222,6 +244,39 @@ def handle_estate_action(action: str, request_id: str = "", source: Any = None) 
     actions never use the cache — staleness there would be a real bug.
     """
     from gateway.operator_shell.activity import record
+
+    # `now` is the literal word the mission card footer tells the operator to say
+    # ("say `now` to force"). Without this alias, typing `now` falls through every
+    # `if action == ...` branch and lands in the unknown-action guard, which prints
+    # `Unknown action \`now\`` — the exact case the founder reported. Resolved here
+    # at the outer entry so the cache check and the pre-flight key both see the
+    # canonical action.
+    #
+    # (This block used to sit ABOVE the docstring, which silently made the docstring a
+    # no-op string expression and left `handle_estate_action.__doc__` as None.)
+    if (action or "").strip().lower() == "now":
+        action = "refresh"
+
+    # Navigation verbs are resolved to a DESTINATION before anything else runs, so the
+    # cache key, the pre-flight check and the audit row all see the panel the operator
+    # actually lands on rather than the word "back".
+    #
+    # `remember` is False for these: `go_back()`/`go_forward()` have already moved the
+    # cursor inside the stack, and pushing again would make Back un-pressable — you would
+    # bounce between two screens forever, which is worse than no Back at all.
+    #
+    # Written as a literal `action in (...)` on purpose. `test_every_button_dispatches`
+    # derives BOTH sides of its check from source — "a hand-maintained action→label table
+    # is the same drift the cockpit already suffers from" — and its scanner reads
+    # `action == "x"` and `action in (...)` against the variable named `action`. The first
+    # draft of this branch tested a normalised local (`_verb in (...)`), which the scanner
+    # could not see, so it reported `estate:back` as a button emitting an action nothing
+    # handles. That was the gate working: the fix is to write the branch in the form the
+    # dispatcher's own contract uses, never to add `back` to an exemption list.
+    remember = True
+    if action in ("back", "forward"):
+        remember = False
+        action = _nav_target(action) or "refresh"
 
     t0 = time.time()
     # Pre-flight: only read-only actions whose latency matters.
@@ -249,6 +304,12 @@ def handle_estate_action(action: str, request_id: str = "", source: Any = None) 
                 # of every cache hit — 228 rows that can no longer say tap or typed.
                 record(action, request_id, view=view, ms=(time.time() - t0) * 1000.0,
                        served="cache")
+                # A cache hit is still an arrival — it is the same panel the live path
+                # would have drawn, so it belongs in history identically. (`_remember` is
+                # total; it cannot throw us into the `except` below and cause a second,
+                # live render of a card we already returned.)
+                if remember:
+                    _remember(action)
                 return view
         except Exception:
             pass  # cache miss / error → fall through to live render
@@ -272,6 +333,12 @@ def handle_estate_action(action: str, request_id: str = "", source: Any = None) 
             pass
 
     record(action, request_id, view=view, ms=(time.time() - t0) * 1000.0)
+    # `view.ok`, not unconditionally: a degraded card ("estate unavailable", the traceback
+    # card) must not enter history, or ← walks the operator back INTO the failure they were
+    # trying to escape. Same reasoning as `cache_put(..., ok=view.ok)` three lines up — a
+    # failed render is not an answer, and it is not a place either.
+    if remember and view.ok:
+        _remember(action)
     return view
 
 
