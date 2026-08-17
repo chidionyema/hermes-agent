@@ -928,6 +928,40 @@ def _scan_produced(since: float) -> tuple[list[str], list[str]]:
     return sorted(artifacts), sorted(logs)
 
 
+def _history_budget(script: str, samples: int = 20, factor: float = 3.0,
+                    floor_s: float = 30.0) -> float:
+    """Three times the median of this script's own recent clean runs, or 0 with too few.
+
+    Same bar and same numbers as the launchd rail (launchd_receipt.py::_history_budget), so
+    one audit reads both ledgers. Median, not mean, so one outlier cannot raise the bar it
+    exists to trip. Clean runs only: a run that crashed early is fast for the wrong reason.
+    Under five samples we do not know what normal is, so there is no budget rather than a
+    guessed one, and the floor keeps a sub-second job from going red on noise.
+    """
+    try:
+        durations = []
+        with open(_get_hermes_home() / _RECEIPTS_PATH,
+                  encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if script not in line:  # cheap pre-filter before json.loads
+                    continue
+                try:
+                    rec = json.loads(line)
+                except ValueError:
+                    continue
+                if rec.get("script") != script or rec.get("exit_code") != 0:
+                    continue
+                d = rec.get("duration_s")
+                if isinstance(d, (int, float)) and d >= 0:
+                    durations.append(float(d))
+        if len(durations) < 5:
+            return 0.0
+        recent = sorted(durations[-samples:])
+        return max(floor_s, factor * recent[len(recent) // 2])
+    except Exception:  # noqa: BLE001 — no history must never break the job being observed
+        return 0.0
+
+
 def _write_receipt(script_path: str, started: float, exit_code: int, stdout: str,
                    stderr: str = "") -> None:
     """Record what a cron job PRODUCED, not merely that it ran.
@@ -964,6 +998,16 @@ def _write_receipt(script_path: str, started: float, exit_code: int, stdout: str
             "log_count": len(logs),
             "attribution": "window",
         }
+        # A cron job that gets much slower than its own history is a finding, not a green
+        # run. Added 2026-08-17: the complaint-ledger job went from minutes to 1h53m and
+        # nothing went red, so the founder was the alarm. Same field names as the launchd
+        # rail, so capability_audit reads one shape across both ledgers.
+        _budget = _history_budget(rec["script"])
+        if _budget > 0:
+            rec["budget_s"] = round(_budget, 2)
+            rec["budget_basis"] = "history"
+            if rec["duration_s"] > _budget:
+                rec["over_budget"] = True
         if exit_code != 0:
             # stderr first: a script that fails usually says why there. Bounded so one
             # pathological traceback cannot bloat the ledger every run.

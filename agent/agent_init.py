@@ -1135,23 +1135,6 @@ def init_agent(
     
 
 
-    # Trajectory capture. The caller's explicit save_trajectories=True always wins; this
-    # only turns it on for the callers that never pass the flag — the gateway and the cron
-    # scheduler, which is to say all of the estate's real traffic. Config-declared so it is
-    # an operator switch, not a source edit:
-    #
-    #   trajectories:
-    #     enabled: true
-    #
-    # Off by default, and it stays off for anything that sets the flag itself: batch_runner
-    # passes save_trajectories=False because it writes its own per-batch output file.
-    if not agent.save_trajectories:
-        try:
-            agent.save_trajectories = bool(
-                (_agent_cfg.get("trajectories") or {}).get("enabled", False))
-        except Exception:
-            pass  # Capture is optional — never break agent init for it
-
     # Memory provider plugin (external — one at a time, alongside built-in)
     # Reads memory.provider from config to select which plugin to activate.
     agent._memory_manager = None

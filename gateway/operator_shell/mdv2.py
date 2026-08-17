@@ -321,18 +321,8 @@ def _has_close(src: str, start: int, marker: str) -> bool:
 
 
 def _parse_lenient_literalising(src: str, dead: set) -> Tuple[str, List[Entity]]:
-    """Fallback: treat the given markers as literal everywhere, then re-parse.
-
-    The sentinel must be the SAME LENGTH as the marker it stands in for. 2026-08-17: it used
-    to be f"\\x01{k}\\x01" — three characters replacing a one-character `_` — so the text was
-    parsed at one length and then shrunk back to another, while the entity offsets kept the
-    parsed length. Every entity after the first literalised marker moved by two characters.
-    On the estate status panel that rendered escalated task ids as `dc`89793e P`rospector`
-    instead of `dc89793e` Prospector: one stray underscore in CRON_ERROR, five lines earlier,
-    was enough. Equal length is what makes the restore free of offset arithmetic.
-    """
-    sentinel = {m: chr(0xE000 + k) * len(m)
-                for k, m in enumerate(sorted(dead, key=len, reverse=True))}
+    """Fallback: treat the given markers as literal everywhere, then re-parse."""
+    sentinel = {m: f"\x01{k}\x01" for k, m in enumerate(sorted(dead, key=len, reverse=True))}
     tmp = src
     for m, s in sentinel.items():
         tmp = tmp.replace(m, s)

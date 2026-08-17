@@ -453,10 +453,6 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     # `score_driver.score_burndown`. All read-only. `logs` is the chooser the bare button
     # never had: three subsystems write logs and every renderer needs a unit to open one,
     # which a bare `estate:logs` cannot send.
-    # 2026-08-17: the estate declares 45 capabilities and grades them hourly, and none of it
-    # had an operator surface — "what is dark?" meant opening a terminal. Reads the cached
-    # verdicts in state/reliability_status.json; the audit itself takes over two minutes.
-    "capabilities":   ("estate_intel",    "render_capabilities",      "Capabilities",    _ARG_NONE),
     "estate_health":  ("estate_intel",    "render_estate_health",     "Estate health",   _ARG_NONE),
     "dependencies":   ("estate_intel",    "render_dependencies",      "Dependencies",    _ARG_NONE),
     "correlate":      ("estate_intel",    "render_correlate",         "Linked failures", _ARG_NONE),
