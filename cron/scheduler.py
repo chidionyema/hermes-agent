@@ -928,9 +928,30 @@ def _scan_produced(since: float) -> tuple[list[str], list[str]]:
     return sorted(artifacts), sorted(logs)
 
 
+def _best_median(durations: list, window: int = 20) -> float:
+    """The lowest median over any window of consecutive runs: the best this job ever held.
+
+    A trailing median rises with a slow regression, so it never trips on one. Taking the
+    minimum over every window makes the bar a ratchet that only ever moves down. Same
+    function and same numbers as launchd_receipt.py, deliberately.
+    """
+    if len(durations) < 5:
+        return 0.0
+    if len(durations) <= window:
+        srt = sorted(durations)
+        return srt[len(srt) // 2]
+    best = None
+    for i in range(len(durations) - window + 1):
+        srt = sorted(durations[i:i + window])
+        m = srt[window // 2]
+        if best is None or m < best:
+            best = m
+    return best or 0.0
+
+
 def _history_budget(script: str, samples: int = 20, factor: float = 3.0,
                     floor_s: float = 30.0) -> float:
-    """Three times the median of this script's own recent clean runs, or 0 with too few.
+    """Three times the BEST median this script has ever sustained, or 0 with too few.
 
     Same bar and same numbers as the launchd rail (launchd_receipt.py::_history_budget), so
     one audit reads both ledgers. Median, not mean, so one outlier cannot raise the bar it
@@ -954,10 +975,8 @@ def _history_budget(script: str, samples: int = 20, factor: float = 3.0,
                 d = rec.get("duration_s")
                 if isinstance(d, (int, float)) and d >= 0:
                     durations.append(float(d))
-        if len(durations) < 5:
-            return 0.0
-        recent = sorted(durations[-samples:])
-        return max(floor_s, factor * recent[len(recent) // 2])
+        base = _best_median(durations, samples)
+        return max(floor_s, factor * base) if base else 0.0
     except Exception:  # noqa: BLE001 — no history must never break the job being observed
         return 0.0
 
