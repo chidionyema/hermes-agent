@@ -607,6 +607,13 @@ def _live_system_guard(request, monkeypatch):
     real_kill = _os.kill
 
     def _guarded_kill(pid, sig, *args, **kwargs):
+        # Signal 0 delivers nothing. It is the POSIX liveness probe: the kernel checks that the
+        # pid exists and that we could signal it, then returns. Blocking it was blocking a READ,
+        # not a kill. 2026-08-17: prospector_inflight._pid_alive asks "is the run I am about to
+        # render still going?", and test_render_on_the_real_trail_never_raises died on this
+        # guard. Every real signal still goes through the subtree check below.
+        if int(sig) == 0:
+            return real_kill(pid, sig, *args, **kwargs)
         if _is_own_subtree(int(pid)):
             return real_kill(pid, sig, *args, **kwargs)
         raise RuntimeError(

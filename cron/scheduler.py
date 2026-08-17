@@ -1760,7 +1760,15 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     prefill_messages = None
 
         # Max iterations
-        max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
+        # Per-job override first: a research/report job needs a bigger turn budget
+        # than the global default, and raising the global would lift the ceiling
+        # (and the cost) for every cron job.
+        max_iterations = (
+            job.get("max_turns")
+            or _cfg.get("agent", {}).get("max_turns")
+            or _cfg.get("max_turns")
+            or 90
+        )
 
         # Provider routing
         pr = _cfg.get("provider_routing", {})
@@ -1982,12 +1990,39 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         # job's `last_status` set to "ok". Raise so the except handler below
         # builds the proper failure tuple. (issue #17855)
         if result.get("failed") is True or result.get("completed") is False:
-            _err_text = (
-                result.get("error")
-                or (result.get("final_response") or "").strip()
-                or "agent reported failure"
+            _api_calls = result.get("api_calls")
+            _reason = result.get("error") or (
+                "max_iterations_reached"
+                if _api_calls and _api_calls >= max_iterations
+                else "agent reported failure"
             )
-            raise RuntimeError(_err_text)
+            _full = (result.get("final_response") or "").strip()
+            # Preserve the work product: a turn-exhausted run often finished the
+            # deliverable and only lacked the turn to write it out. Never discard it.
+            if _full:
+                try:
+                    _pdir = Path(os.path.expanduser("~/.hermes/reports"))
+                    _pdir.mkdir(parents=True, exist_ok=True)
+                    _ppath = _pdir / (
+                        f"cron-partial-{job_id}-"
+                        f"{_hermes_now().strftime('%Y-%m-%d')}.md"
+                    )
+                    _ppath.write_text(_full, encoding="utf-8")
+                    logger.warning(
+                        "Job '%s': preserved partial response (%d chars) to %s",
+                        job_name, len(_full), _ppath,
+                    )
+                except Exception as _pe:
+                    logger.warning(
+                        "Job '%s': failed to preserve partial response: %s", job_name, _pe
+                    )
+            # Bounded excerpt only — a full report in the exception floods
+            # errors.log and poisons the watchdog CRON_ERROR fingerprint.
+            _tail = _full[:400]
+            raise RuntimeError(
+                f"{_reason} (turns={_api_calls}/{max_iterations}); "
+                f"last response excerpt: {_tail}"
+            )
 
         final_response = result.get("final_response", "") or ""
         # Strip leaked placeholder text that upstream may inject on empty completions.

@@ -863,6 +863,37 @@ class TelegramAdapter(BasePlatformAdapter):
         return "thread not found" in str(error).lower()
 
     @staticmethod
+    def _is_entity_parse_error(error: Exception) -> bool:
+        """True for Bot API's "can't parse entities" family of rejections.
+
+        Telegram refuses the WHOLE message when the markup is unbalanced —
+        there is no partial render. So on this error the operator receives
+        nothing at all, which is indistinguishable from the agent ignoring
+        them. Callers use this to retry unformatted rather than drop.
+        """
+        text = str(error).lower()
+        return "parse entities" in text or "can't parse" in text
+
+    @staticmethod
+    def _entity_error_context(error: Exception, text: str) -> str:
+        """The text either side of the byte offset Telegram complained about.
+
+        Without this, a parse failure names an offset into a string nobody
+        kept, so the root cause can only be guessed at. With it, the log line
+        carries the offending markup itself.
+        """
+        m = re.search(r"byte offset (\d+)", str(error))
+        if not m:
+            return "<no offset in error>"
+        try:
+            off = int(m.group(1))
+            raw = text.encode("utf-8", "replace")
+            window = raw[max(0, off - 60): off + 60].decode("utf-8", "replace")
+            return f"offset={off} …{window}…"
+        except Exception:  # pragma: no cover - diagnostics must never throw
+            return "<offset unreadable>"
+
+    @staticmethod
     def _is_bad_request_error(error: Exception) -> bool:
         name = error.__class__.__name__.lower()
         if name == "badrequest" or name.endswith("badrequest"):
@@ -2335,9 +2366,43 @@ class TelegramAdapter(BasePlatformAdapter):
                 # Store reference for retry use in _handle_polling_conflict
                 self._polling_error_callback_ref = _polling_error_callback
 
+                # Deliver messages that arrived while this process was down.
+                #
+                # This was True, and it is why the operator's chats vanished:
+                # `drop_pending_updates=True` tells Telegram to BIN every update
+                # queued during the gap, so a message sent mid-restart is not
+                # delayed — it is destroyed, and never reaches a log line.
+                # gateway.source_watch restarts this process on any source edit
+                # (210 times to 2026-08-14, 3 inside one 40-minute window), and
+                # on 2026-08-14 21:59 the gateway came up with no connected
+                # platforms for ~14 minutes. Every message in those windows was
+                # silently discarded, which reads exactly as "Otto is totally
+                # unresponsive to my chats".
+                #
+                # False is what the rest of this file already does: both
+                # reconnect paths (:1611 network recovery, :1738 conflict retry)
+                # and the delete_webhook call ten lines above pass False. Cold
+                # start was the lone outlier. It is also what the /restart
+                # offset machinery assumes — _build_message_event threads
+                # update_id through specifically so a restart can advance PAST
+                # the triggering update (see its docstring); that bookkeeping is
+                # only meaningful if pending updates survive at all.
+                #
+                # Escape hatch for the long-outage case, where replaying hours of
+                # stale commands is worse than losing them:
+                #   TELEGRAM_DROP_PENDING_UPDATES=1
+                drop_pending = os.getenv(
+                    "TELEGRAM_DROP_PENDING_UPDATES", ""
+                ).strip().lower() in ("1", "true", "yes")
+                if drop_pending:
+                    logger.warning(
+                        "[%s] TELEGRAM_DROP_PENDING_UPDATES is set — messages "
+                        "sent while this process was down will be DISCARDED.",
+                        self.name,
+                    )
                 await self._app.updater.start_polling(
                     allowed_updates=Update.ALL_TYPES,
-                    drop_pending_updates=True,
+                    drop_pending_updates=drop_pending,
                     error_callback=_polling_error_callback,
                 )
             
@@ -6769,12 +6834,38 @@ class TelegramAdapter(BasePlatformAdapter):
                 return
             except Exception:
                 pass
-        sent = await self._send_message_with_thread_fallback(
-            chat_id=chat_id,
-            text=text,
-            reply_markup=markup,
-            parse_mode=ParseMode.MARKDOWN_V2,
-        )
+        try:
+            sent = await self._send_message_with_thread_fallback(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=markup,
+                parse_mode=ParseMode.MARKDOWN_V2,
+            )
+        except Exception as err:
+            # Telegram rejects the WHOLE message on unbalanced markup, so
+            # before this the operator got NOTHING — measured live 2026-08-14
+            # 23:30:12, "can't find end of bold entity at byte offset 1736",
+            # after a 277s wait. An unstyled panel still carries every word and
+            # every button (reply_markup is independent of parse_mode), so
+            # losing the styling beats losing the answer.
+            if not (
+                self._is_bad_request_error(err)
+                and self._is_entity_parse_error(err)
+            ):
+                raise
+            logger.warning(
+                "[%s] operator panel rejected as MarkdownV2, resending "
+                "unformatted (chat=%s): %s | %s",
+                self.name,
+                chat_id,
+                err,
+                self._entity_error_context(err, text),
+            )
+            sent = await self._send_message_with_thread_fallback(
+                chat_id=chat_id,
+                text=getattr(view, "text", "") or text,
+                reply_markup=markup,
+            )
         mid = getattr(sent, "message_id", None)
         if mid:
             thread_id = getattr(event.source, "thread_id", None) if event.source else None

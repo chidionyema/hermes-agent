@@ -1474,6 +1474,33 @@ from gateway.whatsapp_identity import (
 logger = logging.getLogger(__name__)
 
 
+# Longest message prefix written to the log. Enough to tell a menu tap ("/panel",
+# "ok") from a real question; short enough that the operator's chat content is
+# not transcribed wholesale into a 4.8 MB world-readable log file.
+_MSG_SHAPE_PREFIX = 48
+
+
+def _msg_shape(text) -> str:
+    """A loggable shape of an inbound message: length + a short prefix.
+
+    Routing verdicts were logged without any trace of WHAT was routed, so
+    "a regex is eating my chats" could not be confirmed or refuted from the
+    log alone — on 2026-08-14 it had to be tested by replaying the operator's
+    sentences through the matchers by hand. This makes the question answerable
+    with grep, per "state is a probe, not a paragraph".
+
+    Deliberately NOT the full text: see _MSG_SHAPE_PREFIX.
+    """
+    if not isinstance(text, str):
+        return "len=0 <non-text>"
+    flat = " ".join(text.split())
+    if not flat:
+        return "len=0 <empty>"
+    head = flat[:_MSG_SHAPE_PREFIX]
+    ellipsis = "…" if len(flat) > _MSG_SHAPE_PREFIX else ""
+    return f"len={len(flat)} {head!r}{ellipsis}"
+
+
 # Sentinel placed into _running_agents immediately when a session starts
 # processing, *before* any await.  Prevents a second message for the same
 # session from bypassing the "already running" guard during the async gap
@@ -6859,10 +6886,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _action = _result.get("action")
                 if _action == "skip":
                     logger.info(
-                        "pre_gateway_dispatch skip: reason=%s platform=%s chat=%s",
+                        "pre_gateway_dispatch skip: reason=%s platform=%s chat=%s msg=%s",
                         _result.get("reason"),
                         source.platform.value if source.platform else "unknown",
                         source.chat_id or "unknown",
+                        _msg_shape(getattr(event, "text", None)),
                     )
                     return None
                 if _action == "rewrite":
@@ -6872,6 +6900,20 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         source = event.source
                     break
                 if _action == "allow":
+                    # Log the ALLOW too. Without this line "did my message reach
+                    # the agent?" can only be answered by ABSENCE of a skip, and
+                    # absence is indistinguishable from the message never
+                    # arriving at all — which is exactly the ambiguity that made
+                    # the 2026-08-14 "Otto is unresponsive" report take hours to
+                    # root-cause (the messages were being deleted before they
+                    # reached this code; see telegram.py's cold-start polling).
+                    logger.info(
+                        "pre_gateway_dispatch allow: reason=%s platform=%s chat=%s msg=%s",
+                        _result.get("reason") or "no rule matched",
+                        source.platform.value if source.platform else "unknown",
+                        source.chat_id or "unknown",
+                        _msg_shape(getattr(event, "text", None)),
+                    )
                     break
 
         if is_internal:
