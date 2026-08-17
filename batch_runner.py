@@ -345,6 +345,14 @@ def _process_single_prompt(
             skip_memory=True,  # Don't use persistent memory in batch runs
         )
 
+        # Re-assert after construction. agent_init turns save_trajectories on from
+        # config.yaml trajectories.enabled for any caller that leaves it False, and it
+        # cannot tell an explicit False from an unset default. Without this line a batch
+        # run writes every conversation twice: once to its own per-batch file below, and
+        # once to ~/.hermes/trajectories/trajectory_samples.jsonl. Found 2026-08-17, the
+        # day the config gate landed.
+        agent.save_trajectories = False
+
         # Run the agent with task_id to ensure each task gets its own isolated VM
         result = agent.run_conversation(prompt, task_id=task_id)
         
