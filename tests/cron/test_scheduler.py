@@ -1268,6 +1268,50 @@ class TestRunJobSessionPersistence:
         # Ephemeral cron agent must still be closed even on agent-flagged failure.
         mock_agent.close.assert_called_once()
 
+    def test_run_job_turn_capped_still_delivers_the_work_product(self, tmp_path):
+        """A run that finished the deliverable and then ran out of turns must not lose it.
+
+        On 2026-08-17 `daily-strategist-audit` wrote a complete 5,000-character audit, hit its
+        turn cap, and run_job raised — so `_process_job` replaced the reply with
+        "⚠️ ... failed: <error>" and the founder was sent the error instead of the audit. The run
+        is still a failure (`success is False`, `last_status` stays "error"), but the work
+        product now comes back so it can be delivered.
+        """
+        report = "## Otto Audit\n\nEverything the agent actually produced."
+        job = {"id": "capped-job", "name": "capped", "prompt": "audit", "max_turns": 5}
+        fake_db = MagicMock()
+
+        with patch("cron.scheduler._hermes_home", tmp_path), \
+             patch("cron.scheduler._resolve_origin", return_value=None), \
+             patch("dotenv.load_dotenv"), \
+             patch("hermes_state.SessionDB", return_value=fake_db), \
+             patch(
+                 "hermes_cli.runtime_provider.resolve_runtime_provider",
+                 return_value={
+                     "api_key": "***",
+                     "base_url": "https://example.invalid/v1",
+                     "provider": "openrouter",
+                     "api_mode": "chat_completions",
+                 },
+             ), \
+             patch("run_agent.AIAgent") as mock_agent_cls:
+            mock_agent = MagicMock()
+            mock_agent.run_conversation.return_value = {
+                "final_response": report,
+                "failed": True,
+                "completed": False,
+                "api_calls": 5,
+            }
+            mock_agent_cls.return_value = mock_agent
+
+            success, output, final_response, error = run_job(job)
+
+        assert success is False, "a turn-capped run is still a failure"
+        assert final_response == report, "the work product must survive"
+        assert "(DEGRADED)" in output
+        assert error is not None and "turns=5/5" in error
+        mock_agent.close.assert_called_once()
+
     def test_run_job_completed_true_without_failed_flag_succeeds(self, tmp_path):
         """Regression guard: a normal success result (``completed=True``,
         ``failed`` absent) must not trip the failure-flag check.

@@ -2079,13 +2079,42 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                     logger.warning(
                         "Job '%s': failed to preserve partial response: %s", job_name, _pe
                     )
-            # Bounded excerpt only — a full report in the exception floods
-            # errors.log and poisons the watchdog CRON_ERROR fingerprint.
-            _tail = _full[:400]
-            raise RuntimeError(
-                f"{_reason} (turns={_api_calls}/{max_iterations}); "
-                f"last response excerpt: {_tail}"
-            )
+            _why = f"{_reason} (turns={_api_calls}/{max_iterations})"
+            # Only a TURN-CAP failure is treated as "the work is done, the agent just ran out of
+            # turns to hand it over". An API failure or a model abort puts an error string or a
+            # fragment in `final_response`, and delivering that as if it were the reply is the
+            # exact defect issue #17855 closed. Test by the turn count, not by the reason string.
+            _turn_capped = bool(_api_calls) and _api_calls >= max_iterations
+            if _full and _turn_capped:
+                # The run failed on the way OUT and the deliverable is already in hand. Raising
+                # here threw it away: `_process_job` replaces the reply with
+                # "⚠️ <job> failed: <error>", so on 2026-08-17 `daily-strategist-audit` wrote a
+                # complete 5,000-character report, hit its turn cap, and the founder was sent the
+                # error instead of the audit. Return the failure AND the product: `last_status`
+                # stays honestly "error", and the work still gets delivered.
+                logger.warning(
+                    "Job '%s': degraded run, delivering the work product anyway (%s)",
+                    job_name, _why,
+                )
+                degraded_output = f"""# Cron Job: {job_name} (DEGRADED)
+
+**Job ID:** {job_id}
+**Run Time:** {_hermes_now().strftime('%Y-%m-%d %H:%M:%S')}
+**Schedule:** {job.get('schedule_display', 'N/A')}
+**Failure:** {_why}
+
+## Prompt
+
+{prompt}
+
+## Response (produced before the failure)
+
+{_full}
+"""
+                return False, degraded_output, _full, _why
+            # No deliverable. The exception carries the reason only — a full report in here
+            # floods errors.log and poisons the watchdog CRON_ERROR fingerprint.
+            raise RuntimeError(_why)
 
         final_response = result.get("final_response", "") or ""
         # Strip leaked placeholder text that upstream may inject on empty completions.
@@ -2278,7 +2307,17 @@ def tick(verbose: bool = True, adapters=None, loop=None, sync: bool = True) -> i
                 # Deliver the final response to the origin/target chat.
                 # If the agent responded with [SILENT], skip delivery (but
                 # output is already saved above).  Failed jobs always deliver.
-                deliver_content = final_response if success else f"⚠️ Cron job '{job.get('name', job['id'])}' failed:\n{error}"
+                _jname = job.get("name", job["id"])
+                if success:
+                    deliver_content = final_response
+                elif final_response.strip():
+                    # A failed run that still produced a deliverable (turn cap hit after the
+                    # report was written). Send the work, with the failure named above it.
+                    deliver_content = (
+                        f"⚠️ Cron job '{_jname}' finished degraded ({error}):\n\n{final_response}"
+                    )
+                else:
+                    deliver_content = f"⚠️ Cron job '{_jname}' failed:\n{error}"
                 # Treat whitespace-only final responses the same as empty
                 # responses: do not deliver a blank message, and let the
                 # empty-response guard below mark the run as a soft failure.
