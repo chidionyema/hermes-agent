@@ -561,17 +561,50 @@ def test_fence_has_not_drifted_from_the_pi_bridge():
     import ast
 
     tree = ast.parse(bridge.read_text(encoding="utf-8"))
-    theirs = None
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Assign) and any(
-            getattr(t, "id", None) == "FENCE_PATTERNS" for t in node.targets
-        ):
-            theirs = ast.literal_eval(node.value)
+
+    def _literals(t) -> dict:
+        """Every module-level name in `t` that is assigned a plain literal."""
+        found = {}
+        for n in t.body:
+            if not isinstance(n, ast.Assign):
+                continue
+            for target in n.targets:
+                name = getattr(target, "id", None)
+                if not name:
+                    continue
+                try:
+                    found[name] = ast.literal_eval(n.value)
+                except ValueError:
+                    pass        # an alias or an expression; resolved below
+        return found
+
+    literals = _literals(tree)
+    theirs = literals.get("FENCE_PATTERNS")
+    if theirs is None:
+        # 2026-08-17: the bridge split its fence into HARD_PATTERNS (refuse) and
+        # REVIEW_PATTERNS (allowed, reported), and FENCE_PATTERNS became an alias —
+        # `FENCE_PATTERNS = HARD_PATTERNS`. literal_eval on a bare Name raises, so this
+        # test failed on the rename rather than on any drift. Follow one alias hop.
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(getattr(t, "id", None) == "FENCE_PATTERNS" for t in node.targets):
+                continue
+            if isinstance(node.value, ast.Name):
+                theirs = literals.get(node.value.id)
             break
     assert theirs is not None, "pi_bridge.py no longer declares FENCE_PATTERNS"
-    assert sorted(cs.FENCE_PATTERNS) == sorted(theirs), (
-        "the coding-session fence has drifted from the pi bridge's; "
-        "reconcile them deliberately, in both files"
+    # SUPERSET, not equality (2026-08-17). Equality was the right check while both files held
+    # one list. The bridge then split its fence in two: HARD_PATTERNS refuses, REVIEW_PATTERNS
+    # allows and reports, and `\bcheckout` moved to REVIEW there while the gateway still
+    # refuses it. The safety property is one-directional — the gateway may refuse MORE than
+    # the bridge, never less — so that is what this asserts. A pattern the bridge refuses and
+    # the gateway does not is the gateway failing open, and still fails here.
+    missing = sorted(set(theirs) - set(cs.FENCE_PATTERNS))
+    assert not missing, (
+        "the coding-session fence is WEAKER than the pi bridge's: "
+        f"{missing} would be refused by the bridge and allowed here. "
+        "Reconcile them deliberately, in both files."
     )
 
 
