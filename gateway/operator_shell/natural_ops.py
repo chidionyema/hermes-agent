@@ -302,6 +302,92 @@ _PATTERNS = [
     (re.compile(
         r"^\s*pause\s+(?:task\s+)?`?([0-9a-fA-F]{4,12})`?\s*$", re.I),
      "pause_task", "{g1}", "Pause task"),
+    # ── Estate panels that had buttons and no words ──────────────────────────────
+    #
+    # estate.py::_PANELS registers 24 read-only panels. Measured 2026-08-17: only TWO of
+    # them (projects, deployed) could be reached by typing anything. The other 22 were
+    # reachable ONLY by tapping a button you had already been shown, so a panel you had
+    # not seen recently did not exist as far as the operator was concerned. That is the
+    # same defect class as the estate_intel panels themselves — "the buttons were shipped;
+    # the panels never were" (estate_intel.py:4) — one layer up.
+    #
+    # These sit ABOVE the Find/help patterns on purpose. `find`, `commands` and `help`
+    # match broadly, and this list is ordered first-match-wins, so a door placed below
+    # them would be swallowed. Words already owned by another route are NOT taken here:
+    # bare `dashboard`, `now` and `health` still go to the mission card, and bare
+    # `commands` still goes to Find. Each panel below is a real entry in _PANELS with
+    # arg mode "none" — nothing here invents a capability.
+    (re.compile(
+        r"^\s*(depend(enc(y|ies))?|deps|dependency\s+map|"
+        r"what\s+depends\s+on\s+what)\s*\??\s*$", re.I),
+     "dependencies", "", "Dependencies"),
+    (re.compile(
+        r"^\s*(correlate|linked\s+failures?|related\s+failures?|"
+        r"what\s+fails\s+together)\s*\??\s*$", re.I),
+     "correlate", "", "Linked failures"),
+    (re.compile(
+        r"^\s*(capabilit(y|ies)(\s+status)?|what\s+is\s+dark|whats\s+dark|"
+        r"which\s+capabilit(y|ies)|liveness|"
+        r"what\s+can\s+(you|u)\s+do)\s*\??\s*$", re.I),
+     "capabilities", "", "Capabilities"),
+    (re.compile(
+        r"^\s*(estate\s+health|health\s+score)\s*\??\s*$", re.I),
+     "estate_health", "", "Estate health"),
+    (re.compile(
+        r"^\s*(diagnose|diagnosis|what\s+is\s+wrong|whats\s+wrong)\s*\??\s*$", re.I),
+     "diagnose_panel", "", "Diagnose"),
+    (re.compile(
+        r"^\s*(fix\s+guide|how\s+do\s+i\s+fix\s+(it|this)|repair\s+guide)\s*\??\s*$", re.I),
+     "fix_guide", "", "Fix guide"),
+    (re.compile(
+        r"^\s*(features?|feature\s+list|what\s+features?(\s+exist)?)\s*\??\s*$", re.I),
+     "features_panel", "", "Features"),
+    (re.compile(
+        r"^\s*(forecast|predict(ions?)?|what\s+happens\s+next)\s*\??\s*$", re.I),
+     "predict_panel", "", "Forecast"),
+    (re.compile(
+        r"^\s*((active|open|recent|current)\s+)?"
+        r"(incidents?|incident\s+log|outages?)\s*\??\s*$", re.I),
+     "incidents", "", "Incidents"),
+    (re.compile(
+        r"^\s*(compliance|policy\s+check)\s*\??\s*$", re.I),
+     "compliance", "", "Compliance"),
+    (re.compile(
+        r"^\s*(idle|idle\s+status|what\s+do\s+you\s+do\s+when\s+idle)\s*\??\s*$", re.I),
+     "idle_status", "", "Idle"),
+    (re.compile(
+        r"^\s*(self[-\s]?audit|otto\s+health|audit\s+yourself)\s*\??\s*$", re.I),
+     "otto_health", "", "Self-audit"),
+    (re.compile(
+        r"^\s*(score|estate\s+score|score\s+(history|target|trend))\s*\??\s*$", re.I),
+     "score", "", "Score"),
+    (re.compile(
+        r"^\s*(changes|rsi\s+changes|what\s+changed|what\s+have\s+you\s+changed)\s*\??\s*$",
+        re.I),
+     "rsi_changes", "", "Changes"),
+    (re.compile(
+        r"^\s*(digest|weekly\s+digest|week\s+in\s+review)\s*\??\s*$", re.I),
+     "weekly_digest", "", "Digest"),
+    (re.compile(
+        r"^\s*(logs?|log\s+picker|show\s+(me\s+)?(the\s+)?logs?)\s*\??\s*$", re.I),
+     "logs", "", "Logs"),
+    (re.compile(
+        r"^\s*(web\s+dashboard|open\s+(the\s+)?dashboard|browser\s+dashboard)\s*\??\s*$",
+        re.I),
+     "dashboard", "", "Dashboard"),
+    (re.compile(
+        r"^\s*(command\s+palette|all\s+commands|every\s+command)\s*\??\s*$", re.I),
+     "commands", "", "Commands"),
+    (re.compile(
+        r"^\s*(prospector\s+now|now\s+prospector|what\s+is\s+prospector\s+doing)\s*\??\s*$",
+        re.I),
+     "prospector_now", "", "Now"),
+    (re.compile(
+        r"^\s*(health\s+panel|subsystem\s+health|health\s+detail)\s*\??\s*$", re.I),
+     "health", "", "Health"),
+    (re.compile(
+        r"^\s*(otto\s+panel|otto\s+status)\s*\??\s*$", re.I),
+     "otto", "", "Otto"),
     # Find. The answer to "I don't know where anything is" — anchored above code_assign so
     # "find the spend cap" is a lookup, not a coding task.
     (re.compile(r"^\s*(?:find|search|lookup|look\s+up)\s+(.+?)\s*\??\s*$", re.I),

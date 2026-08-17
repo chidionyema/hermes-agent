@@ -18,7 +18,9 @@ Three rules this module follows, each because of a defect already paid for elsew
 """
 from __future__ import annotations
 
+import json
 import sys
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Tuple
 
@@ -466,7 +468,91 @@ def render_fix_result(results: Any, err: str) -> Tuple[str, List[ButtonRow]]:
     return "\n".join(lines), with_nav(buttons, "fix_all")
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# 📋 Capabilities — the estate's own liveness contract, finally visible
+# ──────────────────────────────────────────────────────────────────────────────
+
+# capability_audit.FAIL_VERDICTS, copied rather than imported: importing it drags the whole
+# audit module (and its sqlite/plist scans) into a panel that only needs six strings.
+_FAIL_VERDICTS = {"DARK", "UNPROVEN", "BROKEN", "LATCHED"}
+
+
+def _age(seconds: object) -> str:
+    """Seconds as the coarsest honest unit. `None` is unknown, not zero."""
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        return "unknown"
+    if s < 90:
+        return f"{int(s)}s"
+    if s < 5400:
+        return f"{s / 60:.0f}m"
+    if s < 172800:
+        return f"{s / 3600:.1f}h"
+    return f"{s / 86400:.1f}d"
+
+
+def render_capabilities() -> Tuple[str, List[ButtonRow]]:
+    """What each capability must produce, how often, and whether it did.
+
+    `~/.hermes/capabilities.json` declares 45 capabilities and `capability_audit.py` grades
+    every one of them hourly. Until 2026-08-17 none of that reached an operator: the audit
+    ran, wrote verdicts to `state/reliability_status.json`, alarmed once per state CHANGE
+    and was otherwise invisible. Asking "what is dark?" meant opening a terminal.
+
+    Reads the CACHED status file instead of re-running the audit. The audit walks receipts,
+    plists and sqlite and takes over two minutes — a Telegram panel that blocks that long is
+    a panel nobody opens. The trade is staleness, so the age of the verdicts is printed. An
+    hour-old verdict presented as live is the exact failure this subsystem exists to stop.
+    """
+    path = HERMES_HOME / "state" / "reliability_status.json"
+    try:
+        data = json.loads(path.read_text())
+        age_h = (time.time() - path.stat().st_mtime) / 3600.0
+    except Exception as exc:  # noqa: BLE001
+        return _broken("📋 *Capabilities*", "the capability audit",
+                       f"{type(exc).__name__}: {exc}", "capabilities")
+
+    caps = data.get("capabilities") or []
+    if not caps:
+        return _broken("📋 *Capabilities*", "the capability audit",
+                       "the status file declares no capabilities", "capabilities")
+
+    fail = [c for c in caps if c.get("verdict") in _FAIL_VERDICTS]
+    ok = [c for c in caps if c.get("verdict") not in _FAIL_VERDICTS]
+    face = "🔴" if fail else "🟢"
+
+    lines = [f"📋 *Capabilities* — {face} {len(ok)}/{len(caps)} producing", ""]
+    for c in sorted(fail, key=lambda c: -(c.get("age_s") or 0)):
+        lines.append(f"🔴 *{_words(c.get('id'), 30)}* — {_words(c.get('verdict'), 12)}, "
+                     f"last {_age(c.get('age_s'))} ago, expected every "
+                     f"{_age(c.get('period_s'))}")
+        lines.append(f"    _{_words(c.get('what'), 90)}_")
+    if not fail:
+        lines.append("_Every declared capability produced inside its window._")
+
+    latches = [x for x in (data.get("latches") or []) if x.get("held")]
+    if latches:
+        lines += ["", f"🔒 *{len(latches)} latch(es) held* — "
+                      + ", ".join(_words(x.get("id"), 20) for x in latches[:4])]
+
+    lines += [
+        "",
+        f"_{len(ok)} producing, not listed. Verdicts are {age_h:.1f}h old: the audit runs "
+        "hourly and this panel reads its last result rather than re-running a two-minute "
+        "scan._",
+        "",
+        panel_stamp("capabilities"),
+    ]
+    buttons: List[ButtonRow] = [
+        [("🩺 Estate health", "estate:estate_health"), ("🔍 Diagnose", "estate:diagnose_panel")],
+        [("🔗 Linked failures", "estate:correlate"), ("⚙️ Daemons", "estate:daemons")],
+    ]
+    return "\n".join(lines), with_nav(buttons, "capabilities")
+
+
 _RENDERERS: Dict[str, Callable[[], Tuple[str, List[ButtonRow]]]] = {
+    "capabilities": render_capabilities,
     "estate_health": render_estate_health,
     "dependencies": render_dependencies,
     "correlate": render_correlate,
