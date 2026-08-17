@@ -39,6 +39,29 @@ from utils import base_url_host_matches, base_url_hostname, env_int
 logger = logging.getLogger(__name__)
 
 
+def _chain_isinstance(err: BaseException, types, _depth: int = 5) -> bool:
+    """isinstance() that also walks the ``__cause__``/``__context__`` chain.
+
+    Provider adapters sometimes wrap a transport error in their own
+    exception class (the Gemini native adapter used to turn every
+    ``httpx.HTTPError`` into ``GeminiAPIError``). The streaming retry gate
+    decides retryability by exception type, so a wrapped ``ReadTimeout``
+    matched nothing, the retry budget was never spent, and a one-off
+    network stall killed the whole turn. Walking the chain keeps those
+    errors on the retry branch. Same max-depth-5 pattern as
+    :func:`agent.error_classifier._extract_status_code`.
+    """
+    current: Optional[BaseException] = err
+    for _ in range(_depth):
+        if isinstance(current, types):
+            return True
+        nxt = getattr(current, "__cause__", None) or getattr(current, "__context__", None)
+        if nxt is None or nxt is current:
+            break
+        current = nxt
+    return False
+
+
 def _ra():
     """Lazy ``run_agent`` reference.
 
@@ -2254,10 +2277,10 @@ def interruptible_streaming_api_call(agent, api_kwargs: dict, *, on_first_delta=
                             type(e).__name__,
                         )
                         return
-                    _is_timeout = isinstance(
+                    _is_timeout = _chain_isinstance(
                         e, (_httpx.ReadTimeout, _httpx.ConnectTimeout, _httpx.PoolTimeout)
                     )
-                    _is_conn_err = isinstance(
+                    _is_conn_err = _chain_isinstance(
                         e, (_httpx.ConnectError, _httpx.RemoteProtocolError, ConnectionError)
                     )
                     _is_stream_parse_err = agent._is_provider_stream_parse_error(e)

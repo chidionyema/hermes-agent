@@ -98,7 +98,10 @@ def _telegram_retry_delay(exc: Exception, attempt: int) -> float | None:
 
     text = str(exc).lower()
     if "timed out" in text or "timeout" in text:
-        return None
+        # Connect/read timeouts are transient. Retry with a capped backoff.
+        # A rare duplicate message is a smaller harm than a silently dropped
+        # send killing the whole job (see the 9am digest CRON_ERROR).
+        return min(float(2 ** attempt), 8.0)
     if (
         "bad gateway" in text
         or "502" in text

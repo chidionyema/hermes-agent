@@ -332,7 +332,11 @@ def test_every_new_panel_survives_the_real_send_path(monkeypatch):
         {"identity": {"agent_id": "hermes_1", "compliant": True}}, ""))
 
     panels = list(EI._RENDERERS.items()) + [("fix_preview", EI.render_fix_preview)]
-    assert len(panels) == 7, f"a panel was added or lost: {[n for n, _ in panels]}"
+    # 8 since 2026-08-17, when `capabilities` was added. Unlike its siblings that panel takes
+    # no _call: it reads state/reliability_status.json directly, because the live audit runs
+    # over two minutes. Either branch — real file or the _broken fallback — still has to come
+    # out the other side of the MarkdownV2 converter, which is what the loop below checks.
+    assert len(panels) == 8, f"a panel was added or lost: {[n for n, _ in panels]}"
     for name, render in panels:
         text, _buttons = render()
         assert text, f"{name} rendered nothing"
