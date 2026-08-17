@@ -330,20 +330,43 @@ _PATTERNS = [
         r"which\s+capabilit(y|ies)|liveness|"
         r"what\s+can\s+(you|u)\s+do)\s*\??\s*$", re.I),
      "capabilities", "", "Capabilities"),
+    # "system health" added 2026-08-17. tests/test_rounds_d_h.py:148 had asserted it since
+    # the panel was written and it had never matched anything — the phrase an operator
+    # actually types was the one phrase not in the pattern.
     (re.compile(
-        r"^\s*(estate\s+health|health\s+score)\s*\??\s*$", re.I),
+        r"^\s*(estate\s+health|system\s+health|health\s+score)\s*\??\s*$", re.I),
      "estate_health", "", "Estate health"),
+    # The bare form. The subject-carrying form is the next pattern; both land on the same
+    # panel, which takes an optional argument (estate.py _PANELS: diagnose_panel is _ARG_OPT).
     (re.compile(
         r"^\s*(diagnose|diagnosis|what\s+is\s+wrong|whats\s+wrong)\s*\??\s*$", re.I),
      "diagnose_panel", "", "Diagnose"),
+    # "diagnose moat", "why is prospector failing" — asserted in tests/test_rounds_d_h.py:137
+    # and never routed. Anchored AFTER the bare form so "diagnose" alone keeps the empty arg.
+    (re.compile(
+        r"^\s*(?:diagnose|diagnosis\s+of)\s+(.+?)\s*\??\s*$", re.I),
+     "diagnose_panel", "{g1}", "Diagnose"),
+    (re.compile(
+        r"^\s*why\s+is\s+(.+?)\s+(?:failing|broken|down|dark)\s*\??\s*$", re.I),
+     "diagnose_panel", "{g1}", "Diagnose"),
     (re.compile(
         r"^\s*(fix\s+guide|how\s+do\s+i\s+fix\s+(it|this)|repair\s+guide)\s*\??\s*$", re.I),
      "fix_guide", "", "Fix guide"),
+    # "fix credits" — the subject-carrying form of the fix guide, which is also _ARG_OPT.
+    # Exactly ONE bare word after "fix". Anything longer is a coding request and must fall
+    # through to code_assign: "fix the login bug" is work, "fix credits" is a panel.
+    (re.compile(
+        r"^\s*fix\s+(?!guide\b)([\w-]+)\s*\??\s*$", re.I),
+     "fix_guide", "{g1}", "Fix guide"),
     (re.compile(
         r"^\s*(features?|feature\s+list|what\s+features?(\s+exist)?)\s*\??\s*$", re.I),
      "features_panel", "", "Features"),
+    # The trailing subject is accepted and dropped: the forecast panel is _ARG_NONE in
+    # estate.py, so "predict credits" and "predict" are the same panel. Added 2026-08-17
+    # because tests/test_rounds_d_h.py:139 asserted the subject form and it never matched.
     (re.compile(
-        r"^\s*(forecast|predict(ions?)?|what\s+happens\s+next)\s*\??\s*$", re.I),
+        r"^\s*(forecast|predict(ions?)?|what\s+happens\s+next)"
+        r"(\s+[\w-]+)?\s*\??\s*$", re.I),
      "predict_panel", "", "Forecast"),
     (re.compile(
         r"^\s*((active|open|recent|current)\s+)?"
@@ -365,8 +388,12 @@ _PATTERNS = [
         r"^\s*(changes|rsi\s+changes|what\s+changed|what\s+have\s+you\s+changed)\s*\??\s*$",
         re.I),
      "rsi_changes", "", "Changes"),
+    # "report" and "weekly report" added 2026-08-17. tests/test_commercial_bridge.py:91
+    # asserted both and neither matched: the panel was called "digest" and every operator
+    # types "report". The panel is the same one; only the words an operator uses were missing.
     (re.compile(
-        r"^\s*(digest|weekly\s+digest|week\s+in\s+review)\s*\??\s*$", re.I),
+        r"^\s*(digest|weekly\s+digest|week\s+in\s+review|report|weekly\s+report)\s*\??\s*$",
+        re.I),
      "weekly_digest", "", "Digest"),
     (re.compile(
         r"^\s*(logs?|log\s+picker|show\s+(me\s+)?(the\s+)?logs?)\s*\??\s*$", re.I),
