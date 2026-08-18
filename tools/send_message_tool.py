@@ -88,6 +88,37 @@ def _error(message: str) -> dict:
     return {"error": _sanitize_error_text(message)}
 
 
+#: One HTTP phase (connect, read, write, pool). python-telegram-bot's own defaults were left in
+#: place here, which meant nobody had ever chosen this number.
+TELEGRAM_ATTEMPT_TIMEOUT_S = float(os.getenv("HERMES_TELEGRAM_ATTEMPT_TIMEOUT_S", "10"))
+#: Wall clock for the WHOLE send, retries and backoff included. The caller's own timeout must be
+#: larger than this, and `_send_telegram_message_with_retry` will not start an attempt that cannot
+#: finish inside it.
+#:
+#: Why it exists: `ci-watchdog.sh` gave `hermes send` 15 seconds while this module was willing to
+#: make 3 attempts with 1s and 2s of backoff on top of unbounded library timeouts. The retry that
+#: exists to survive a transient Telegram timeout was guaranteed to be killed before it could
+#: finish, so the job died with exit 124 and the message was never sent. Two numbers, chosen in two
+#: files, by two people, that were never compared. Now the budget is declared here and the callers
+#: are set above it.
+TELEGRAM_SEND_BUDGET_S = float(os.getenv("HERMES_TELEGRAM_SEND_BUDGET_S", "40"))
+
+
+def _tg_request(proxy: str | None = None):
+    """An HTTPXRequest with timeouts we chose, not whatever the library defaults to."""
+    from telegram.request import HTTPXRequest
+
+    kwargs = {
+        "connect_timeout": TELEGRAM_ATTEMPT_TIMEOUT_S,
+        "read_timeout": TELEGRAM_ATTEMPT_TIMEOUT_S,
+        "write_timeout": TELEGRAM_ATTEMPT_TIMEOUT_S,
+        "pool_timeout": TELEGRAM_ATTEMPT_TIMEOUT_S,
+    }
+    if proxy:
+        kwargs["proxy"] = proxy
+    return HTTPXRequest(**kwargs)
+
+
 def _telegram_retry_delay(exc: Exception, attempt: int) -> float | None:
     retry_after = getattr(exc, "retry_after", None)
     if retry_after is not None:
@@ -98,7 +129,10 @@ def _telegram_retry_delay(exc: Exception, attempt: int) -> float | None:
 
     text = str(exc).lower()
     if "timed out" in text or "timeout" in text:
-        return None
+        # Connect/read timeouts are transient. Retry with a capped backoff.
+        # A rare duplicate message is a smaller harm than a silently dropped
+        # send killing the whole job (see the 9am digest CRON_ERROR).
+        return min(float(2 ** attempt), 8.0)
     if (
         "bad gateway" in text
         or "502" in text
@@ -114,12 +148,22 @@ def _telegram_retry_delay(exc: Exception, attempt: int) -> float | None:
 
 
 async def _send_telegram_message_with_retry(bot, *, attempts: int = 3, **kwargs):
+    _deadline = time.monotonic() + TELEGRAM_SEND_BUDGET_S
     for attempt in range(attempts):
         try:
             return await bot.send_message(**kwargs)
         except Exception as exc:
             delay = _telegram_retry_delay(exc, attempt)
             if delay is None or attempt >= attempts - 1:
+                raise
+            # Never start an attempt that cannot finish inside the budget. Without this the
+            # retry runs past the caller's timeout and gets killed mid-flight, which reads as a
+            # crashed job instead of a failed send.
+            if time.monotonic() + delay + TELEGRAM_ATTEMPT_TIMEOUT_S > _deadline:
+                logger.warning(
+                    "Telegram send budget (%.0fs) exhausted after attempt %d/%d; not retrying",
+                    TELEGRAM_SEND_BUDGET_S, attempt + 1, attempts,
+                )
                 raise
             logger.warning(
                 "Transient Telegram send failure (attempt %d/%d), retrying in %.1fs: %s",
@@ -1088,18 +1132,17 @@ async def _send_telegram(token, chat_id, message, media_files=None, thread_id=No
             _tg_proxy = None
         if _tg_proxy:
             try:
-                from telegram.request import HTTPXRequest
                 logger.info("send_message: standalone Telegram send routed through proxy %s", _tg_proxy)
                 bot = Bot(
                     token=token,
-                    request=HTTPXRequest(proxy=_tg_proxy),
-                    get_updates_request=HTTPXRequest(proxy=_tg_proxy),
+                    request=_tg_request(_tg_proxy),
+                    get_updates_request=_tg_request(_tg_proxy),
                 )
             except Exception as _proxy_err:
                 logger.warning("send_message: failed to attach Telegram proxy (%s), falling back to direct connection", _proxy_err)
-                bot = Bot(token=token)
+                bot = Bot(token=token, request=_tg_request())
         else:
-            bot = Bot(token=token)
+            bot = Bot(token=token, request=_tg_request())
         int_chat_id = int(chat_id)
         media_files = media_files or []
         thread_kwargs = {}
@@ -1301,13 +1344,12 @@ async def _edit_telegram(token, chat_id, message_id, message):
             _tg_proxy = None
         if _tg_proxy:
             try:
-                from telegram.request import HTTPXRequest
-                bot = Bot(token=token, request=HTTPXRequest(proxy=_tg_proxy),
-                          get_updates_request=HTTPXRequest(proxy=_tg_proxy))
+                bot = Bot(token=token, request=_tg_request(_tg_proxy),
+                          get_updates_request=_tg_request(_tg_proxy))
             except Exception:
-                bot = Bot(token=token)
+                bot = Bot(token=token, request=_tg_request())
         else:
-            bot = Bot(token=token)
+            bot = Bot(token=token, request=_tg_request())
 
         try:
             msg = await bot.edit_message_text(

@@ -109,14 +109,19 @@ class TestSendTelegramStandaloneProxy:
         # And the bot was actually used to send.
         bot.send_message.assert_awaited_once()
 
-    def test_no_proxy_env_uses_plain_bot(
+    def test_no_proxy_env_still_sets_our_timeouts(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Without TELEGRAM_PROXY (and no inherited HTTPS_PROXY/etc), Bot()
-        is constructed plainly — no ``request``/``get_updates_request``
-        kwargs, and HTTPXRequest is not invoked at all.
+        """Without TELEGRAM_PROXY the Bot still gets a request WE built.
+
+        This test used to assert the opposite — a plain ``Bot(token=...)`` with no ``request``
+        kwarg and HTTPXRequest never constructed. That is how the per-attempt HTTP timeout came
+        to be a python-telegram-bot default that nobody had chosen, which is half of why
+        ``ci-watchdog.sh``'s 15-second wrapper kept killing the retry (2026-08-17). No proxy means
+        no ``proxy`` kwarg; it does not mean no timeouts.
         """
         from tools.send_message_tool import _send_telegram
+        from tools import send_message_tool as smt
 
         # Wipe every env var resolve_proxy_url() inspects so the host's
         # ambient proxy settings can't flip this test green-or-red.
@@ -151,7 +156,9 @@ class TestSendTelegramStandaloneProxy:
         call_args = bot_factory.call_args.args
         # token may be passed positionally or as a kwarg; either is fine.
         assert call_kwargs.get("token", call_args[0] if call_args else None) == "tok"
-        assert "request" not in call_kwargs
-        assert "get_updates_request" not in call_kwargs
-        httpx_request_factory.assert_not_called()
+        httpx_request_factory.assert_called()
+        req_kw = call_kwargs["request"]._kw
+        assert "proxy" not in req_kw, "no proxy env must not produce a proxy kwarg"
+        for phase in ("connect_timeout", "read_timeout", "write_timeout", "pool_timeout"):
+            assert req_kw[phase] == smt.TELEGRAM_ATTEMPT_TIMEOUT_S, phase
         bot.send_message.assert_awaited_once()

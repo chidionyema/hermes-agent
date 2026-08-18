@@ -959,6 +959,23 @@ class GeminiNativeClient:
                         for chunk in translate_stream_event(event, model, tool_call_indices):
                             yield chunk
             except httpx.HTTPError as exc:
+                # Transport-class failures (read/connect timeouts, dropped
+                # connections) must reach the caller as real httpx types.
+                # The streaming retry gate in chat_completion_helpers keys
+                # its retry decision off isinstance(e, httpx.ReadTimeout)
+                # and friends, so wrapping these in GeminiAPIError destroys
+                # the retry signal and turns a one-off network stall into a
+                # hard turn failure.
+                if isinstance(
+                    exc,
+                    (
+                        httpx.TimeoutException,
+                        httpx.ConnectError,
+                        httpx.RemoteProtocolError,
+                        httpx.ReadError,
+                    ),
+                ):
+                    raise
                 raise GeminiAPIError(
                     f"Gemini streaming request failed: {exc}",
                     code="gemini_stream_error",

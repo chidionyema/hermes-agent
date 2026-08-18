@@ -2898,3 +2898,75 @@ class TestSendTelegramThreadNotFoundRetry:
         finally:
             if media_path and os.path.exists(media_path):
                 os.unlink(media_path)
+
+
+class TestTelegramTimeoutRetry:
+    """Timeouts must be retried, not treated as permanent (9am digest CRON_ERROR).
+
+    A single transient connect/read timeout used to return ``None`` from
+    ``_telegram_retry_delay``, which re-raised on the first attempt, failed
+    ``hermes send``, and made otto-daily-digest.sh exit 1.
+    """
+
+    def test_timeout_gets_positive_backoff(self):
+        from tools.send_message_tool import _telegram_retry_delay
+
+        delay = _telegram_retry_delay(Exception("Timed out"), 0)
+        assert isinstance(delay, float)
+        assert delay > 0
+
+    def test_timeout_backoff_is_capped(self):
+        from tools.send_message_tool import _telegram_retry_delay
+
+        # Exponential, but bounded so a retry storm can't stall the job.
+        assert _telegram_retry_delay(Exception("Read timeout"), 1) == 2.0
+        assert _telegram_retry_delay(Exception("Read timeout"), 10) == 8.0
+
+    def test_permanent_errors_still_not_retried(self):
+        from tools.send_message_tool import _telegram_retry_delay
+
+        assert _telegram_retry_delay(Exception("Unauthorized"), 0) is None
+        assert _telegram_retry_delay(Exception("can't parse entities"), 0) is None
+
+    def test_two_timeouts_then_success_returns_message(self):
+        from tools.send_message_tool import _send_telegram_message_with_retry
+
+        calls = []
+        sentinel = SimpleNamespace(message_id=42)
+
+        class FlakyBot:
+            async def send_message(self, **kwargs):
+                calls.append(kwargs)
+                if len(calls) < 3:
+                    raise Exception("Timed out")
+                return sentinel
+
+        async def run_test():
+            with patch("asyncio.sleep", new=AsyncMock()):
+                return await _send_telegram_message_with_retry(
+                    FlakyBot(), chat_id="-100123", text="digest"
+                )
+
+        result = asyncio.run(run_test())
+        assert result is sentinel
+        assert len(calls) == 3, f"expected 3 send_message calls, got {len(calls)}"
+
+    def test_persistent_timeout_still_raises_after_three_attempts(self):
+        from tools.send_message_tool import _send_telegram_message_with_retry
+
+        calls = []
+
+        class DeadBot:
+            async def send_message(self, **kwargs):
+                calls.append(kwargs)
+                raise Exception("Timed out")
+
+        async def run_test():
+            with patch("asyncio.sleep", new=AsyncMock()):
+                return await _send_telegram_message_with_retry(
+                    DeadBot(), chat_id="-100123", text="digest"
+                )
+
+        with pytest.raises(Exception, match="Timed out"):
+            asyncio.run(run_test())
+        assert len(calls) == 3, f"expected exactly 3 send_message calls, got {len(calls)}"
