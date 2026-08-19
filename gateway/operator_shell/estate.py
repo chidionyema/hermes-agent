@@ -430,6 +430,9 @@ _PANELS: Dict[str, Tuple[str, str, str, str]] = {
     # key, so the estate's whole project dimension had no entrance. 507 lines of
     # working panel behind one missing dict entry.
     "projects":       ("projects",        "render_home",              "Projects",   _ARG_NONE),
+    # Home is row-bounded (projects.HOME_MAX_ROWS), so it cannot give every project a
+    # button once the registry grows. This is where the ones it drops stay reachable.
+    "projects_all":   ("projects",        "render_all_projects",      "All projects", _ARG_NONE),
     "dashboard":      ("web_dashboard",   "render_web_dashboard",     "Dashboard",  _ARG_NONE),
     # `code_assign` above is handled but emitted by no button (proved by
     # test_every_button_dispatches._declared), so the product's most important verb —

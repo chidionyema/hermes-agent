@@ -27,6 +27,15 @@ HERMES_HOME = Path.home() / ".hermes"
 CODE = Path.home() / "Documents" / "code"
 REGISTRY = HERMES_HOME / "projects.json"
 
+# Home's button grid is bounded. Telegram itself allows far more than this — its inline
+# keyboard cap is about a hundred buttons, not eight rows — so this is a READABILITY rule:
+# Home has to fit a phone screen without scrolling past the fold. It is asserted in
+# tests/test_projects.py, and everything in render_home DERIVES from it, because the panel
+# already outgrew it once by accident: at 10 active projects it built 5 project rows of two,
+# plus 3 verb rows, plus nav, which is 9.
+HOME_MAX_ROWS = 8
+HOME_ROW_WIDTH = 3
+
 
 def load_registry() -> dict:
     """Load the project registry. Single source of truth."""
@@ -252,14 +261,6 @@ def render_home() -> Tuple[str, List[ButtonRow]]:
     # with not one of them tappable — you could read that six projects existed and
     # open none of them. The subject list IS this screen; severity decides the
     # ORDER, never whether a project can be opened.
-    buttons: List[ButtonRow] = []
-    row: ButtonRow = []
-    for p, _, glyph in critical + watch + clear:
-        row.append((f"{glyph} {p['name'][:16]}", f"estate:project:{p['key']}"))
-        if len(row) == 2:
-            buttons.append(row); row = []
-    if row: buttons.append(row)
-
     # Estate-wide verbs. Every callback below is dispatch-verified against
     # handle_estate_action — the previous row offered fix_all / dashboard / onboard,
     # and all three answered "⚠️ Unknown action". Dead buttons on the front door are
@@ -267,9 +268,37 @@ def render_home() -> Tuple[str, List[ButtonRow]]:
     # ⌨️ Assign is here unscoped as well as on each project scoped, because the verb should
     # never be more than one tap away — that is what "as effective from Telegram as from the
     # laptop" means. The unscoped card says so plainly and points back at the project list.
-    buttons.append([("⌨️ Assign work", "estate:assign"), ("🖥 Web dashboard", "estate:dashboard")])
-    buttons.append([("🩺 Health", "estate:health"), ("📥 Inbox", "estate:inbox")])
-    buttons.append([("⚙️ Tune", "estate:tune")])
+    verb_rows: List[ButtonRow] = [
+        [("⌨️ Assign", "estate:assign"), ("🖥 Dashboard", "estate:dashboard"),
+         ("🩺 Health", "estate:health")],
+        [("📥 Inbox", "estate:inbox"), ("⚙️ Tune", "estate:tune")],
+    ]
+    # −1 for the nav row `with_nav` appends at the end of this function.
+    project_slots = (HOME_MAX_ROWS - len(verb_rows) - 1) * HOME_ROW_WIDTH
+
+    ranked = critical + watch + clear
+    if len(ranked) > project_slots:
+        # One slot becomes the door to the rest. A project that does not fit must still be
+        # reachable: this panel already shipped once showing only the worst four, so you
+        # could read that six projects existed and open none of them.
+        shown, hidden = ranked[:project_slots - 1], ranked[project_slots - 1:]
+    else:
+        shown, hidden = ranked, []
+
+    buttons: List[ButtonRow] = []
+    row: ButtonRow = []
+    for p, _, glyph in shown:
+        row.append((f"{glyph} {p['name'][:12]}", f"estate:project:{p['key']}"))
+        if len(row) == HOME_ROW_WIDTH:
+            buttons.append(row); row = []
+    if hidden:
+        row.append((f"📋 {len(hidden)} more", "estate:projects_all"))
+        if len(row) == HOME_ROW_WIDTH:
+            buttons.append(row); row = []
+    if row:
+        buttons.append(row)
+
+    buttons.extend(verb_rows)
 
     # ── Self-improvement summary line (always visible on Home) ──
     try:
@@ -288,6 +317,39 @@ def render_home() -> Tuple[str, List[ButtonRow]]:
 
     buttons = with_nav(buttons)
     return "\n".join(lines), buttons
+
+
+def render_all_projects() -> Tuple[str, List[ButtonRow]]:
+    """Every registered project, tappable. The door Home's "N more" button opens.
+
+    Home is bounded at HOME_MAX_ROWS rows, so above ~12 active projects it cannot give each
+    one a button. This panel is what keeps the ones it drops reachable; without it, growing
+    the registry would silently hide projects from the only screen that lists them.
+    """
+    from gateway.operator_shell.panel_chrome import with_nav
+
+    reg = load_registry().get("projects", [])
+    by_status = {"active": [], "incubating": [], "archived": []}
+    for p in reg:
+        by_status.setdefault(p.get("status", "archived"), []).append(p)
+
+    lines = ["🗂 *All projects*", ""]
+    buttons: List[ButtonRow] = []
+    for status, glyph in (("active", "🟢"), ("incubating", "🌱"), ("archived", "📦")):
+        group = by_status.get(status) or []
+        if not group:
+            continue
+        lines.append(f"*{status.title()}* — {len(group)}")
+        row: ButtonRow = []
+        for p in group:
+            row.append((f"{glyph} {p['name'][:12]}", f"estate:project:{p['key']}"))
+            if len(row) == HOME_ROW_WIDTH:
+                buttons.append(row); row = []
+        if row:
+            buttons.append(row)
+
+    buttons.append([("🏠 Home", "estate:projects")])
+    return "\n".join(lines), with_nav(buttons)
 
 
 # ═══════════════════════════════════════════════════
