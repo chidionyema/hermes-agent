@@ -323,7 +323,7 @@ _PATTERNS = [
      "dependencies", "", "Dependencies"),
     (re.compile(
         r"^\s*(correlate|linked\s+failures?|related\s+failures?|"
-        r"what\s+fails\s+together)\s*\??\s*$", re.I),
+        r"root\s+causes?|what\s+fails\s+together)\s*\??\s*$", re.I),
      "correlate", "", "Linked failures"),
     (re.compile(
         r"^\s*(capabilit(y|ies)(\s+status)?|what\s+is\s+dark|whats\s+dark|"
@@ -349,6 +349,15 @@ _PATTERNS = [
     (re.compile(
         r"^\s*why\s+is\s+(.+?)\s+(?:failing|broken|down|dark)\s*\??\s*$", re.I),
      "diagnose_panel", "{g1}", "Diagnose"),
+    # fix_all must sit ABOVE the `fix <subject>` pattern below. "fix all" is exactly one
+    # bare word after "fix", so that pattern matched it first and routed the operator to the
+    # fix GUIDE for a subject named "all". The action existed and dispatched correctly the
+    # whole time; only the door was missing. Asserted in tests/test_rounds_i_k.py since the
+    # action was written, and red there since — nothing ran that file (see
+    # ~/.hermes/tests/run.sh, which gained its bash lane on 2026-08-19).
+    (re.compile(
+        r"^\s*(fix\s+(all|everything)|auto[\s-]?fix|fix\s+it\s+all)\s*\??\s*$", re.I),
+     "fix_all", "", "Fix all"),
     (re.compile(
         r"^\s*(fix\s+guide|how\s+do\s+i\s+fix\s+(it|this)|repair\s+guide)\s*\??\s*$", re.I),
      "fix_guide", "", "Fix guide"),
