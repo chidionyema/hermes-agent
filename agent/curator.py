@@ -1807,7 +1807,54 @@ def _run_llm_review(prompt: str) -> Dict[str, Any]:
                 review_agent.close()
             except Exception:
                 pass
+
+    _mark_if_the_reviewer_never_reviewed(result_meta)
     return result_meta
+
+
+def _mark_if_the_reviewer_never_reviewed(meta: Dict[str, Any]) -> None:
+    """Record a run as failed when the brain answered but did not do the job.
+
+    2026-08-13, the only curator run that ever wrote a machine-readable record:
+
+        model = 'standardcompute'   provider = 'custom'   duration = 2.7s
+        tool_calls = []             error = None
+        final = "You've used up your free trial — let's keep going.
+                 Continue at a flat monthly price — no per-token billing, no surprise charges.
+                 Set up your plan at https://standardcompute.com/dashboard/billing."
+
+    The vendor's billing page was filed as the skill review, and REPORT.md rendered it under
+    `## LLM final summary`. Nothing failed, because nothing raised: the provider returned HTTP
+    200 with sales copy in the body.
+
+    THE CLASS: treating "no exception" as "the work was done". A provider that answers 200 with a
+    marketing page is indistinguishable from a working brain to every caller that only checks for
+    a raised error. Prospector states the same rule for verdicts — an exception is never evidence,
+    and a call that did not do the work must DEFER rather than contribute a result.
+
+    The discriminator is the curator's own prompt. It requires a fenced ```yaml block under
+    `## Structured summary (required)`, so a reviewer that genuinely found nothing to consolidate
+    still emits the block with two empty lists. Producing neither a tool call nor that block means
+    the model neither acted nor answered in the required form. Both signals have to be absent
+    before this fires, so a real review can never be marked failed by it.
+    """
+    if meta.get("error"):
+        return
+    if meta.get("tool_calls"):
+        return
+    final = meta.get("final") or ""
+    block = _parse_structured_summary(final)
+    if block.get("consolidations") or block.get("prunings"):
+        return
+    import re as _re
+    if _re.search(r"```ya?ml\s*\n", final, _re.IGNORECASE):
+        return  # the block is there and simply empty — a real review with nothing to do
+    head = " ".join(final.split())[:160] or "(empty response)"
+    meta["error"] = (
+        "the review made no tool calls and returned no structured summary block, so it did not "
+        f"review anything. What the model actually said: {head}"
+    )
+    meta["summary"] = meta["error"]
 
 
 # ---------------------------------------------------------------------------
