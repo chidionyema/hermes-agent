@@ -19,6 +19,7 @@ from gateway.operator_shell.summary_card import (
     pythagorean,
     render_summary_card,
     structural_profile,
+    _band,
     _root_ladder,
     _reduce,
     _letters_only,
@@ -229,7 +230,7 @@ class TestRenderer:
         out = render_summary_card("Chidiebere")  # single word → Scores table
         # Score section is rendered as framed blocks for single-word input,
         # not as a table. The cipher name still appears.
-        assert "Numerological Scores" in out
+        assert _band("SCORES") in out
         assert "### 🔮 Isopsephy Card" in out
         assert "Pythagorean" in out
         assert "Hebrew Gematria" in out

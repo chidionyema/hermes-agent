@@ -45,6 +45,43 @@ from utils import (
 logger = logging.getLogger("gateway.run")
 
 
+def render_summary_reply(raw_args: str) -> str:
+    """Render the /summary reply for *raw_args*.
+
+    Module-level so the deep-link handler renders exactly what the command
+    renders. It used to be inline in ``_handle_summary_command``, which meant
+    a second entry point had to either duplicate it or fake a MessageEvent.
+    """
+    from gateway.operator_shell.deeplink import summary_deep_link
+    from gateway.operator_shell.summary_card import (
+        parse_compare_args,
+        render_compare_card,
+        render_summary_card,
+    )
+
+    raw_args = (raw_args or "").strip()
+    if not raw_args:
+        # The permanent link. It is appended only when the bot username is
+        # known, because a link to `https://t.me/None` is worse than no link.
+        link = summary_deep_link()
+        link_line = f"\n\n\U0001f517 Permanent link: {link}" if link else ""
+        return (
+            "\U0001f52e **Summary Card**\n\n"
+            "Send `/summary <text>` to analyze it.\n\n"
+            "\u2022 \U0001f9ee Pythagorean numerology\n"
+            "\u2022 \u2721\ufe0f Hebrew Gematria (Mispar Hechrechi)\n"
+            "\u2022 \U0001f524 Anagram permutations\n"
+            "\u2022 \u2696\ufe0f Compare two texts: `/summary A vs B`\n\n"
+            "_Example:_ `/summary Hello World`  \u00b7  `/summary Anna vs Beth`"
+            + link_line
+        )
+    compared = parse_compare_args(raw_args)
+    if compared:
+        a, b = compared
+        return render_compare_card(a, b)
+    return render_summary_card(raw_args)
+
+
 class GatewaySlashCommandsMixin:
     """In-session slash-command handlers for GatewayRunner."""
 
@@ -1027,28 +1064,35 @@ class GatewaySlashCommandsMixin:
         Supports ``/summary A vs B`` (or ``v`` / ``versus``) which renders a
         side-by-side comparison instead of a single-text card.
         """
-        from gateway.operator_shell.summary_card import (
-            parse_compare_args,
-            render_compare_card,
-            render_summary_card,
-        )
+        return render_summary_reply(event.get_command_args().strip())
 
-        raw_args = event.get_command_args().strip()
-        if not raw_args:
-            return (
-                "🔮 **Summary Card**\n\n"
-                "Send `/summary <text>` to analyze it.\n\n"
-                "• 🧮 Pythagorean numerology\n"
-                "• ✡️ Hebrew Gematria (Mispar Hechrechi)\n"
-                "• 🔤 Anagram permutations\n"
-                "• ⚖️ Compare two texts: `/summary A vs B`\n\n"
-                "_Example:_ `/summary Hello World`  ·  `/summary Anna vs Beth`"
-            )
-        compared = parse_compare_args(raw_args)
-        if compared:
-            a, b = compared
-            return render_compare_card(a, b)
-        return render_summary_card(raw_args)
+    async def _handle_start_deeplink(self, event: MessageEvent) -> Optional[str]:
+        """Render a reply for a Telegram deep-link payload, or None.
+
+        ``https://t.me/<bot>?start=summary`` sends the message ``/start
+        summary``. Every other ``/start`` is a platform ping and must stay
+        silent, so None means "carry on ignoring it".
+
+        Telegram restricts the payload to ``A-Za-z0-9_-`` and 64 characters,
+        so spaces travel as underscores: ``?start=summary_Chidi_Onyema``
+        renders the card for ``Chidi Onyema``.
+
+        The payload is access-checked as the command it names, not as
+        ``start``. A deep link that skipped the gate would be a door around
+        it for anyone who has the URL.
+        """
+        payload = (event.get_command_args() or "").strip()
+        if not payload:
+            return None
+        head, _, tail = payload.partition("_")
+        if head.lower() != "summary":
+            return None
+        denied = self._check_slash_access(
+            getattr(event, "source", None), "summary"
+        )
+        if denied is not None:
+            return denied
+        return render_summary_reply(tail.replace("_", " ").strip())
 
     async def _handle_commands_command(self, event: MessageEvent) -> str:
         from gateway.run import _telegramize_command_mentions

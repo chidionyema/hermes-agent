@@ -262,6 +262,59 @@ def _ratio_bar(ratio: float, width: int = 20) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
+# Card geometry. Every border in the card is GENERATED from this one number.
+# Before 2026-08-19 they were typed as string literals, and not one box in the
+# rendered card closed: the top rule was 45 columns and the bottom 46, three
+# different openers were closed by the same 44-wide footer, and content lines
+# carried no right edge at all. A literal cannot be right by construction.
+_CARD_WIDTH = 34
+
+# Right-hand edges are deliberately absent. Emoji occupy a different number of
+# columns in different Telegram clients, so a line ending in a box glyph cannot
+# line up for every reader. An open band cannot misalign.
+
+
+def _rule(char: str = "\u2500") -> str:
+    """A full-width horizontal rule."""
+    return char * _CARD_WIDTH
+
+
+def _band(title: str, char: str = "\u2500") -> str:
+    """A titled rule padded to exactly ``_CARD_WIDTH`` columns.
+
+    ASCII titles only. An emoji here would be counted as one column and
+    measured wrong; emoji belong on the content lines instead.
+    """
+    head = f"{char * 2} {title} "
+    if len(head) >= _CARD_WIDTH:
+        return head.rstrip()
+    return head + char * (_CARD_WIDTH - len(head))
+
+
+# Short cipher labels for the fenced card body. "Hebrew Gematria" runs its
+# lines past the card width on a phone; the full name still heads every
+# section outside the fence.
+_SHORT_NAME = {"Hebrew Gematria": "Hebrew", "Pythagorean": "Pythag"}
+
+
+def _short(name: str) -> str:
+    return _SHORT_NAME.get(name, name)
+
+
+def _score_chip_plain(value: int, master: bool) -> str:
+    """``_score_chip`` without Markdown, for use inside a code fence.
+
+    Telegram does not render ``**bold**`` inside a fenced block: the reader is
+    shown the asterisks. Every chip in the card body used ``_score_chip``, so
+    the card said ``\u1f9ee **7**`` on screen.
+    """
+    if master:
+        return f"{value} \u26a1 master"
+    if value in (1, 8, 9):
+        return f"{value} \U0001f300 power"
+    return str(value)
+
+
 def _score_chip(value: int, master: bool) -> str:
     if master:
         return f"⚡ **{value}** (master)"
@@ -580,103 +633,83 @@ def render_summary_card(text: str) -> str:
     # ─── BUFFER ────────────────────────────────────────────────────────────
     out: list[str] = []
 
-    # ─── 1. HEADER BAND ────────────────────────────────────────────────────
+    # ─── 1-4. THE CARD BODY: ONE FENCE ─────────────────────────────────────
+    # One fence, not six. Every ``` opens a separate block in Telegram, and six
+    # blocks of four lines each is mostly whitespace on a phone. Nothing inside
+    # a fence may carry Markdown: Telegram shows the asterisks.
     out.append("### 🔮 Isopsephy Card")
     out.append("")
-    out.append("```")
-    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    out.append(f"   {text}")
-    notices = []
+    body: list[str] = ["```", _rule("━"), f"  {text}"]
     if truncated:
-        notices.append(f"⚠️ truncated to {_MAX_INPUT_CHARS:,} chars")
+        body.append(f"  ⚠️ truncated to {_MAX_INPUT_CHARS:,} chars")
     if dropped:
-        notices.append(f"⚠️ {dropped} non-ASCII letter(s) dropped (ciphers are A–Z only)")
-    if notices:
-        out.append("   " + "  ·  ".join(notices))
-    out.append(f"   📊 {prof.char_count} chars · {prof.letter_count} letters")
-    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    out.append("```")
-    out.append("")
+        body.append(f"  ⚠️ {dropped} non-ASCII letter(s) dropped, A–Z only")
+    body.append(f"  {prof.char_count} chars · {prof.letter_count} letters")
 
-    # ─── 2. AT-A-GLANCE BOXED CHIP GRID ───────────────────────────────────
-    py_chip = _score_chip(py.root, _is_master(py.root))
-    he_chip = _score_chip(he.root, _is_master(he.root))
-    ch_chip = _score_chip(ch.root, _is_master(ch.root))
-    flags = []
-    if prof.isogram:
-        flags.append("✨ isogram")
-    if prof.palindrome:
-        flags.append("🔁 palindrome")
-    flag_str = ("  ·  " + " · ".join(flags)) if flags else ""
-    out.append("```")
-    out.append("╔═══════ AT-A-GLANCE ═══════════════════════╗")
-    out.append(
-        f"║  🧮 {py_chip}   ·   ✡️ {he_chip}   ·   🌙 {ch_chip}"
-    )
-    out.append(
-        f"║  {prof.vowel_count}V/{prof.consonant_count}C  ·  "
-        f"{prof.unique_letters} unique{flag_str}"
-    )
-    out.append("╚════════════════════════════════════════════╝")
-    out.append("```")
-    out.append("")
-
-    # ─── 3. RESONANCE BANNER ──────────────────────────────────────────────
-    roots = {py.root, he.root, ch.root}
-    if len(roots) == 1:
-        re_, rl, rb_ = "🌀", "MASTER RESONANCE", f"all 3 ciphers reduce to **{py.root}**"
-    elif len(roots) == 2:
-        shared = next(iter(roots))
-        re_, rl, rb_ = "🌗", "PARTIAL AGREEMENT", f"2 of 3 ciphers reduce to **{shared}**"
-    else:
-        re_, rl, rb_ = "🌈", "ALL-DIFFERENT", "3 distinct root numbers — no resonance"
-    out.append("```")
-    out.append(f"┌── {re_} {rl} ──────────────────────┐")
-    out.append(f"│  {rb_}")
-    out.append("└──────────────────────────────────────────┘")
-    out.append("```")
-    out.append("")
-
-    # ─── 4. PARTS / SCORES ─────────────────────────────────────────────────
-    def _line_for(tok_py, tok_he, tok_ch):
-        return (
-            f"🧮 {tok_py.raw}→{_score_chip(tok_py.root, _is_master(tok_py.root))}"
-            f"  ·  ✡️ {tok_he.raw}→{_score_chip(tok_he.root, _is_master(tok_he.root))}"
-            f"  ·  🌙 {tok_ch.raw}→{_score_chip(tok_ch.root, _is_master(tok_ch.root))}"
+    # At a glance. Label leads, value follows. Nothing is column-aligned after
+    # an emoji, because emoji width differs between clients.
+    body.append(_band("AT A GLANCE"))
+    for c in (py, he, ch):
+        body.append(
+            f"  {c.emoji} {_short(c.name)} · "
+            f"{_score_chip_plain(c.root, _is_master(c.root))}"
         )
+    comp = [
+        f"{prof.vowel_count}V/{prof.consonant_count}C",
+        f"{prof.unique_letters} unique",
+    ]
+    if prof.isogram:
+        comp.append("✨ isogram")
+    if prof.palindrome:
+        comp.append("🔁 palindrome")
+    body.append("  " + " · ".join(comp))
 
-    def _block(label, lc, content):
-        out.append("```")
-        out.append(f"╭─ {label}  ·  {lc} letters ───────────────╮")
-        out.append(f"│ {content}")
-        out.append("╰──────────────────────────────────────────╯")
-        out.append("```")
-        out.append("")
+    # Resonance. `most_common` rather than an arbitrary member of the set: with
+    # roots {7, 7, 3} the old code could name 3 as the root "2 of 3 ciphers
+    # reduce to", which is the singleton and simply false.
+    root_counts = Counter([py.root, he.root, ch.root])
+    body.append(_band("RESONANCE"))
+    if len(root_counts) == 1:
+        body.append("  🌀 MASTER RESONANCE")
+        body.append(f"  all 3 ciphers reduce to {py.root}")
+    elif len(root_counts) == 2:
+        shared = root_counts.most_common(1)[0][0]
+        body.append("  🌗 PARTIAL AGREEMENT")
+        body.append(f"  2 of 3 ciphers reduce to {shared}")
+    else:
+        body.append("  🌈 ALL DIFFERENT")
+        body.append("  3 distinct roots, no resonance")
+
+    def _cipher_lines(cip_py, cip_he, cip_ch) -> list[str]:
+        return [
+            f"  {c.emoji} {_short(c.name)} · {_fmt_int(c.raw)} → "
+            f"{_score_chip_plain(c.root, _is_master(c.root))}"
+            for c in (cip_py, cip_he, cip_ch)
+        ]
 
     if has_parts:
-        out.append("#### 🪪 Name Parts")
-        out.append("")
         for tok in parts:
-            tp = pythagorean(tok); th = hebrew(tok); tc = chaldean(tok)
-            _block(tok, len(_letters_only(tok)), _line_for(tp, th, tc))
-        _block("Σ COMBINED", letter_count, _line_for(py, he, ch))
+            body.append(_band(f"{tok.upper()} · {len(_letters_only(tok))} letters"))
+            body.extend(_cipher_lines(pythagorean(tok), hebrew(tok), chaldean(tok)))
+        body.append(_band(f"COMBINED · {letter_count} letters"))
+        body.extend(_cipher_lines(py, he, ch))
     else:
-        out.append("#### 🎯 Numerological Scores")
-        out.append("")
+        body.append(_band("SCORES"))
         for c in (py, he, ch):
             ladder = _root_ladder(c.raw)
             ladder_short = (
                 f"{c.raw}→{c.root}" if len(ladder) <= 2
                 else f"{c.raw}→{ladder[1]}→…→{c.root}"
             )
-            chip = _score_chip(c.root, _is_master(c.root))
-            out.append("```")
-            out.append(f"╭─ {c.emoji} {c.name:<20} ─────────────────╮")
-            out.append(f"│ raw **{_fmt_int(c.raw)}**  →  root {chip}")
-            out.append(f"│ ladder: `{ladder_short}`")
-            out.append("╰──────────────────────────────────────────╯")
-            out.append("```")
-        out.append("")
+            body.append(
+                f"  {c.emoji} {_short(c.name)} · {_fmt_int(c.raw)} → "
+                f"{_score_chip_plain(c.root, _is_master(c.root))}"
+            )
+            body.append(f"     ladder {ladder_short}")
+    body.append(_rule("━"))
+    body.append("```")
+    out.extend(body)
+    out.append("")
 
     # ─── 5. INSIGHT CALLOUTS ──────────────────────────────────────────────
     insights: list[str] = []
@@ -1116,49 +1149,31 @@ def _render_slack(card: str, target: str) -> str:
 
 
 def _render_sms(card: str, target: str) -> str:
-    """Plain text, single line, ≤ 480 chars (3 SMS segments).
+    """Plain text, single line, <= 480 chars (3 SMS segments).
 
-    The card places the three numerological roots on a single AT-A-GLANCE
-    line (the older parser expected a pipe table, which was wrong). New
-    parser extracts the three roots via regex from the AT-A-GLANCE box,
-    then assembles a dense one-liner that includes structural profile.
+    The roots and the profile are computed from *target*, exactly as
+    ``_render_glasses`` does. They used to be scraped back out of the
+    rendered card with a regex pinned to the AT-A-GLANCE box art, so the
+    2026-08-19 layout change silently turned every SMS into
+    ``Summary: roots ?/?/?``. A renderer that parses another renderer's
+    output is coupled to its decoration; nothing downstream should read the
+    card as data.
 
     Layout within the 480-char budget:
       - "Summary: roots P/H/C. "  (~ 25 chars)
-      - "TARGET. N chars · M letters (N V / M C, K unique). "  (~ 60 chars)
-      - Stripped plaintext tail (~ 395 chars remaining)
+      - "N V/M C, K unique. "     (~ 25 chars)
+      - Stripped plaintext tail   (the remainder)
     """
-    import re
-
-    # AT-A-GLANCE box line looks like:
-    #   ║  🧮 **7**   ·   ✡️ **7**   ·   🌙 **5**
-    # Capture the three root values regardless of markdown bold markers.
-    m = re.search(
-        r"🧮[^\d]*\*\*?(\d+)\*\*?.*?✡️[^\d]*\*\*?(\d+)\*\*?.*?🌙[^\d]*\*\*?(\d+)\*\*?",
-        card,
-        re.DOTALL,
+    py = pythagorean(target)
+    he = hebrew(target)
+    ch = chaldean(target)
+    prof = structural_profile(target)
+    summary = f"Summary: roots {py.root}/{he.root}/{ch.root}. "
+    profile = (
+        f"{prof.vowel_count}V/{prof.consonant_count}C, "
+        f"{prof.unique_letters} unique. "
     )
-    if m:
-        py_root, he_root, ch_root = m.groups()
-    else:
-        py_root = he_root = ch_root = "?"
-
-    # Structural one-liner from the rendered card. Matches the
-    # "V/C=N/M · K unique" segment the renderer emits.
-    p = re.search(
-        r"(\d+)V/(\d+)C\s*·\s*(\d+)\s*unique",
-        card,
-    )
-    if p:
-        vowels, consonants, unique = p.groups()
-        profile = f"{vowels}V/{consonants}C, {unique} unique. "
-    else:
-        profile = ""
-
-    plain = _strip_markdown(card)
-    summary = f"Summary: roots {py_root}/{he_root}/{ch_root}. "
-    body = (summary + profile + plain)[:480]
-    return body
+    return (summary + profile + _strip_markdown(card))[:480]
 
 
 def _render_email(card: str, target: str) -> str:
@@ -1339,10 +1354,10 @@ def render_compare_card(text_a: str, text_b: str) -> str:
     out.append("### ⚖️ Isopsephy Compare")
     out.append("")
     out.append("```")
-    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-    out.append(f"   A: {json_a['target']}")
-    out.append(f"   B: {json_b['target']}")
-    out.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
+    out.append(_rule("━"))
+    out.append(f"  A: {json_a['target']}")
+    out.append(f"  B: {json_b['target']}")
+    out.append(_rule("━"))
     out.append("```")
     out.append("")
 

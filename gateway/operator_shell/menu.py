@@ -40,6 +40,13 @@ OPERATOR_TELEGRAM_MENU: Tuple[str, ...] = (
     "notify",
     "revert",
     "missions",
+    # `summary` renders the numerology / isopsephy card
+    # (operator_shell/summary_card.py). It was a registered command with no
+    # menu slot, so under the operator profile it was filtered OUT of
+    # setMyCommands entirely and could only be reached by typing it from
+    # memory. Founder, 2026-08-19: "surfacing as menu option and permanent
+    # link". The link is the deep link `?start=summary` (gateway/run.py).
+    "summary",
     # `agent_model` and `model` are the two brain-switch doors. `agent_model` is the
     # global/role switch (operator_shell/estate.py), `model` is the session-scoped switch
     # (slash_commands._handle_model_command). Both were registered but never advertised;

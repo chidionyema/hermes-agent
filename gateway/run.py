@@ -7207,6 +7207,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # platform ping, not a user command: no help dump, no agent
             # interrupt, no queued text.
             if _cmd_def_inner and _cmd_def_inner.name == "start":
+                _deeplink = await self._handle_start_deeplink(event)
+                if _deeplink is not None:
+                    return _deeplink
                 logger.info("Ignoring /start platform ping for active session %s", _quick_key)
                 return ""
 
@@ -7680,6 +7683,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return await self._handle_summary_command(event)
 
         if canonical == "start":
+            # A bare /start stays a silent platform ping. A deep-link payload
+            # (`t.me/<bot>?start=summary`) is a real request and is answered.
+            _deeplink = await self._handle_start_deeplink(event)
+            if _deeplink is not None:
+                return _deeplink
             logger.info("Ignoring /start platform ping for session %s", _quick_key)
             return ""
 

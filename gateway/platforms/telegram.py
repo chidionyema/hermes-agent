@@ -2295,6 +2295,16 @@ class TelegramAdapter(BasePlatformAdapter):
                         raise
             await self._app.start()
 
+            # `initialize()` calls get_me(), so the username is known only from
+            # here on. Record it so anything that PRINTS a permanent deep link
+            # (`t.me/<bot>?start=summary`) has a username to print; nothing else
+            # in the estate knows it — it is in neither config.yaml nor .env.
+            try:
+                from gateway.operator_shell.deeplink import set_bot_username
+                set_bot_username(getattr(self._bot, "username", None))
+            except Exception as _dl_err:  # pragma: no cover - never block startup
+                logger.debug("[%s] Could not record bot username: %s", self.name, _dl_err)
+
             # Decide between webhook and polling mode
             webhook_url = os.getenv("TELEGRAM_WEBHOOK_URL", "").strip()
 

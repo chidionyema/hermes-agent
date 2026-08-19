@@ -9,16 +9,28 @@ breakdown plus the overall numbers.
 Note: the card's presentation was upgraded from tables to framed code blocks
 (see the visual upgrade). Tests assert the *behavior* (parts exist, totals
 match, insights fire) rather than the exact rendering.
+
+Every band string below is DERIVED from ``_band``, the function the renderer
+uses, instead of typed out. On 2026-08-19 the layout changed and two tests
+here kept passing while asserting that a "Name Parts" header was absent,
+against a header the renderer had stopped emitting at all: a ``not in``
+assertion on a dead string can never fail. Deriving the string means a
+renamed band breaks the test that pins it instead of silencing it.
 """
 from __future__ import annotations
 
 import pytest
 
-from gateway.operator_shell.summary_card import render_summary_card
+from gateway.operator_shell.summary_card import _band, render_summary_card
 
 
 TARGET_FULL = "Chidiebere onyema"
 TARGET_SINGLE = "Chidiebere"
+
+
+def _part_band(token: str, letters: int) -> str:
+    """The in-card band the renderer emits for one name part."""
+    return _band(f"{token.upper()} \u00b7 {letters} letters")
 
 
 class TestSingleWordInput:
@@ -26,14 +38,17 @@ class TestSingleWordInput:
 
     def test_no_name_parts_section(self):
         out = render_summary_card(TARGET_SINGLE)
-        # New card uses '▎ **🪪 Name Parts**' header — must be absent for single word
-        assert "🪪 Name Parts" not in out
+        # One word, so no per-part band and no COMBINED band: the single
+        # SCORES band carries the numbers instead.
+        assert _band("SCORES") in out
+        assert _part_band(TARGET_SINGLE, 10) not in out
+        assert _band("COMBINED \u00b7 10 letters") not in out
 
     def test_core_sections_present(self):
         out = render_summary_card(TARGET_SINGLE)
         # Header band, score section, profile, breakdowns all present
         assert "Isopsephy Card" in out
-        assert "Numerological Scores" in out
+        assert _band("SCORES") in out
         assert "Structural Profile" in out
         assert "Detailed Breakdowns" in out
 
@@ -43,27 +58,29 @@ class TestMultiWordInput:
 
     def test_name_parts_section_present(self):
         out = render_summary_card(TARGET_FULL)
-        assert "🪪 Name Parts" in out, (
-            "Multi-word input must produce Name Parts section"
+        assert _part_band("Chidiebere", 10) in out, (
+            "Multi-word input must produce a band per name part"
         )
+        assert _part_band("onyema", 6) in out
 
     def test_each_part_appears_in_its_block(self):
         """Each token must have a framed block with its name."""
         out = render_summary_card(TARGET_FULL)
-        assert "Chidiebere" in out
-        assert "onyema" in out
-        # Σ Combined is also rendered as a final block
-        assert "Σ COMBINED" in out
+        assert _part_band("Chidiebere", 10) in out
+        assert _part_band("onyema", 6) in out
+        # The combined string is rendered as a final band
+        assert _band("COMBINED \u00b7 16 letters") in out
 
     def test_combined_totals_match_full_string(self):
         """Σ Combined block's numbers must equal the full-string analysis."""
         out_full = render_summary_card(TARGET_FULL)
-        # The combined string analysis: Pythagorean raw 87, root 6
-        assert "🧮 87→" in out_full
-        assert "✡️ 299→" in out_full
-        assert "🌙 56→" in out_full
-        # And the combined letter count appears in a block
-        assert "16 letters" in out_full  # Σ COMBINED block
+        # The combined string analysis: Pythagorean raw 87, root 6.
+        # Pinned as exact lines: this is the one place the card's number
+        # formatting is asserted literally rather than derived.
+        assert "  🧮 Pythag · 87 → 6" in out_full
+        assert "  ✡️ Hebrew · 299 → 2" in out_full
+        assert "  🌙 Chaldean · 56 → 11 ⚡ master" in out_full
+        assert _band("COMBINED \u00b7 16 letters") in out_full
 
 
 class TestInsightCallouts:
@@ -101,11 +118,13 @@ class TestEdgeCases:
     def test_short_tokens_excluded(self):
         """Tokens with ≥2 letters (including 'von') are included."""
         out = render_summary_card("von Chidiebere")
-        assert "🪪 Name Parts" in out
-        assert "von" in out
-        assert "Chidiebere" in out
+        assert _part_band("von", 3) in out
+        assert _part_band("Chidiebere", 10) in out
 
     def test_single_letter_token_excluded(self):
         """Tokens with <2 letters are dropped ('J Smith' → just Smith)."""
         out = render_summary_card("J Smith")
-        assert "🪪 Name Parts" not in out
+        # 'J' has one letter, so only 'Smith' survives — one part is no parts.
+        assert _band("SCORES") in out
+        assert _part_band("Smith", 5) not in out
+        assert _part_band("J", 1) not in out
