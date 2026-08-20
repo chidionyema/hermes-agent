@@ -8,10 +8,16 @@ installation. It uses regex-based static analysis to detect known-bad patterns
 and a trust-aware install policy that determines whether a skill is allowed
 based on both the scan verdict and the source's trust level.
 
-Trust levels:
-  - builtin:   Ships with Hermes. Never scanned, always trusted.
-  - trusted:   openai/skills and anthropics/skills only. Caution verdicts allowed.
-  - community: Everything else. Any findings = blocked unless --force.
+Trust levels, and what INSTALL_POLICY actually does with each (verified 2026-08-20 — the
+three lines that used to be here described a policy the table does not implement):
+  - builtin:   Ships with Hermes. Scanned for the record, then allowed at every verdict,
+               including dangerous. That is deliberate: the files arrive inside the agent's
+               own source tree, so refusing them would be refusing the agent you are running.
+               The audit log records the verdict either way.
+  - trusted:   openai/skills and anthropics/skills only. safe and caution allowed, dangerous
+               blocked, and --force does not override that block.
+  - community: Everything else. safe allowed, caution and dangerous blocked. A low or medium
+               finding leaves the verdict at safe, so it does NOT block.
 
 Usage:
     from tools.skills_guard import scan_skill, should_allow_install, format_scan_report
@@ -29,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
+
+from tools import threat_patterns as _threat_patterns
 
 
 
@@ -533,6 +541,21 @@ THREAT_PATTERNS = [
      "instructs agent to send data to a URL"),
 ]
 
+# Every pattern id this module rules on itself, with its own severity and category. Used by
+# scan_file to decide which shared-library rules add something it does not already have.
+_OWN_PATTERN_IDS = frozenset(pid for _, pid, _, _, _ in THREAT_PATTERNS)
+
+# The ids both tables define. Each pair was written independently and nothing compared them,
+# which is how `context_exfil` came to be stricter in the memory scanner than in the gate that
+# blocks installs. `TestTheTwoThreatTablesAgree` freezes this set: a new rule that reuses a
+# name from the other table fails the suite until someone decides which of the two is right.
+SHARED_PATTERN_IDS = frozenset({
+    "agent_config_mod", "bypass_restrictions", "context_exfil", "deception_hide",
+    "disregard_rules", "fake_update", "hardcoded_secret", "hermes_config_mod", "hidden_div",
+    "html_comment_injection", "leak_system_prompt", "remove_filters", "role_hijack",
+    "role_pretend", "send_to_url", "ssh_backdoor", "sys_prompt_override", "translate_execute",
+})
+
 # Structural limits for skill directories
 MAX_FILE_COUNT = 50       # skills shouldn't have 50+ files
 MAX_TOTAL_SIZE_KB = 1024  # 1MB total is suspicious for a skill
@@ -638,6 +661,35 @@ def scan_file(file_path: Path, rel_path: str = "") -> List[Finding]:
                     description=f"invisible unicode character {char_name} (possible text hiding/injection)",
                 ))
                 break  # one finding per line for invisible chars
+
+    # Rules that exist only in the shared threat library.
+    #
+    # `tools/threat_patterns.py` calls itself "the single source of truth" and gives its
+    # `strict` scope as "memory writes + skill installs only"; `first_threat_message` names
+    # skill installs again. Measured 2026-08-20: nothing on the skill-install path imported
+    # it. Of its 36 rules, 18 ids appear nowhere in THREAT_PATTERNS above — every C2 rule
+    # (c2_heartbeat, c2_task_pull, c2_node_registration, known_c2_framework), both
+    # anti-forensic rules, identity_override and forced_action among them. A skill could ship
+    # beacon-and-poll code and this scanner had no rule for it.
+    #
+    # They report at "low" on purpose. `_determine_verdict` treats low and medium as
+    # informational, so wiring 18 previously-unrun rules into a gate that BLOCKS cannot
+    # newly refuse a skill — the failure mode this scanner had two hours ago. Promote an id
+    # to a blocking severity by giving it its own entry in THREAT_PATTERNS, with the
+    # measurement that says it does not fire on ordinary content.
+    for i, line in enumerate(lines, start=1):
+        for pid in _threat_patterns.scan_for_threats(line, scope="strict"):
+            if pid in _OWN_PATTERN_IDS or pid.startswith("invisible_unicode"):
+                continue  # already covered by a rule above, with its own severity
+            findings.append(Finding(
+                pattern_id=pid,
+                severity="low",
+                category="shared-library",
+                file=rel_path,
+                line=i,
+                match=line.strip()[:117],
+                description=f"shared threat library rule {pid} (informational)",
+            ))
 
     return findings
 
