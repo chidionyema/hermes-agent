@@ -233,16 +233,38 @@ def _build_subprocess_env(
         # Pin the model. Without this the child runs the machine's Claude Code
         # default and the response still reports the model the CALLER asked for,
         # so telemetry reads "haiku" while opus burns. See CHEAPEST_CLAUDE_MODEL.
+        #
+        # What this saves is PLAN WINDOW, not dollars. On a Pro/Max subscription
+        # the marginal dollar cost of a call is zero; the scarce thing is the
+        # 5-hour usage window, which Claude and Claude Code share. That window is
+        # weighted by model, not by raw token count — an opus token draws it down
+        # roughly 5x faster than a haiku token. So an unpinned child spends the
+        # founder's own Claude Code capacity 5x faster to do the same work.
         env["ANTHROPIC_MODEL"] = _resolve_claude_model(model)
 
         # Drop the inherited API key. os.environ.copy() above carries
-        # ANTHROPIC_API_KEY into the child, and a key beats first-party auth — so
-        # an inherited key silently moves every call off the subscription plan and
-        # onto metered API billing. Measured 2026-08-20: this machine's key answers
-        # `HTTP 400 Your credit balance is too low`, i.e. inheriting it does not
-        # degrade the call, it kills it. coordinator.py:1125 already pops it for
-        # the same reason. Opt back in with HERMES_ACP_CLAUDE_USE_API_KEY=1 when
-        # the API account is funded and metered billing is what you want.
+        # ANTHROPIC_API_KEY into the child, and Anthropic's own documentation is
+        # explicit about what that does: "If you have an ANTHROPIC_API_KEY
+        # environment variable set on your system, Claude Code will use this API
+        # key for authentication instead of your Claude subscription ... resulting
+        # in API usage charges rather than using your subscription's included
+        # usage."  (support.claude.com, article 11145838.)
+        #
+        # So this is NOT about the key being dead. Subscription usage and API-key
+        # usage are separate funding pools: plan usage is drawn by whatever signs
+        # in over OAuth, API keys are drawn from prepaid Console credits bought at
+        # platform.claude.com. An inherited key moves the call between pools
+        # silently, and it does so whether or not the key is funded. Today this
+        # machine's key answers `HTTP 400 Your credit balance is too low`, so the
+        # call would simply die; funding the key would be worse, because the call
+        # would succeed and quietly bill a second account.
+        #
+        # The interactive `claude` CLI is protected from this by its own approval
+        # list (~/.claude.json customApiKeyResponses, where this key is already
+        # `rejected`). claude-agent-acp has no such prompt, so the child needs the
+        # key removed rather than refused. coordinator.py:1125 pops it for the
+        # same reason. Opt back in with HERMES_ACP_CLAUDE_USE_API_KEY=1 only when
+        # metered Console billing is deliberately what you want.
         if os.getenv("HERMES_ACP_CLAUDE_USE_API_KEY", "").strip() != "1":
             env.pop("ANTHROPIC_API_KEY", None)
             env.pop("ANTHROPIC_TOKEN", None)
