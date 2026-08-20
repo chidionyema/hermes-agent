@@ -218,6 +218,7 @@ def test_run_prompt_passes_home_when_parent_env_is_clean(monkeypatch, tmp_path):
 # servers on session/new. Every default below stays on the copilot behaviour.
 
 from agent.copilot_acp_client import (  # noqa: E402
+    CHEAPEST_CLAUDE_MODEL,
     _FLAVOR_CLAUDE,
     _FLAVOR_COPILOT,
     _format_messages_as_prompt,
@@ -365,11 +366,18 @@ class _FakeACPProcess:
         return self.returncode
 
 
-def _drive(client, monkeypatch, *, spawns, requests):
-    """Run _run_prompt with the JSON-RPC layer stubbed; record spawns + requests."""
+def _drive(client, monkeypatch, *, spawns, requests, envs=None):
+    """Run _run_prompt with the JSON-RPC layer stubbed; record spawns + requests.
+
+    Pass `envs` to also capture the environment each child was handed. That is the
+    only place the model pin is observable: it is applied to the subprocess env at
+    spawn time, never to the JSON-RPC payload.
+    """
 
     def _fake_popen(argv, **kwargs):
         spawns.append(argv)
+        if envs is not None:
+            envs.append(kwargs.get("env") or {})
         return _FakeACPProcess()
 
     def _fake_request_on(self, transport, method, params, **kwargs):
@@ -483,3 +491,96 @@ def test_spawned_argv_uses_the_flavor_defaults(monkeypatch):
 
     # claude-agent-acp exits non-zero on --acp/--stdio; it must be spawned bare.
     assert spawns[0] == ["/usr/local/bin/claude-agent-acp"]
+
+
+# ── the model pin ──
+#
+# Measured 2026-08-20: an unpinned `claude` child runs the MACHINE's Claude Code
+# default (opus[1m]) while the completion echoed back whatever model the CALLER
+# asked for, so a cost reader saw haiku and opus burned. ANTHROPIC_MODEL on the
+# child's environment is the only lever that works — the model argument reaches
+# the agent as prose, and a sentence in a prompt does not choose a model.
+
+
+def _claude_client(monkeypatch, **kwargs):
+    monkeypatch.setenv("HERMES_COPILOT_ACP_COMMAND", "/usr/local/bin/claude-agent-acp")
+    monkeypatch.delenv("HERMES_ACP_FLAVOR", raising=False)
+    monkeypatch.delenv("HERMES_ACP_CLAUDE_MODEL", raising=False)
+    monkeypatch.delenv("HERMES_ACP_CLAUDE_USE_API_KEY", raising=False)
+    return CopilotACPClient(acp_cwd="/tmp", **kwargs)
+
+
+def _spawn_env(client, monkeypatch):
+    spawns, requests, envs = [], [], []
+    _drive(client, monkeypatch, spawns=spawns, requests=requests, envs=envs)
+    assert len(envs) == 1
+    return envs[0]
+
+
+def test_claude_child_is_pinned_to_the_cheapest_claude(monkeypatch):
+    env = _spawn_env(_claude_client(monkeypatch), monkeypatch)
+    assert env.get("ANTHROPIC_MODEL") == CHEAPEST_CLAUDE_MODEL
+
+
+def test_an_explicit_model_beats_the_cheap_default(monkeypatch):
+    client = _claude_client(monkeypatch, model="claude-sonnet-4-5-20250929")
+    env = _spawn_env(client, monkeypatch)
+    assert env.get("ANTHROPIC_MODEL") == "claude-sonnet-4-5-20250929"
+
+
+def test_the_operator_env_var_beats_the_caller(monkeypatch):
+    # The flavour is resolved in __init__, so the command must be set before it.
+    monkeypatch.setenv("HERMES_COPILOT_ACP_COMMAND", "/usr/local/bin/claude-agent-acp")
+    monkeypatch.setenv("HERMES_ACP_CLAUDE_MODEL", "claude-opus-4-1-20250805")
+    client = CopilotACPClient(acp_cwd="/tmp", model="claude-sonnet-4-5-20250929")
+    env = _spawn_env(client, monkeypatch)
+    assert env.get("ANTHROPIC_MODEL") == "claude-opus-4-1-20250805"
+
+
+def test_a_dead_api_key_is_not_inherited_by_the_claude_child(monkeypatch):
+    # A key beats first-party subscription auth inside the child, so an inherited
+    # one moves every call onto metered API billing. Measured 2026-08-20: this
+    # machine's key answers `400 Your credit balance is too low`, so inheriting it
+    # does not degrade the call, it kills it.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dead")
+    monkeypatch.setenv("ANTHROPIC_TOKEN", "tok-dead")
+    env = _spawn_env(_claude_client(monkeypatch), monkeypatch)
+    assert "ANTHROPIC_API_KEY" not in env
+    assert "ANTHROPIC_TOKEN" not in env
+
+
+def test_the_api_key_comes_back_when_the_operator_asks_for_it(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-funded")
+    monkeypatch.setenv("HERMES_ACP_CLAUDE_USE_API_KEY", "1")
+    monkeypatch.setenv("HERMES_COPILOT_ACP_COMMAND", "/usr/local/bin/claude-agent-acp")
+    monkeypatch.delenv("HERMES_ACP_FLAVOR", raising=False)
+    client = CopilotACPClient(acp_cwd="/tmp")
+    env = _spawn_env(client, monkeypatch)
+    assert env.get("ANTHROPIC_API_KEY") == "sk-ant-funded"
+
+
+def test_the_copilot_flavor_carries_no_claude_pin(monkeypatch):
+    monkeypatch.setenv("HERMES_COPILOT_ACP_COMMAND", "/usr/local/bin/copilot")
+    monkeypatch.delenv("HERMES_ACP_FLAVOR", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-untouched")
+    client = CopilotACPClient(acp_cwd="/tmp")
+    env = _spawn_env(client, monkeypatch)
+    assert "ANTHROPIC_MODEL" not in env
+    assert env.get("ANTHROPIC_API_KEY") == "sk-ant-untouched"
+
+
+def test_the_completion_reports_the_model_that_ran(monkeypatch):
+    # `model=model` echoed the caller's argument back verbatim, so a caller asking
+    # for haiku on an unpinned child was told it got haiku. A cost reader believes
+    # this field, and it was the receipt that hid the defect for a whole session.
+    client = _claude_client(monkeypatch)
+    monkeypatch.setattr(
+        CopilotACPClient,
+        "_run_prompt",
+        lambda self, prompt, timeout_seconds=None, **kw: ("PONG", ""),
+    )
+    r = client._create_chat_completion(
+        messages=[{"role": "user", "content": "ping"}],
+        model="claude-opus-4-1-20250805",
+    )
+    assert r.model == CHEAPEST_CLAUDE_MODEL

@@ -102,6 +102,28 @@ def _resolve_args(flavor: str | None = None) -> list[str]:
 _FLAVOR_COPILOT = "copilot"
 _FLAVOR_CLAUDE = "claude"
 
+# The cheapest Claude, and what an ACP-driven `claude` runs unless the operator
+# names another. Mirrors prospector/claude_cli.py CHEAPEST_CLAUDE_MODEL, which
+# exists for the same reason: measured 2026-08-19, an unpinned claude binary uses
+# the MACHINE's Claude Code default, `opus[1m]`. Founder directive 2026-08-19 —
+# both estates fall back to the cheapest Claude, enforced and documented.
+#
+# ANTHROPIC_MODEL is the only lever that works here. The model argument to
+# chat.completions.create reaches the agent as PROSE ("Hermes requested model
+# hint: ..."), and a sentence in a prompt does not choose the model. The bridge
+# reads ANTHROPIC_MODEL from its own environment
+# (@agentclientprotocol/claude-agent-acp 0.65.0, dist/acp-agent.js:5366-5403).
+CHEAPEST_CLAUDE_MODEL = "claude-haiku-4-5-20251001"
+
+
+def _resolve_claude_model(requested: str | None = None) -> str:
+    """Which Claude an ACP child may run. Env beats caller beats the cheap default."""
+    return (
+        os.getenv("HERMES_ACP_CLAUDE_MODEL", "").strip()
+        or (requested or "").strip()
+        or CHEAPEST_CLAUDE_MODEL
+    )
+
 
 def _resolve_flavor(command: str) -> str:
     """Which ACP agent are we driving? Explicit env wins, else infer from argv0."""
@@ -197,12 +219,33 @@ def _resolve_home_dir() -> str:
     return "/tmp"
 
 
-def _build_subprocess_env() -> dict[str, str]:
+def _build_subprocess_env(
+    flavor: str | None = None,
+    model: str | None = None,
+) -> dict[str, str]:
     env = os.environ.copy()
     home = _resolve_home_dir()
     env["HOME"] = home
     from hermes_constants import apply_subprocess_home_env
     apply_subprocess_home_env(env)
+
+    if flavor == _FLAVOR_CLAUDE:
+        # Pin the model. Without this the child runs the machine's Claude Code
+        # default and the response still reports the model the CALLER asked for,
+        # so telemetry reads "haiku" while opus burns. See CHEAPEST_CLAUDE_MODEL.
+        env["ANTHROPIC_MODEL"] = _resolve_claude_model(model)
+
+        # Drop the inherited API key. os.environ.copy() above carries
+        # ANTHROPIC_API_KEY into the child, and a key beats first-party auth — so
+        # an inherited key silently moves every call off the subscription plan and
+        # onto metered API billing. Measured 2026-08-20: this machine's key answers
+        # `HTTP 400 Your credit balance is too low`, i.e. inheriting it does not
+        # degrade the call, it kills it. coordinator.py:1125 already pops it for
+        # the same reason. Opt back in with HERMES_ACP_CLAUDE_USE_API_KEY=1 when
+        # the API account is funded and metered billing is what you want.
+        if os.getenv("HERMES_ACP_CLAUDE_USE_API_KEY", "").strip() != "1":
+            env.pop("ANTHROPIC_API_KEY", None)
+            env.pop("ANTHROPIC_TOKEN", None)
     return env
 
 
@@ -459,6 +502,7 @@ class CopilotACPClient:
         args: list[str] | None = None,
         mcp_servers: list[dict[str, Any]] | None = None,
         reuse_session: bool | None = None,
+        model: str | None = None,
         **_: Any,
     ):
         self.api_key = api_key or "copilot-acp"
@@ -473,6 +517,14 @@ class CopilotACPClient:
             _explicit_args if _explicit_args is not None else _resolve_args(self._acp_flavor)
         )
         self._acp_cwd = str(Path(acp_cwd or os.getcwd()).resolve())
+        # The model this client's child process is pinned to. Resolved ONCE, here,
+        # because the pin is applied to the subprocess environment at spawn time
+        # and a reused session outlives any single call — so a per-call model
+        # cannot change what is already running. None for non-claude flavors,
+        # which carry no pin.
+        self._pinned_model = (
+            _resolve_claude_model(model) if self._acp_flavor == _FLAVOR_CLAUDE else model
+        )
         # Explicit kwargs beat the environment. A caller that holds ONE session per
         # chat (gateway/operator_shell/coding_session.py) must be able to turn reuse
         # on for itself without exporting HERMES_ACP_REUSE_SESSION into the whole
@@ -523,9 +575,21 @@ class CopilotACPClient:
         tool_choice: Any = None,
         **_: Any,
     ) -> Any:
+        if (
+            self._pinned_model
+            and model
+            and model.strip()
+            and model.strip() != self._pinned_model
+        ):
+            logger.warning(
+                "ACP child is pinned to %s; ignoring per-call model %s. The pin is "
+                "applied to the subprocess environment at spawn, so changing model "
+                "needs a new client (HERMES_ACP_CLAUDE_MODEL or model=).",
+                self._pinned_model, model.strip(),
+            )
         prompt_text = _format_messages_as_prompt(
             messages or [],
-            model=model,
+            model=self._pinned_model or model,
             tools=tools,
             tool_choice=tool_choice,
             flavor=self._acp_flavor,
@@ -568,10 +632,14 @@ class CopilotACPClient:
         )
         finish_reason = "tool_calls" if tool_calls else "stop"
         choice = SimpleNamespace(message=assistant_message, finish_reason=finish_reason)
+        # Report what RAN, not what was requested. `model=model` echoed the
+        # caller's argument back verbatim, so a caller asking for haiku on an
+        # unpinned child was told it got haiku while the machine default (opus)
+        # answered. A cost reader believes this field.
         return SimpleNamespace(
             choices=[choice],
             usage=usage,
-            model=model or "copilot-acp",
+            model=self._pinned_model or model or "copilot-acp",
         )
 
     def _run_prompt(self, prompt_text: str, *, timeout_seconds: float) -> tuple[str, str]:
@@ -608,7 +676,7 @@ class CopilotACPClient:
                 text=True,
                 bufsize=1,
                 cwd=self._acp_cwd,
-                env=_build_subprocess_env(),
+                env=_build_subprocess_env(self._acp_flavor, self._pinned_model),
             )
         except FileNotFoundError as exc:
             raise RuntimeError(
