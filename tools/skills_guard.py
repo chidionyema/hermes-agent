@@ -164,7 +164,14 @@ THREAT_PATTERNS = [
     (r'process\.env\[',
      "node_process_env", "high", "exfiltration",
      "accesses process.env (Node.js environment)"),
-    (r'ENV\[.*(?:KEY|TOKEN|SECRET|PASSWORD)',
+    # Ruby's ENV is a constant and is always upper-case, but this scanner runs every pattern
+    # with re.IGNORECASE, so `ENV\[.*KEY` also matched the Python line
+    # `env[key.strip()] = value.strip()` on the substring `env[key`. That single match graded
+    # anthropics/skills mcp-builder CRITICAL and blocked it permanently, because a dangerous
+    # verdict on a trusted source cannot be overridden with --force. `(?-i:ENV)` pins the
+    # constant to upper case; requiring a quoted key mirrors the two Python rules above and
+    # keeps the real shape, ENV['API_KEY'], critical.
+    (r'(?-i:ENV)\[\s*["\'][^"\']*(?:KEY|TOKEN|SECRET|PASSWORD)',
      "ruby_env_secret", "critical", "exfiltration",
      "reads secret via Ruby ENV[]"),
 
@@ -507,7 +514,18 @@ THREAT_PATTERNS = [
      "claims new policy/guidelines (may be social engineering)"),
 
     # ── Context window exfiltration ──
-    (r'(include|output|print|send|share)\s+(?:\w+\s+)*(conversation|chat\s+history|previous\s+messages|context)',
+    # Two narrowings, both paid for by anthropics/skills mcp-builder. Bare "context" is an
+    # ordinary English word, and this rule fired HIGH on the documentation sentence
+    # "**Avoid Naming Conflicts**: Include the service context to prevent overlaps:". Only the
+    # qualified forms mean the conversation. The bridge between verb and object was also
+    # unbounded, `(?:\w+\s+)*`, so it spanned a whole sentence and joined a verb to a noun that
+    # had nothing to do with it. Three words is enough for "output all of the ...".
+    # `tools/threat_patterns.py:104` holds a second rule with this same id, for the memory
+    # tool, and it already qualified "context" as `full context|entire context`. The two
+    # tables were never compared. The qualified forms below are a superset of that one.
+    (r'(include|output|print|send|share)\s+(?:\w+\s+){0,3}'
+     r'(conversation|chat\s+history|previous\s+messages|context\s+window'
+     r'|system\s+prompt|full\s+context|entire\s+context)',
      "context_exfil", "high", "exfiltration",
      "instructs agent to output/share conversation history"),
     (r'(send|post|upload|transmit)\s+.*\s+(to|at)\s+https?://',
