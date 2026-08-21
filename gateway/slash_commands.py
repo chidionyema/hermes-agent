@@ -429,6 +429,118 @@ class GatewaySlashCommandsMixin:
             output = output[:3800] + "\n" + t("gateway.kanban.truncated_suffix")
         return output or t("gateway.kanban.no_output")
 
+    #: The four lanes, in the order the founder reads them.
+    _LANES: tuple[str, ...] = ("Engine", "API", "UI", "Ops")
+
+    async def _handle_lanes_command(self, event: MessageEvent) -> str:
+        """Handle /lanes -- open work per lane, read live from GitHub.
+
+        A lane is the GitHub label ``lane: Engine`` and friends; a priority is
+        ``P0``..``P3``. Nothing is mirrored into a local board on purpose. A
+        lane view that can go stale is worse than no lane view, because it
+        still reads as fact.
+
+        The repo is public, so this works with no token. ``GITHUB_TOKEN`` is
+        used when present only to buy a larger rate limit.
+        """
+        import os
+
+        import httpx
+
+        repo = os.environ.get("HERMES_LANES_REPO", "chidionyema/prospector")
+        only = (event.get_command_args() or "").strip().lower()
+
+        headers = {"Accept": "application/vnd.github+json"}
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.get(
+                    f"https://api.github.com/repos/{repo}/issues",
+                    headers=headers,
+                    params={"state": "open", "per_page": "100"},
+                )
+                resp.raise_for_status()
+                items = resp.json()
+        except Exception as exc:  # network, rate limit, bad repo
+            return f"/lanes could not reach GitHub for {repo}: {exc}"
+
+        if not isinstance(items, list):
+            return f"/lanes got an unexpected reply from GitHub for {repo}."
+
+        def _priority(labels: list[str]) -> str:
+            for rank in ("P0", "P1", "P2", "P3"):
+                if rank in labels:
+                    return rank
+            return "P-"
+
+        buckets: dict[str, list[tuple[str, int, str, bool]]] = {
+            lane: [] for lane in self._LANES
+        }
+        unlaned: list[tuple[str, int, str, bool]] = []
+
+        for item in items:
+            labels = [
+                lab.get("name", "")
+                for lab in item.get("labels", [])
+                if isinstance(lab, dict)
+            ]
+            row = (
+                _priority(labels),
+                int(item.get("number", 0)),
+                str(item.get("title", "")).strip(),
+                "pull_request" in item,
+            )
+            placed = False
+            for lane in self._LANES:
+                if f"lane: {lane}" in labels:
+                    buckets[lane].append(row)
+                    placed = True
+            if not placed:
+                unlaned.append(row)
+
+        lines = [f"LANES - {repo}"]
+        shown = self._LANES
+        if only:
+            match = [lane for lane in self._LANES if lane.lower() == only]
+            if not match:
+                return (
+                    f"No lane called {only!r}. The four are: "
+                    + ", ".join(lane.lower() for lane in self._LANES)
+                    + "."
+                )
+            shown = tuple(match)
+
+        for lane in shown:
+            rows = sorted(buckets[lane])
+            urgent = sum(1 for r in rows if r[0] in ("P0", "P1"))
+            head = f"{lane}: {len(rows)} open"
+            if urgent:
+                head += f" ({urgent} P0/P1)"
+            lines.append("")
+            lines.append(head)
+            for rank, number, title, is_pr in rows[:8]:
+                kind = "PR" if is_pr else "#"
+                lines.append(f"  {rank} {kind}{number} {title[:64]}")
+            if len(rows) > 8:
+                lines.append(f"  ... and {len(rows) - 8} more")
+
+        if not only:
+            lines.append("")
+            lines.append(f"unlaned: {len(unlaned)}")
+            if len(items) == 100:
+                lines.append(
+                    "NOTE: GitHub returned a full page. There may be more than "
+                    "these 100 open items; this view is a lower bound."
+                )
+
+        output = "\n".join(lines)
+        if len(output) > 3800:
+            output = output[:3800] + "\n..."
+        return output
+
     async def _handle_status_command(self, event: MessageEvent) -> str:
         """Handle /status command."""
         from gateway.run import _AGENT_PENDING_SENTINEL, _load_gateway_config, _resolve_gateway_model

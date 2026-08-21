@@ -7682,6 +7682,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if canonical == "summary":
             return await self._handle_summary_command(event)
 
+        if canonical == "lanes":
+            return await self._handle_lanes_command(event)
+
         if canonical == "start":
             # A bare /start stays a silent platform ping. A deep-link payload
             # (`t.me/<bot>?start=summary`) is a real request and is answered.
