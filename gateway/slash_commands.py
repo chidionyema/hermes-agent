@@ -405,6 +405,21 @@ class GatewaySlashCommandsMixin:
 
         return "\n".join(lines)
 
+    async def _handle_summary_command(self, event: MessageEvent) -> str:
+        """`/summary <text>` — the isopsephy card, plus qabalah and the game.
+
+        Pure computation over the message text: no session, no network, no
+        disk. It is safe mid-run for that reason, which is why its CommandDef
+        carries busy_policy="dispatch".
+        """
+        from hermes_cli.slash_exec import CommandContext, execute_command
+
+        return execute_command(
+            "summary",
+            CommandContext(surface="gateway",
+                           args=(event.get_command_args() or "").strip()),
+        ).text
+
     async def _handle_whoami_command(self, event: MessageEvent) -> str:
         """Handle /whoami — show the user's slash command access on this scope.
 

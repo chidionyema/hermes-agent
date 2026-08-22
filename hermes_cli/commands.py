@@ -229,6 +229,10 @@ COMMAND_REGISTRY: list[CommandDef] = [
                aliases=("ctx",), args_hint="[all]", subcommands=("all",),
                busy_policy="dispatch"),
     CommandDef("whoami", "Show your slash command access (admin / user)", "Info"),
+    CommandDef("summary", "Analyse text \u2014 gematria, Greek isopsephy, the Tree, and the daily game", "Info",
+               args_hint="<text> | <a> vs <b> | game [word] | tables",
+               subcommands=("game", "tables"),
+               busy_policy="dispatch", execute="summary"),
     CommandDef("profile", "Show active profile name and home directory", "Info",
                busy_policy="dispatch", execute="profile"),
     CommandDef("sethome", "Set this chat as the home channel", "Session",
@@ -1366,7 +1370,15 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #     (session export is an interactive surface; platform is a rare
 #     informational lookup) — without this entry /save tips the registry
 #     past the 50-cap and silently clamps /platform, breaking parity.
-_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine", "pause", "whoami", "platform"})
+#   - summary: text analysis (gematria/isopsephy/Tree); reached via
+#     /hermes summary on Slack. Demoted on arrival rather than displacing
+#     an incumbent: the registry was already at exactly 50, so adding it
+#     natively silently clamped /insights off the end. The two earlier
+#     demotions ranked by interactivity; this one ranks by who already has
+#     users. /insights is deployed and reachable today, /summary is new, so
+#     the new command takes the /hermes route and the live Slack surface
+#     does not move.
+_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine", "pause", "whoami", "platform", "summary"})
 
 
 def _sanitize_slack_name(raw: str) -> str:

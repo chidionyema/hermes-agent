@@ -11831,6 +11831,20 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._open_command_palette()
         elif canonical == "whoami":
             self._handle_whoami_command()
+        elif canonical == "summary":
+            from hermes_cli.slash_exec import CommandContext, execute_command
+
+            _summary_parts = cmd_original.split(None, 1)
+            self._console_print(
+                execute_command(
+                    "summary",
+                    CommandContext(
+                        surface="cli",
+                        args=_summary_parts[1].strip() if len(_summary_parts) > 1 else "",
+                    ),
+                ).text,
+                highlight=False, markup=False,
+            )
         elif canonical == "profile":
             self._handle_profile_command()
         elif canonical == "tools":

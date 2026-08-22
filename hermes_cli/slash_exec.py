@@ -242,6 +242,22 @@ def _exec_commands(ctx: CommandContext) -> CommandReply:
     return CommandReply("\n".join(lines), format="markdown")
 
 
+def _exec_summary(ctx: CommandContext) -> CommandReply:
+    """Core /summary text — the isopsephy card, the Tree, and the game.
+
+    Pure computation over ``ctx.args``: no session, no network, no disk. That
+    is what makes it a registry executor rather than a per-surface handler, and
+    what makes it safe to dispatch while an agent is running.
+
+    ``gateway.qabalah`` is stdlib-only and imports nothing at module level
+    beyond ``unicodedata`` and ``datetime``, so the lazy import here costs the
+    CLI nothing and keeps this module free of gateway imports.
+    """
+    from gateway.qabalah import render_reply
+
+    return CommandReply(render_reply(ctx.args), format="markdown")
+
+
 # ---------------------------------------------------------------------------
 # Registry + resolution
 # ---------------------------------------------------------------------------
@@ -253,6 +269,7 @@ EXECUTORS: dict[str, Callable[[CommandContext], CommandReply]] = {
     "bundles": _exec_bundles,
     "gateway_help": _exec_help,
     "gateway_commands": _exec_commands,
+    "summary": _exec_summary,
 }
 
 
