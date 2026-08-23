@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -194,6 +195,70 @@ def snapshot_shutdown_context(received_signal: Any = None) -> Dict[str, Any]:
     return ctx
 
 
+def _diag_script(signal_name: str, pid: int) -> str:
+    """The snapshot commands for the platform this gateway is actually on.
+
+    This used to be one Linux script. Every command in it (``ps auxf``,
+    ``pstree``, ``/proc/loadavg``, ``dmesg``) is absent on macOS, and every one
+    was written ``2>/dev/null || true``, so on a Mac each section failed in
+    silence and the log recorded a complete-looking report with nothing under
+    any heading. Measured 2026-08-23 on this laptop: four SIGTERM events at
+    20:53:32, 21:05:47, 21:19:25 and 22:14:43 produced four empty reports, and
+    an empty report reads as a clean one.
+
+    The header line names the platform and the branch taken, so a reader can
+    tell an empty section from a section that was never going to run here.
+    """
+    head = (
+        f"echo '=== shutdown diagnostic @ {signal_name} ==='; "
+        "echo '--- date ---'; date -u +%Y-%m-%dT%H:%M:%SZ; "
+        "echo '--- platform ---'; uname -sr; "
+    )
+    if sys.platform == "darwin":
+        return head + (
+            "echo '--- branch --- darwin'; "
+            "echo '--- ps, top 60 by cpu ---'; "
+            "ps -Ao user,pid,ppid,pcpu,pmem,rss,etime,command -r | head -60; "
+            "echo '--- ancestry of self ---'; "
+            f"P={pid}; for _ in 1 2 3 4 5 6 7 8; do "
+            "  [ \"$P\" = 0 ] || [ -z \"$P\" ] && break; "
+            "  ps -o pid=,ppid=,command= -p \"$P\" | head -1; "
+            "  P=$(ps -o ppid= -p \"$P\" | tr -d ' '); "
+            "done; "
+            "echo '--- load ---'; sysctl -n vm.loadavg; "
+            "echo '--- memory pressure ---'; "
+            "memory_pressure -Q 2>/dev/null | head -5 || vm_stat | head -6; "
+            "echo '=== end ==='"
+        )
+    return head + (
+        "echo '--- branch --- linux'; "
+        "echo '--- ps auxf (top 60 by cpu) ---'; "
+        "ps auxf --sort=-pcpu 2>/dev/null | head -60; "
+        "echo '--- pstree of self ---'; "
+        f"pstree -plau {pid} 2>/dev/null | head -40 || true; "
+        "echo '--- /proc/loadavg ---'; "
+        "cat /proc/loadavg 2>/dev/null || true; "
+        "echo '--- recent dmesg (oom/killed) ---'; "
+        "dmesg -T 2>/dev/null | tail -20 || journalctl --user -n 20 --no-pager 2>/dev/null | tail -20 || true; "
+        "echo '=== end ==='"
+    )
+
+
+def _timeout_argv(timeout_seconds: float) -> List[str]:
+    """``timeout`` if the box has one, otherwise nothing.
+
+    ``timeout`` is GNU coreutils. It is not part of a stock macOS, so
+    ``Popen(["timeout", ...])`` raises FileNotFoundError there and the whole
+    diagnostic disappears with no log line at all. Running unbounded is worse
+    than not running, so the script itself is bounded by ``head`` on every
+    command; this only removes the outer wall when there is no binary for it.
+    """
+    for name in ("timeout", "gtimeout"):
+        if shutil.which(name):
+            return [name, f"{timeout_seconds:.0f}"]
+    return []
+
+
 def spawn_async_diagnostic(
     log_path: Path,
     signal_name: str,
@@ -226,19 +291,7 @@ def spawn_async_diagnostic(
     if sys.platform == "win32":
         return None
 
-    script = (
-        f"echo '=== shutdown diagnostic @ {signal_name} ==='; "
-        "echo '--- date ---'; date -u +%Y-%m-%dT%H:%M:%SZ; "
-        "echo '--- ps auxf (top 60 by cpu) ---'; "
-        "ps auxf --sort=-pcpu 2>/dev/null | head -60; "
-        "echo '--- pstree of self ---'; "
-        f"pstree -plau {os.getpid()} 2>/dev/null | head -40 || true; "
-        "echo '--- /proc/loadavg ---'; "
-        "cat /proc/loadavg 2>/dev/null || true; "
-        "echo '--- recent dmesg (oom/killed) ---'; "
-        "dmesg -T 2>/dev/null | tail -20 || journalctl --user -n 20 --no-pager 2>/dev/null | tail -20 || true; "
-        "echo '=== end ==='"
-    )
+    script = _diag_script(signal_name, os.getpid())
 
     try:
         # Open the log file in append mode and let the subprocess inherit.
@@ -255,7 +308,7 @@ def spawn_async_diagnostic(
         # start_new_session, a SIGKILL on our cgroup takes the diag down
         # before it can flush.
         proc = subprocess.Popen(
-            ["timeout", f"{timeout_seconds:.0f}", "bash", "-c", script],
+            _timeout_argv(timeout_seconds) + ["bash", "-c", script],
             stdout=fd,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,

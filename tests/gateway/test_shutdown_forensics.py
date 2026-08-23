@@ -142,3 +142,66 @@ class TestCheckSystemdTimingAlignment:
         # for whatever unit pytest IS in.  Both are valid; we just ensure
         # the function doesn't raise.
         assert result is None or isinstance(result, dict)
+
+
+# ---------------------------------------------------------------------------
+# incident 2026-08-23: an empty report read as a clean one
+# ---------------------------------------------------------------------------
+
+class TestIncident20260823EmptyDiagnostic:
+    """The diagnostic ran Linux-only commands and wrote nothing on macOS.
+
+    Four SIGTERM events on 2026-08-23 (20:53:32, 21:05:47, 21:19:25, 22:14:43)
+    each produced a report with every heading present and every section empty,
+    because ``ps auxf``, ``pstree``, ``/proc/loadavg`` and ``dmesg`` do not
+    exist on a Mac and each was written ``2>/dev/null || true``.
+
+    The test that already covered this function asserted only that the string
+    "shutdown diagnostic" appeared in the file, which is the header. It passed
+    for all four empty reports. The rule is that a section must have a body.
+    """
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="POSIX-only diagnostic")
+    def test_every_section_has_a_body_on_this_platform(self, tmp_path):
+        import re
+
+        log_path = tmp_path / "diag.log"
+        pid = sf.spawn_async_diagnostic(log_path, "SIGTERM", timeout_seconds=5.0)
+        assert pid is not None
+
+        deadline = time.monotonic() + 12.0
+        while time.monotonic() < deadline:
+            if log_path.exists() and "=== end ===" in log_path.read_text(
+                encoding="utf-8", errors="replace"
+            ):
+                break
+            time.sleep(0.1)
+        try:
+            os.waitpid(pid, 0)
+        except (ChildProcessError, OSError):
+            pass
+
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        assert "=== end ===" in text, "diagnostic never finished"
+
+        parts = re.split(r"^--- (.+?) ---$", text, flags=re.M)
+        sections = {
+            parts[i]: parts[i + 1].replace("=== end ===", "").strip()
+            for i in range(1, len(parts), 2)
+        }
+        assert sections, "no sections at all"
+        empty = [name for name, body in sections.items() if not body.strip()]
+        assert not empty, f"sections present but empty on {sys.platform}: {empty}"
+
+    def test_script_matches_the_platform_it_will_run_on(self):
+        script = sf._diag_script("SIGTERM", 1234)
+        if sys.platform == "darwin":
+            assert "pstree" not in script
+            assert "/proc/loadavg" not in script
+            assert "vm.loadavg" in script
+        else:
+            assert "/proc/loadavg" in script
+
+    def test_missing_timeout_binary_does_not_kill_the_diagnostic(self, monkeypatch):
+        monkeypatch.setattr(sf.shutil, "which", lambda _name: None)
+        assert sf._timeout_argv(5.0) == []
