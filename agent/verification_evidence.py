@@ -798,3 +798,59 @@ def verification_status(
         "session_id": sid,
         "changed_paths": changed_paths,
     }
+
+
+def session_verification_gaps(session_id: str | None) -> list[dict[str, Any]]:
+    """Return every workspace this session edited without a fresh green run.
+
+    ``verification_status`` answers for one (session, cwd) pair, but the
+    gateway's reply path has no cwd — only the session. State rows are only
+    ever written where project facts existed (``mark_workspace_edited``
+    returns early otherwise), so querying by session alone needs no facts
+    lookup: the ledger itself is the applicability filter.
+
+    A root is a gap when it has recorded changed paths and its latest event
+    is missing, failed, or older than the last edit — the same staleness rule
+    ``verification_status`` applies. Roots with no changed paths never count.
+    """
+
+    sid = str(session_id or "default")
+    with _DB_LOCK:
+        with _transaction() as conn:
+            states = conn.execute(
+                """
+                SELECT root, last_event_id, last_edit_at, changed_paths_json
+                FROM verification_state
+                WHERE session_id = ?
+                """,
+                (sid,),
+            ).fetchall()
+            gaps: list[dict[str, Any]] = []
+            for state in states:
+                try:
+                    changed_paths = json.loads(state["changed_paths_json"] or "[]")
+                except (TypeError, ValueError):
+                    changed_paths = []
+                if not changed_paths:
+                    continue
+                event = None
+                if state["last_event_id"] is not None:
+                    event = conn.execute(
+                        "SELECT * FROM verification_events WHERE id = ?",
+                        (state["last_event_id"],),
+                    ).fetchone()
+                if event is None:
+                    status = "unverified"
+                elif state["last_edit_at"] and state["last_edit_at"] > event["created_at"]:
+                    status = "stale"
+                else:
+                    status = event["status"]
+                if status in ("unverified", "stale", "failed"):
+                    gaps.append(
+                        {
+                            "root": state["root"],
+                            "status": status,
+                            "changed_paths": changed_paths,
+                        }
+                    )
+    return gaps

@@ -20286,6 +20286,21 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     agent_result, response, history_len=len(history),
                 )
                 response = _sanitize_gateway_final_response(source.platform, response)
+                # Claim gate: a DONE: status line must be backed by the
+                # session's verification ledger or it is restamped
+                # UNVERIFIED:. Stamp-only — never blocks or empties a reply,
+                # and a gate that cannot even import degrades to no gate
+                # rather than taking the reply path down with it.
+                try:
+                    from gateway.claim_gate import stamp_unproven_done
+
+                    response = stamp_unproven_done(
+                        response,
+                        session_id=agent_result.get("session_id")
+                        or session_entry.session_id,
+                    )
+                except Exception:
+                    logger.debug("claim gate unavailable", exc_info=True)
 
             # Ordering contract: the agent thread already updated the contextvar
             # in conversation_compression.py; propagate to SessionEntry + _save().
