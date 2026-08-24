@@ -1550,6 +1550,67 @@ def _get_context_file_max_chars(context_length: Optional[int] = None) -> int:
         logger.debug("Could not read context_file_max_chars from config: %s", e)
     return _dynamic_context_file_max_chars(context_length)
 
+# A rules file is the one context file that must never lose its middle, because
+# losing the middle is worse than not loading it at all: the agent keeps the
+# index of every rule and loses the text of some, and nothing in the prompt says
+# which. It then acts as though it has read them.
+#
+# Measured on this estate, twice in five hours. 2026-08-23 21:47, cap 48000 and
+# AGENTS.md 74037 chars: the bodies of LAW 12 to LAW 30 were dropped. 2026-08-24
+# 02:30, cap 96000 and the same file grown to 100199: the back of LAW 34 and all
+# of LAWS 35 to 40. Both times an agent raised the number, and the number fell
+# behind again on its own because the file grew 26,162 chars in one day. A cap a
+# human has to maintain against a file that grows is a recurrence with a delay
+# on it, so the cap is computed here instead.
+#
+# A ceiling still applies, and it is tied to the model's window rather than
+# flat. Lifting a rules file to the 500K hard ceiling on an 8K-window model
+# would inject 125K tokens of rules into an 8K window, which trades a silent
+# truncation for a request that cannot be sent. A quarter of the window is the
+# most a rules file may take: 200K tokens gives 200,000 chars, well clear of
+# the laws, and 8K gives 8,000, so a small model keeps truncating exactly as
+# it did before.
+_RULES_FILE_BASENAMES = frozenset({"agents.md", "claude.md", "hermes.md", ".hermes.md"})
+_RULES_FILE_WINDOW_FRACTION = 0.25
+
+
+def _is_rules_file(filename: str) -> bool:
+    """True for the labels the rules-file loaders pass to ``_truncate_content``.
+
+    The label is not always a bare name: a parent directory in the merged chain
+    arrives as a relative path, and the merged result arrives as
+    ``"AGENTS.md (directory chain)"``.
+    """
+    label = filename.split(" (")[0].strip()
+    return os.path.basename(label).lower() in _RULES_FILE_BASENAMES
+
+
+def _rules_file_ceiling(context_length: Optional[int]) -> int:
+    """The most a rules file may take, in chars. Window-relative, never flat."""
+    if not isinstance(context_length, int) or context_length <= 0:
+        return _CONTEXT_FILE_DYNAMIC_CEILING
+    budget = int(
+        context_length * _CONTEXT_FILE_CHARS_PER_TOKEN * _RULES_FILE_WINDOW_FRACTION
+    )
+    return min(max(budget, 0), _CONTEXT_FILE_DYNAMIC_CEILING)
+
+
+def _cap_for_rules_file(
+    filename: str,
+    content: str,
+    max_chars: int,
+    context_length: Optional[int] = None,
+) -> int:
+    """Return a cap that fits a rules file whole, bounded by the ceiling.
+
+    Returns *max_chars* unchanged for anything that is not a rules file, and
+    for a rules file that already fits. Never lowers a cap.
+    """
+    if not _is_rules_file(filename) or len(content) <= max_chars:
+        return max_chars
+    return max(max_chars, min(len(content), _rules_file_ceiling(context_length)))
+
+
 # Collect truncation warnings so the caller (run_agent) can surface them.
 # A ContextVar (not a module-global list) isolates accumulation per thread /
 # per async task, so concurrent gateway-session prompt builds can't drain or
@@ -2292,6 +2353,9 @@ def _truncate_content(
     """
     if max_chars is None:
         max_chars = _get_context_file_max_chars(context_length)
+        max_chars = _cap_for_rules_file(
+            filename, content, max_chars, context_length=context_length
+        )
     if len(content) <= max_chars:
         return content
     target = read_path or filename
