@@ -6816,6 +6816,64 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             return None
         return sessions.get(session_key)
 
+    def _record_intercepted_input(
+        self,
+        session_key: str,
+        text: str,
+        display_kind: str,
+        clarify_id: str = "",
+    ) -> None:
+        """Write text the gateway consumed in memory into the transcript.
+
+        A clarify answer never reaches the dispatch path that persists a user
+        row. The gateway hands it straight to the blocked agent thread and
+        acknowledges with an empty string, so until 2026-08-24 the words
+        existed only in RAM and in one INFO line giving their character count.
+        Measured that morning on the founder's own DM: he typed 46 characters
+        at 02:03:02, the gateway logged "intercepted clarify text response",
+        the turn holding the answer never flushed a tool result, and the text
+        was unrecoverable from every store on this machine. A message accepted
+        and then lost with no receipt is the worst shape of failure available
+        to a gateway, because the sender has no way to know it happened.
+
+        The row is soft-archived (``active=0``). It is a receipt, not a turn:
+        the clarify tool result already carries the answer into the model's
+        history, and a live user row sitting between an assistant tool call
+        and its result would break the provider's message sequence.
+
+        Never raises. A failed receipt must not cost the founder the answer
+        itself, which the caller is about to deliver.
+        """
+        if not text:
+            return
+        try:
+            db = self._session_db
+            if db is None:
+                return
+            state = self._peek_session_state(session_key)
+            agent = getattr(getattr(state, "turn", None), "agent", None)
+            session_id = getattr(agent, "session_id", None)
+            if not session_id:
+                logger.warning(
+                    "Could not record intercepted input for %s: no live "
+                    "session id (%d chars lost from the transcript)",
+                    session_key, len(text),
+                )
+                return
+            db._db.append_message(
+                session_id,
+                "user",
+                content=text,
+                display_kind=display_kind,
+                display_metadata={"clarify_id": clarify_id} if clarify_id else None,
+                active=False,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to record intercepted input for %s (%d chars)",
+                session_key, len(text), exc_info=True,
+            )
+
     def _is_session_running(self, session_key: str) -> bool:
         """True when the session holds a running-turn slot (agent or sentinel)."""
         state = self._peek_session_state(session_key)
@@ -17093,6 +17151,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         "Gateway intercepted clarify text response (session=%s, id=%s)",
                         _quick_key, _pending_clarify.clarify_id,
                     )
+                    # The answer is now in RAM on its way to a blocked agent
+                    # thread. Put it on disk first, so it survives whatever
+                    # happens to that turn.
+                    self._record_intercepted_input(
+                        _quick_key, _raw_clarify_reply,
+                        "clarify_answer", _pending_clarify.clarify_id,
+                    )
                     # The clarify callback pauses the platform typing/status
                     # indicator while waiting so Slack users can type their
                     # answer. The active agent resumes as soon as this reply
@@ -17121,6 +17186,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         "Gateway retained pending clarify after invalid "
                         "selection attempt (session=%s, id=%s)",
                         _quick_key, _pending_clarify.clarify_id,
+                    )
+                    # Rejected, so no agent will ever see this text. It is
+                    # dropped entirely, which makes the receipt the only
+                    # record that the founder typed anything at all.
+                    self._record_intercepted_input(
+                        _quick_key, _raw_clarify_reply,
+                        "clarify_rejected_selection",
+                        _pending_clarify.clarify_id,
                     )
                     return ""
                 if _text_outcome == _clarify_mod.TEXT_REJECTED_PROSE:
