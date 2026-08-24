@@ -6850,6 +6850,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             agent = getattr(getattr(state, "turn", None), "agent", None)
             session_id = getattr(agent, "session_id", None)
             if not session_id:
+                # The slash-command paths reach a running agent through
+                # _running_agents without a SessionState turn attached.
+                running = (self.__dict__.get("_running_agents") or {}).get(session_key)
+                session_id = getattr(running, "session_id", None)
+            if not isinstance(session_id, str) or not session_id:
                 logger.warning(
                     "Could not record intercepted input for %s: no live "
                     "session id (%d chars lost from the transcript)",
@@ -10424,6 +10429,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 except Exception as exc:
                     logger.warning("Gateway steer failed for session %s: %s", session_key, exc)
                     steered = False
+            if steered:
+                # Same swallow as the clarify path: steer() appends the text
+                # to a tool result in memory and nothing writes it down.
+                self._record_intercepted_input(
+                    session_key, steer_text, "steer_delivered",
+                )
             if not steered:
                 # Fall back to queue (merge into pending messages, no interrupt)
                 effective_mode = "queue"
@@ -16470,6 +16481,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.warning("Steer failed for session %s: %s", quick_key, exc)
                 return f"⚠️ Steer failed: {exc}"
             if accepted:
+                self._record_intercepted_input(
+                    quick_key, steer_text, "steer_delivered",
+                )
                 preview = steer_text[:60] + ("..." if len(steer_text) > 60 else "")
                 return f"⏩ Steer queued — arrives after the next tool call: '{preview}'"
             return "Steer rejected (empty payload)."
@@ -17218,6 +17232,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         steered = False
                 if steered:
                     logger.debug("PRIORITY steer for session %s", _quick_key)
+                    self._record_intercepted_input(
+                        _quick_key, steer_text, "steer_delivered",
+                    )
                     return None
                 logger.debug("PRIORITY steer-fallback-to-queue for session %s", _quick_key)
                 self._queue_or_replace_pending_event(_quick_key, event)
