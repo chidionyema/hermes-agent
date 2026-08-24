@@ -143,5 +143,50 @@ async def test_steer_agent_without_steer_method_falls_back():
     )
 
 
+
+@pytest.mark.asyncio
+async def test_steer_text_is_written_to_the_transcript(tmp_path):
+    """Incident 2026-08-24: /steer delivered the founder's words in memory only.
+
+    ``agent.steer()`` appends the text to the last tool result of the running
+    turn and logs a character count.  Nothing persisted it, so a turn that
+    never flushed took the message with it -- 21 characters ("1 and 2 ready
+    to flip") went that way on the founder's own DM the same morning the
+    clarify path lost 46 more.  The gateway now writes a soft-archived
+    receipt at every point it accepts text it will deliver by hand.
+    """
+    from hermes_state import SessionDB
+
+    runner, adapter = _make_runner(_session_entry())
+    sk = build_session_key(_make_source())
+
+    db = SessionDB(tmp_path / "state.db")
+    try:
+        db.create_session("sess-1", source="gateway")
+        runner._session_db = SimpleNamespace(
+            _db=db, get_session_title=lambda *_a, **_kw: None
+        )
+        running_agent = MagicMock()
+        running_agent.steer.return_value = True
+        running_agent.session_id = "sess-1"
+        runner._running_agents[sk] = running_agent
+
+        await runner._handle_message(_make_event("/steer 1 and 2 ready to flip"))
+
+        # The pass half: the agent still got the steer, unchanged.
+        running_agent.steer.assert_called_once_with("1 and 2 ready to flip")
+
+        # And it is on disk now, which it was not before this fix.
+        rows = db.get_messages("sess-1", include_inactive=True)
+        assert [r["content"] for r in rows] == ["1 and 2 ready to flip"]
+        assert rows[0]["display_kind"] == "steer_delivered"
+
+        # A receipt, not a turn: it is not replayed to the provider, so it
+        # cannot break the assistant-tool-call / tool-result sequence.
+        assert db.get_messages("sess-1") == []
+    finally:
+        db.close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     pytest.main([__file__, "-v"])
