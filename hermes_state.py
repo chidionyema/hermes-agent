@@ -9289,6 +9289,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         compression_lock_holder: Optional[str] = None,
         turn_lease_holder: Optional[str] = None,
         turn_lease_ttl_seconds: float = 300.0,
+        active: bool = True,
     ) -> int:
         """
         Append a message to a session. Returns the message row ID.
@@ -9309,6 +9310,14 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         (which sqlite3 cannot bind and which the conversation loop scrubs
         from every outgoing payload anyway, so the scrubbed form IS the
         wire bytes).
+
+        ``active=False`` writes the row soft-archived: it is on disk and in
+        every transcript export, and :meth:`get_messages` leaves it out of the
+        live conversation the provider replays.  Use it for a receipt — text
+        that must survive but must not become a turn — such as a founder reply
+        the gateway consumed in memory (see ``_record_intercepted_input``).
+        Inserting a live user row between an assistant tool call and its
+        result would break the provider's required message sequence.
         """
         # Display metadata is presentation-only and never changes the model
         # context role/content replayed to providers.
@@ -9377,7 +9386,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     codex_message_items_json,
                     platform_message_id,
                     1 if observed else 0,
-                    1,
+                    1 if active else 0,
                     _scrub_surrogates(api_content) if isinstance(api_content, str) else None,
                     _scrub_surrogates(display_kind) if isinstance(display_kind, str) else None,
                     display_metadata_json,
