@@ -7058,6 +7058,55 @@ class TelegramAdapter(BasePlatformAdapter):
             return
 
         # --- Gmail-triage callbacks (gt:verb:arg) ---
+        if data.startswith("fd:"):
+            # Founder decision on a delivery receipt: fd:<id>:<go|rework|later>.
+            # The receipt is sent by ~/.claude/scripts/founder-deliver.py (a Claude Code
+            # Stop hook) and the verdict is recorded by that same file, so the logic and
+            # its selftest live in one place. This branch authorises, delegates, and
+            # rewrites the tapped message with the one-line outcome. Founder, 2026-08-25:
+            # "it needs to be one hop ... easily let the team know of decision".
+            if not self._is_callback_user_authorized(
+                str(getattr(query.from_user, "id", "")),
+                chat_id=query_chat_id,
+                chat_type=str(query_chat_type) if query_chat_type is not None else None,
+                thread_id=str(query_thread_id) if query_thread_id is not None else None,
+                user_name=query_user_name,
+            ):
+                await query.answer(text="⛔ You are not authorized.")
+                return
+            parts = data.split(":", 2)
+            if len(parts) != 3:
+                await query.answer(text="Invalid decision data.")
+                return
+            try:
+                await query.answer(text="Recording…")
+            except Exception:
+                pass
+            import os as _os
+            import subprocess as _sp
+            _script = _os.path.expanduser("~/.claude/scripts/founder-deliver.py")
+
+            def _record():
+                return _sp.run(
+                    ["python3", _script, "--decide", parts[1], parts[2],
+                     "--by", str(query_user_name or "founder")],
+                    capture_output=True, text=True, timeout=60,
+                )
+            try:
+                proc = await asyncio.to_thread(_record)
+                outcome = (proc.stdout or proc.stderr or "").strip() or f"rc={proc.returncode}"
+            except Exception as exc:
+                outcome = f"decision not recorded: {exc}"
+            logger.info("founder decision %s -> %s", data, outcome)
+            try:
+                original = getattr(query_message, "text", "") or ""
+                await query.edit_message_text(
+                    text=(original + "\n\n" + outcome)[:4000], reply_markup=None,
+                )
+            except Exception as exc:
+                logger.warning("founder decision recorded but message edit failed: %s", exc)
+            return
+
         if data.startswith("gt:"):
             await self._handle_gmail_triage_callback(
                 query,
