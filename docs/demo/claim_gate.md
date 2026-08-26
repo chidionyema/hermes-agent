@@ -18,7 +18,7 @@ With a session whose ledger holds edits and no green run after them, the same ca
 ```
 UNVERIFIED: shipped the thing
 Evidence: none
-⚠️ UNVERIFIED: files were edited this session and no verification run passed after the last edit
+⚠️ UNVERIFIED: files were edited this session and no verification run has passed since the last edit (<detail>).
 ```
 
 The gateway log carries one line per stamp: `claim_gate stamped DONE -> UNVERIFIED for session <id> (<files>)`.
