@@ -23,6 +23,8 @@ Optional env vars:
       sanitized - content with secret-pattern redaction + truncation
       full      - raw content (truncated only); explicit opt-in
   HERMES_LANGFUSE_DEBUG       - set to "true" for verbose logging
+  HERMES_LANGFUSE_TAGS        - comma-separated extra trace tags, e.g. "crew#286", so a session
+                                is found by the issue it worked
 """
 from __future__ import annotations
 
@@ -125,6 +127,17 @@ def _debug(message: str) -> None:
 _CAPTURE_MODES = ("metadata", "sanitized", "full")
 _DEFAULT_CAPTURE_MODE = "sanitized"
 _warned_invalid_capture = False
+
+
+def _tags() -> list:
+    """Trace tags: the two fixed ones, then HERMES_LANGFUSE_TAGS split on commas, blanks
+    dropped, order kept, duplicates dropped (a Langfuse tag query is exact-match)."""
+    tags = ["hermes", "langfuse"]
+    for t in _env("HERMES_LANGFUSE_TAGS").split(","):
+        t = t.strip()
+        if t and t not in tags:
+            tags.append(t)
+    return tags
 
 
 def _capture_mode() -> str:
@@ -907,7 +920,7 @@ def _start_root_trace(task_key: str, *, task_id: str, session_id: str, platform:
             with propagate_attributes(
                 session_id=session_id or task_key,
                 trace_name="Hermes turn",
-                tags=["hermes", "langfuse"],
+                tags=_tags(),
             ):
                 root_ctx = client.start_as_current_observation(
                     trace_context=trace_ctx,
