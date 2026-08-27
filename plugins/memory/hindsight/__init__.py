@@ -1902,14 +1902,34 @@ class HindsightMemoryProvider(MemoryProvider):
         )
         return f"{header}\n\n{result}"
 
-    def _record_recall_indicator(self, *, returned: bool, count: int) -> None:
+    def _record_recall_indicator(self, *, returned: bool, count: int, chars: int = 0) -> None:
         """Track what the last prefetch injected, for recall_status().
 
         Cleared to "nothing" on empty turns so the indicator never reports a
         stale prior count.
+
+        Also appends one JSONL row per turn to a real, queryable measurement
+        log (crew#491: prove the switch off raw-text-in-every-prompt actually
+        reduced injected size, don't just assert it). File-based, matching
+        the estate's existing science/collect.py pattern (see sources.json;
+        this needs its own registry entry to actually land in warehouse.db).
         """
         self._last_recall_returned = returned
         self._last_recall_count = count if returned else 0
+        try:
+            import json as _json
+            import os as _os
+            import time as _time
+            log_path = _os.path.expanduser("~/.claude/hindsight-recall-history.jsonl")
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write(_json.dumps({
+                    "at": _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime()),
+                    "returned": returned,
+                    "count": count if returned else 0,
+                    "chars": chars,
+                }) + "\n")
+        except Exception:
+            pass  # measurement must never break a real turn
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         # Opt-in: recall synchronously against the *current* message so the
@@ -1920,7 +1940,7 @@ class HindsightMemoryProvider(MemoryProvider):
                 self._record_recall_indicator(returned=False, count=0)
                 return ""
             recalled = self._do_recall(query)
-            self._record_recall_indicator(returned=bool(recalled.text), count=recalled.count)
+            self._record_recall_indicator(returned=bool(recalled.text), count=recalled.count, chars=len(recalled.text or ""))
             return self._format_recall(recalled.text)
 
         # Default: return the result the background worker prefetched for the
@@ -1933,7 +1953,7 @@ class HindsightMemoryProvider(MemoryProvider):
             count = self._prefetch_count
             self._prefetch_result = ""
             self._prefetch_count = 0
-        self._record_recall_indicator(returned=bool(result), count=count)
+        self._record_recall_indicator(returned=bool(result), count=count, chars=len(result or ""))
         return self._format_recall(result)
 
     def recall_status(self) -> Optional[RecallStatus]:
