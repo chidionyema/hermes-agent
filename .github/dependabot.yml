@@ -20,6 +20,14 @@
 # Those are CVE-only, not schedule-driven, and do not conflict with our
 # pinning strategy — they fire when a pinned version becomes known-bad,
 # which is exactly when we want to move the pin.
+#
+# crew#504, 2026-08-27: 37 of those CVE PRs sat open at once (dompurify x4,
+# undici x3, brace-expansion x3 ...), one per package per manifest, and were
+# closed unread in the estate PR sweep. The entries below name every npm,
+# pip and cargo manifest with `open-pull-requests-limit: 0` (no schedule-driven
+# version bumps, the posture above is unchanged) and a `groups` block with
+# `applies-to: security-updates`, so a CVE wave arrives as ONE PR per
+# ecosystem instead of one per package.
 
 version: 2
 updates:
@@ -42,3 +50,57 @@ updates:
         update-types:
           - "minor"
           - "patch"
+
+  # Source ecosystems: version updates OFF (limit 0), security updates grouped.
+  - package-ecosystem: "npm"
+    directories:
+      - "/"
+      - "/apps/bootstrap-installer"
+      - "/apps/desktop"
+      - "/apps/shared"
+      - "/scripts/whatsapp-bridge"
+      - "/ui-tui"
+      - "/ui-tui/packages/hermes-ink"
+      - "/web"
+      - "/website"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+      - "security"
+    groups:
+      npm-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pip"
+    directories:
+      - "/"
+      - "/optional-skills/finance/dcf-model"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+      - "security"
+    groups:
+      pip-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
+
+  - package-ecosystem: "cargo"
+    directory: "/apps/bootstrap-installer/src-tauri"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+      - "security"
+    groups:
+      cargo-security:
+        applies-to: security-updates
+        patterns:
+          - "*"
