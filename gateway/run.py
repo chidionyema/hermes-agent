@@ -16256,6 +16256,31 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         "moa": "Agent is running — wait or /stop first, then run /moa.",
     }
 
+    async def _dispatch_busy_plugin_command(self, event: MessageEvent, command: str):
+        """Answer a plugin-registered slash command while an agent is running.
+
+        Returns the handler's reply, or ``None`` when no plugin registered the
+        command (the caller then continues to the steer/queue logic). Mirrors
+        the cold-path dispatch: underscores normalise to hyphens for Telegram's
+        autocomplete form, and a failing handler is logged, not raised.
+        """
+        try:
+            from hermes_cli.plugins import get_plugin_command_handler
+            plugin_handler = get_plugin_command_handler(command.replace("_", "-"))
+        except Exception as e:
+            logger.warning("Plugin command lookup failed while busy: %s", e)
+            return None
+        if not plugin_handler:
+            return None
+        try:
+            result = plugin_handler(event.get_command_args().strip())
+            if asyncio.iscoroutine(result):
+                result = await result
+        except Exception as e:
+            logger.warning("Plugin command dispatch failed while busy: %s", e)
+            return f"/{command} failed: {e}"
+        return str(result) if result else ""
+
     async def _dispatch_busy_slash_command(
         self, event: MessageEvent, cmd_def, quick_key: str, source,
     ):
@@ -17138,6 +17163,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return await self._dispatch_busy_slash_command(
                     event, _cmd_def_inner, _quick_key, source,
                 )
+            # Plugin-registered slash commands (crew#284: /sb-list, /sb-show,
+            # ...) are not CommandDefs, so resolve_command() returns None for
+            # them and they used to fall through to the steer/queue logic
+            # below and reach the model as chat text. They answer here
+            # instead, the same way the cold path dispatches them.
+            if _evt_cmd:
+                _plugin_reply = await self._dispatch_busy_plugin_command(event, _evt_cmd)
+                if _plugin_reply is not None:
+                    return _plugin_reply
 
             if event.message_type == MessageType.PHOTO:
                 logger.debug("PRIORITY photo follow-up for session %s — queueing without interrupt", _quick_key)
