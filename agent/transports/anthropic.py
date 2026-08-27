@@ -182,6 +182,12 @@ class AnthropicTransport(ProviderTransport):
         if _has_signed_thinking and _has_tool_use:
             provider_data["anthropic_content_blocks"] = ordered_blocks
 
+        # A classifier refusal carries ``stop_details`` (category, explanation).
+        # Keep it: without it the refusal handler logs "(no text)" and nobody
+        # can say why the model declined (crew#496, 2026-08-27).
+        if getattr(response, "stop_reason", None) == "refusal":
+            provider_data["refusal_details"] = refusal_details_from(response)
+
         return NormalizedResponse(
             content="\n".join(text_parts) if text_parts else None,
             tool_calls=tool_calls or None,
@@ -244,6 +250,29 @@ class AnthropicTransport(ProviderTransport):
         """Map Anthropic stop_reason to OpenAI finish_reason."""
         return self._STOP_REASON_MAP.get(raw_reason, "stop")
 
+
+
+def refusal_details_from(response: Any) -> Dict[str, Any]:
+    """Return ``{"category": ..., "explanation": ...}`` for a refusal response.
+
+    Both values are ``None`` when Anthropic sends no named category, which the
+    API documents as a normal, permanent value.
+    """
+    details = getattr(response, "stop_details", None)
+    if details is None:
+        return {"category": None, "explanation": None}
+    if isinstance(details, dict):
+        get = details.get
+    else:
+        get = lambda k, d=None: getattr(details, k, d)  # noqa: E731
+    return {"category": get("category"), "explanation": get("explanation")}
+
+
+def refusal_summary(result: Any) -> str:
+    """One token for logs and alerts: ``category=cyber`` or ``category=none``."""
+    pd = getattr(result, "provider_data", None) or {}
+    details = pd.get("refusal_details") or {}
+    return f"category={details.get('category') or 'none'}"
 
 # Auto-register on import
 from agent.transports import register_transport  # noqa: E402

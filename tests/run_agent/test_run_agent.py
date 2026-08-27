@@ -5050,6 +5050,56 @@ class TestRetryExhaustion:
         # exactly one API call, no empty-response retry loop.
         assert agent.client.chat.completions.create.call_count == 1
 
+    # ── Incident crew#496 (2026-08-27): a refusal gets one compress-and-retry ──
+    # Otto refused six founder turns in a row, every one on the same ~385k-token
+    # history; the loop returned each terminally, so the next message met the
+    # same window and the same verdict. Rule: one compress-and-retry, only when
+    # compression actually shrinks the window. Both ways below.
+
+    def _refusal_then_answer(self, agent, compress):
+        self._setup_agent(agent)
+        agent.compression_enabled = True
+        agent.max_compression_attempts = 3
+        refusal = SimpleNamespace(
+            choices=[SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None, tool_calls=None, reasoning=None,
+                    reasoning_content=None, refusal="I won't help with that.",
+                ),
+                finish_reason="stop",
+            )],
+            model="test/model", usage=None, id="resp_refused",
+        )
+        agent.client.chat.completions.create.side_effect = [
+            refusal, _mock_response(content="Answer after compaction", finish_reason="stop"),
+        ]
+        with (
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+            patch.object(agent, "_compress_context", side_effect=compress),
+        ):
+            history = [
+                {"role": "user", "content": f"turn {i}"} if i % 2 == 0
+                else {"role": "assistant", "content": f"reply {i}"}
+                for i in range(6)
+            ]
+            return agent.run_conversation("is this not done", conversation_history=history)
+
+    def test_incident_crew496_refusal_on_a_window_compression_shrinks_is_resent_once(self, agent):
+        result = self._refusal_then_answer(
+            agent, lambda messages, system_message, **_: (messages[-1:], system_message))
+        assert agent.client.chat.completions.create.call_count == 2
+        assert result.get("completed") is True
+        assert result.get("final_response") == "Answer after compaction"
+
+    def test_incident_crew496_refusal_on_a_window_compression_cannot_shrink_is_one_call(self, agent):
+        result = self._refusal_then_answer(
+            agent, lambda messages, system_message, **_: (messages, system_message))
+        assert agent.client.chat.completions.create.call_count == 1
+        assert result.get("failed") is True
+        assert "content_policy_blocked" in result.get("error", "")
+
 
     def test_build_api_kwargs_error_no_unbound_local(self, agent):
         """When _build_api_kwargs raises, except handler must not crash with UnboundLocalError.
