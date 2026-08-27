@@ -81,6 +81,8 @@ class TurnRetryState:
     # has been escalated to the fallback chain: the partial-stream content
     # was rolled back off ``messages`` and the loop should re-issue the API
     # call against the newly-activated provider (#32421).
+    # crew#496: a refusal gets one compress-and-retry before the fallback chain.
+    refusal_compression_attempted: bool = False
     restart_with_rebuilt_messages: bool = False
     # A user correction cancelled the in-flight provider request. The outer
     # loop must append a role-safe checkpoint + user message, rebuild the API

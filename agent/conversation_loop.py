@@ -3560,7 +3560,46 @@ def run_conversation(
                     if agent.thinking_callback:
                         agent.thinking_callback("")
 
-                    # Deterministic for the unchanged prompt — never retry.
+                    # Deterministic for the unchanged prompt — never retry it
+                    # unchanged. The one retry that can change the verdict is
+                    # one that changes the window: crew#496 (2026-08-27) was six
+                    # refusals in one session, every one on a ~385k-token
+                    # history, and Anthropic documents that a refused turn left
+                    # in the history is refused again. Compress once; if the
+                    # window actually shrank, resend it before touching the
+                    # fallback chain.
+                    if (
+                        getattr(agent, "compression_enabled", False)
+                        and compression_attempts < max_compression_attempts
+                        and not _retry.refusal_compression_attempted
+                    ):
+                        _retry.refusal_compression_attempted = True
+                        _before_len = len(messages)
+                        messages, active_system_prompt = agent._compress_context(
+                            messages, system_message,
+                            approx_tokens=estimate_request_tokens_rough(
+                                api_messages, tools=agent.tools or None),
+                            task_id=effective_task_id,
+                        )
+                        if len(messages) < _before_len:
+                            compression_attempts += 1
+                            conversation_history = conversation_history_after_compression(
+                                agent, messages, conversation_history
+                            )
+                            logger.warning(
+                                "%sModel declined to respond (content_filter, %s); "
+                                "compressed %d -> %d messages, retrying once",
+                                agent.log_prefix, _refusal_category,
+                                _before_len, len(messages),
+                            )
+                            agent._buffer_status(
+                                "⚠️ Model declined to respond (safety refusal) — compacting context and retrying..."
+                            )
+                            retry_count = 0
+                            _retry.primary_recovery_attempted = False
+                            _retry.restart_with_rebuilt_messages = True
+                            break
+
                     # Try a configured fallback once (a different model may not
                     # refuse); otherwise surface the refusal terminally.
                     if agent._has_pending_fallback():
