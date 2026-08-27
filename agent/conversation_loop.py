@@ -3525,6 +3525,14 @@ def run_conversation(
                     else:
                         _refusal_result = _refusal_transport.normalize_response(response)
                     _refusal_text = (getattr(_refusal_result, "content", None) or "").strip()
+                    from agent.transports.anthropic import refusal_summary as _refusal_summary_fn
+                    _refusal_category = _refusal_summary_fn(_refusal_result)
+                    _refusal_explanation = (
+                        ((getattr(_refusal_result, "provider_data", None) or {})
+                         .get("refusal_details") or {}).get("explanation") or ""
+                    ).strip()
+                    if not _refusal_text and _refusal_explanation:
+                        _refusal_text = _refusal_explanation
                     # Some refusals carry the explanation only in the reasoning
                     # channel; fall back to it so the user sees *something*.
                     if not _refusal_text:
@@ -3538,7 +3546,7 @@ def run_conversation(
                         api_start_time=api_start_time,
                         api_kwargs=api_kwargs,
                         error_type="ContentPolicyBlocked",
-                        error_message=_refusal_text or "model declined to respond (content_filter)",
+                        error_message=f"{_refusal_text or 'model declined to respond (content_filter)'} [{_refusal_category}]",
                         status_code=None,
                         retry_count=retry_count,
                         max_retries=max_retries,
@@ -3576,9 +3584,9 @@ def run_conversation(
                     )
                     logger.warning(
                         "%sModel declined to respond (finish_reason=content_filter). "
-                        "model=%s provider=%s refusal=%s",
+                        "model=%s provider=%s %s refusal=%s",
                         agent.log_prefix, agent.model, agent.provider,
-                        _refusal_log or "(no text)",
+                        _refusal_category, _refusal_log or "(no text)",
                     )
                     agent._emit_status(
                         "⚠️ The model declined to respond to this request (safety refusal)."
@@ -3588,7 +3596,7 @@ def run_conversation(
                         f"Model's explanation: {_refusal_text}"
                         if _refusal_text
                         else "The model returned no explanation."
-                    )
+                    ) + f" (Anthropic {_refusal_category})"
                     _refusal_response = (
                         "⚠️  The model declined to respond to this request "
                         "(safety refusal — not a Hermes/gateway failure).\n\n"
