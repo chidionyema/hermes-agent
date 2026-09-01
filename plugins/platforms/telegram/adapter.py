@@ -9851,6 +9851,27 @@ class TelegramAdapter(BasePlatformAdapter):
 
         self._pending_photo_batch_tasks[batch_key] = asyncio.create_task(self._flush_photo_batch(batch_key))
 
+    async def _transcribe_voice_message(self, audio_path: str) -> Optional[str]:
+        """Transcribe a cached OGG voice message to text using faster-whisper.
+
+        Uses tools.voice_mode.transcribe_recording for consistent transcription
+        with the rest of the platform (same hallucination filtering, etc).
+
+        Args:
+            audio_path: Path to the cached OGG audio file.
+
+        Returns:
+            Transcribed text, or None if transcription failed or returned empty.
+        """
+        try:
+            from tools.voice_mode import transcribe_recording
+            result = await asyncio.to_thread(transcribe_recording, audio_path)
+            transcript = result.get("transcript", "").strip() if result.get("success") else ""
+            return transcript if transcript else None
+        except Exception as e:
+            logger.debug("[Telegram] Transcription import or execution failed: %s", _redact_telegram_error_text(e), exc_info=True)
+            return None
+
     async def _handle_media_message(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming media messages, downloading images to local cache."""
         if not update.message:
@@ -9944,6 +9965,16 @@ class TelegramAdapter(BasePlatformAdapter):
                 event.media_urls = [cached_path]
                 event.media_types = ["audio/ogg"]
                 logger.info("[Telegram] Cached user voice at %s", cached_path)
+
+                # Transcribe voice message to text
+                try:
+                    transcript = await self._transcribe_voice_message(cached_path)
+                    if transcript:
+                        event.text = transcript
+                        logger.info("[Telegram] Transcribed voice message: %s chars", len(transcript))
+                except Exception as transcribe_err:
+                    logger.warning("[Telegram] Voice transcription failed: %s", _redact_telegram_error_text(transcribe_err), exc_info=True)
+                    # Transcription failure is not fatal - message still processed with media
             except Exception as e:
                 logger.warning("[Telegram] Failed to cache voice: %s", _redact_telegram_error_text(e), exc_info=True)
                 await self._surface_media_cache_failure(msg, event, "voice message", e)
