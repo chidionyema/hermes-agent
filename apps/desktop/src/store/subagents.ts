@@ -55,8 +55,15 @@ const MAX_STREAM = 24
  *  within one TTL. */
 export const RUNNING_STALE_MS = 10 * 60_000
 
+//  A row with updatedAt <= 0 carries no heartbeat at all (a synthetic or
+//  legacy row). Staleness is a judgement about a silent heartbeat; a row that
+//  never had one cannot be declared dead by this sweep -- dropping it here
+//  would empty the delegating-session claim for exactly the rows the
+//  session-dot-state contract still counts (session-dot-state.test.ts builds
+//  its fixtures with updatedAt: 0). Real rows are always stamped (toProgress
+//  writes the event time), so this guard changes nothing for them.
 export const isStaleSubagent = (item: SubagentProgress, now = Date.now()) =>
-  !TERMINAL.has(item.status) && now - item.updatedAt > RUNNING_STALE_MS
+  !TERMINAL.has(item.status) && item.updatedAt > 0 && now - item.updatedAt > RUNNING_STALE_MS
 const PREVIEW_MAX = 220
 const TOOL_PREVIEW_MAX = 96
 
