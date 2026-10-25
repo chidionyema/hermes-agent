@@ -6,9 +6,13 @@ import {
   allSubagents,
   buildSubagentTree,
   clearSessionSubagents,
+  dropStaleSubagents,
+  dropUnfinishedSubagentsOnReconnect,
   failedSubagentCount,
+  isStaleSubagent,
   pruneDelegateFallbackSubagents,
   pruneFinishedSessionSubagents,
+  RUNNING_STALE_MS,
   upsertSubagent
 } from './subagents'
 
@@ -333,5 +337,95 @@ describe('subagent store', () => {
     upsertSubagent('s1', { goal: 'task', status: 'running', subagent_id: 'late1', task_index: 0, text: 'late' })
 
     expect(listFor('s1')[0]?.status).toBe('failed')
+  })
+
+  // ---------------------------------------------------------------------------
+  // Staleness contract — the "12 agents running" incident. The counter and the
+  // agents panel are event-sourced projections; a lost subagent.complete (gateway
+  // respawn, socket drop, sleep) left phantom 'running' rows forever. These tests
+  // pin the two bounds: TTL expiry and reconnect reconciliation.
+  // ---------------------------------------------------------------------------
+
+  describe('staleness — phantom running rows must never inflate the count', () => {
+    const seedPhantoms = (count: number, updatedAt: number) => {
+      const nowSpy = vi.spyOn(Date, 'now')
+      nowSpy.mockReturnValue(updatedAt)
+
+      for (let i = 0; i < count; i += 1) {
+        upsertSubagent(`stale-session-${i % 3}`, {
+          goal: `phantom ${i}`,
+          status: 'running',
+          subagent_id: `ph${i}`,
+          task_index: 0
+        })
+      }
+
+      nowSpy.mockRestore()
+    }
+
+    it('the founder scenario: 12 lost-completion rows across sessions count as 0 once stale', () => {
+      seedPhantoms(12, Date.now() - RUNNING_STALE_MS - 1)
+
+      // Before the TTL trips they count (they are not yet proven dead).
+      expect(allSubagents($subagentsBySession.get())).toHaveLength(12)
+
+      const fresh = Date.now()
+      // Every projection that renders "N running" must agree: stale rows are
+      // not live agents.
+      for (const list of Object.values($subagentsBySession.get())) {
+        expect(activeSubagentCount(list, fresh)).toBe(0)
+      }
+      expect(isStaleSubagent(listFor('stale-session-0')[0], fresh)).toBe(true)
+    })
+
+    it('dropStaleSubagents removes only rows silent past the TTL, keeping fresh and terminal rows', () => {
+      seedPhantoms(2, Date.now() - RUNNING_STALE_MS - 1)
+      upsertSubagent('live-session', { goal: 'live worker', status: 'running', subagent_id: 'live1', task_index: 0 })
+      upsertSubagent('live-session', { goal: 'done work', status: 'completed', subagent_id: 'done1', task_index: 0 })
+
+      const dropped = dropStaleSubagents()
+
+      expect(dropped).toBe(2)
+      expect(listFor('stale-session-0')).toHaveLength(0)
+      expect(listFor('stale-session-1')).toHaveLength(0)
+      expect(listFor('live-session').map(i => i.id)).toEqual(['live1', 'done1'])
+    })
+
+    it('a fresh running row still counts and is never stale', () => {
+      upsertSubagent('s1', { goal: 'live worker', status: 'running', subagent_id: 'live2', task_index: 0 })
+
+      expect(isStaleSubagent(listFor('s1')[0])).toBe(false)
+      expect(activeSubagentCount(listFor('s1'))).toBe(1)
+    })
+
+    it('dropUnfinishedSubagentsOnReconnect clears every non-terminal row across sessions and keeps history', () => {
+      seedPhantoms(5, Date.now())
+      upsertSubagent('hist', { goal: 'finished', status: 'completed', subagent_id: 'fin1', task_index: 0 })
+      upsertSubagent('hist', { goal: 'died', status: 'failed', subagent_id: 'dead1', task_index: 0 })
+      expect(activeSubagentCount(allSubagents($subagentsBySession.get()))).toBe(5)
+
+      const dropped = dropUnfinishedSubagentsOnReconnect()
+
+      expect(dropped).toBe(5)
+      expect(activeSubagentCount(allSubagents($subagentsBySession.get()))).toBe(0)
+      expect(listFor('hist').map(i => i.status)).toEqual(['completed', 'failed'])
+    })
+
+    it('a genuinely live worker re-asserts itself after a reconnect drop', () => {
+      upsertSubagent('s1', { goal: 'live worker', status: 'running', subagent_id: 'live3', task_index: 0 })
+      dropUnfinishedSubagentsOnReconnect()
+      expect(listFor('s1')).toHaveLength(0)
+
+      // Next progress event after the socket re-opens — row re-creates.
+      upsertSubagent(
+        's1',
+        { goal: 'live worker', status: 'running', subagent_id: 'live3', task_index: 0, text: 'still going' },
+        true,
+        'subagent.progress'
+      )
+
+      expect(listFor('s1')).toHaveLength(1)
+      expect(activeSubagentCount(listFor('s1'))).toBe(1)
+    })
   })
 })

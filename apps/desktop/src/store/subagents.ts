@@ -45,6 +45,25 @@ export type SubagentPayload = Record<string, unknown>
 
 const TERMINAL: ReadonlySet<SubagentStatus> = new Set(['completed', 'failed', 'interrupted'])
 const MAX_STREAM = 24
+
+/** A non-terminal row with no event for this long is not proven alive. Live
+ *  subagents stream progress/thinking/tool events continuously (each refreshes
+ *  updatedAt via toProgress), so a genuine worker never trips this; a row whose
+ *  subagent.complete was lost (gateway death, socket drop, app sleep) does.
+ *  This is the fail-safe bound under the reconnect reconciliation below: even
+ *  with no reconnect event ever firing, the counter self-corrects to truth
+ *  within one TTL. */
+export const RUNNING_STALE_MS = 10 * 60_000
+
+//  A row with updatedAt <= 0 carries no heartbeat at all (a synthetic or
+//  legacy row). Staleness is a judgement about a silent heartbeat; a row that
+//  never had one cannot be declared dead by this sweep -- dropping it here
+//  would empty the delegating-session claim for exactly the rows the
+//  session-dot-state contract still counts (session-dot-state.test.ts builds
+//  its fixtures with updatedAt: 0). Real rows are always stamped (toProgress
+//  writes the event time), so this guard changes nothing for them.
+export const isStaleSubagent = (item: SubagentProgress, now = Date.now()) =>
+  !TERMINAL.has(item.status) && item.updatedAt > 0 && now - item.updatedAt > RUNNING_STALE_MS
 const PREVIEW_MAX = 220
 const TOOL_PREVIEW_MAX = 96
 
@@ -285,6 +304,138 @@ export function upsertSubagent(sid: string, payload: SubagentPayload, createIfMi
   const nextList = idx >= 0 ? list.map(item => (item.id === id ? next : item)) : [...list, next]
 
   $subagentsBySession.set({ ...map, [sid]: nextList })
+  scheduleStaleSweep()
+}
+
+// ---------------------------------------------------------------------------
+// Staleness contract — why this exists: the status-bar indicator and the
+// agents panel are projections of this store, and this store is event-sourced.
+// A subagent whose terminal event is lost (gateway respawn re-mints ids, so
+// the completion publish lands under a dead id; socket drop; laptop sleep)
+// would otherwise spin as 'running' for the life of the app — the exact bug
+// that showed the founder "12 agents running" while nothing ran (the panel
+// header counted every row ever seen). Two bounds keep the number honest:
+//
+//   1. dropStaleSubagents — TTL expiry. A non-terminal row silent past
+//      RUNNING_STALE_MS is dropped (not marked failed: the resurrection guard
+//      in upsertSubagent makes 'failed' permanent, which would hide a worker
+//      that is genuinely alive and re-announces on its next event).
+//   2. dropUnfinishedSubagentsOnReconnect — same doctrine as
+//      reconcileBusyStatesOnReconnect (session-states.ts): a respawned backend
+//      can never deliver terminal events for pre-drop rows, so unfinished rows
+//      are dropped at reconnect. A live worker re-asserts itself on its next
+//      progress event (createIfMissing); a dead one is gone. Direction of
+//      failure is deliberate: at worst the row blinks once.
+// ---------------------------------------------------------------------------
+
+let staleTimer: ReturnType<typeof setTimeout> | null = null
+
+function oldestLiveUpdatedAt(): number | null {
+  let oldest: number | null = null
+
+  for (const list of Object.values($subagentsBySession.get())) {
+    for (const item of list) {
+      if (TERMINAL.has(item.status)) {
+        continue
+      }
+
+      if (oldest === null || item.updatedAt < oldest) {
+        oldest = item.updatedAt
+      }
+    }
+  }
+
+  return oldest
+}
+
+function scheduleStaleSweep() {
+  if (typeof window === 'undefined' || staleTimer !== null) {
+    return
+  }
+
+  const oldest = oldestLiveUpdatedAt()
+
+  if (oldest === null) {
+    return
+  }
+
+  const delay = Math.max(0, oldest + RUNNING_STALE_MS - Date.now())
+  staleTimer = setTimeout(() => {
+    staleTimer = null
+    dropStaleSubagents()
+  }, delay)
+}
+
+/** Drop every non-terminal row silent past RUNNING_STALE_MS, across all
+ *  sessions. Returns the number of rows dropped. Reschedules itself while any
+ *  non-terminal row remains, so the store can never hold an unbounded set of
+ *  phantom 'running' rows. */
+export function dropStaleSubagents(now = Date.now()): number {
+  if (staleTimer !== null) {
+    clearTimeout(staleTimer)
+    staleTimer = null
+  }
+
+  const map = $subagentsBySession.get()
+  let dropped = 0
+  const next: Record<string, SubagentProgress[]> = {}
+
+  for (const [sid, list] of Object.entries(map)) {
+    const kept = list.filter(item => {
+      if (isStaleSubagent(item, now)) {
+        dropped += 1
+        return false
+      }
+
+      return true
+    })
+
+    next[sid] = kept
+  }
+
+  if (dropped > 0) {
+    $subagentsBySession.set(next)
+  }
+
+  scheduleStaleSweep()
+
+  return dropped
+}
+
+/** Reconnect reconciliation: drop every non-terminal row in every session.
+ *  Called from the primary reconnect path (use-gateway-boot) and the scoped
+ *  secondary reconnect path (gateway.ts), next to reconcileBusyStatesOnReconnect.
+ *  The re-dialed backend re-mints runtime ids, so pre-drop rows can never
+ *  receive their terminal events; genuinely live work re-creates its row via
+ *  upsertSubagent(createIfMissing) on its next event. */
+export function dropUnfinishedSubagentsOnReconnect(): number {
+  if (staleTimer !== null) {
+    clearTimeout(staleTimer)
+    staleTimer = null
+  }
+
+  const map = $subagentsBySession.get()
+  let dropped = 0
+  const next: Record<string, SubagentProgress[]> = {}
+
+  for (const [sid, list] of Object.entries(map)) {
+    const kept = list.filter(item => {
+      if (!TERMINAL.has(item.status)) {
+        dropped += 1
+        return false
+      }
+
+      return true
+    })
+
+    next[sid] = kept
+  }
+
+  if (dropped > 0) {
+    $subagentsBySession.set(next)
+  }
+
+  return dropped
 }
 
 export function buildSubagentTree(items: readonly SubagentProgress[]): SubagentNode[] {
@@ -315,8 +466,8 @@ export function buildSubagentTree(items: readonly SubagentProgress[]): SubagentN
   return roots
 }
 
-export const activeSubagentCount = (items: readonly SubagentProgress[]) =>
-  items.filter(item => item.status === 'queued' || item.status === 'running').length
+export const activeSubagentCount = (items: readonly SubagentProgress[], now = Date.now()) =>
+  items.filter(item => (item.status === 'queued' || item.status === 'running') && !isStaleSubagent(item, now)).length
 
 export const failedSubagentCount = (items: readonly SubagentProgress[]) =>
   items.filter(item => item.status === 'failed' || item.status === 'interrupted').length
