@@ -48,6 +48,7 @@ import {
   setCurrentCwd,
   setSessionsLoading
 } from '@/store/session'
+import { dropUnfinishedSubagentsOnReconnect } from '@/store/subagents'
 import {
   $attentionSessionIds,
   $workingSessionIds,
@@ -259,6 +260,12 @@ export function useGatewayBoot({
         // (#53902/#73082). A genuinely live turn re-asserts busy on its next
         // post-reconnect event.
         reconcileBusyStatesOnReconnect()
+        // Same staleness, subagents: unfinished subagent rows are event-sourced
+        // and would spin as 'running' forever after a backend respawn (their
+        // terminal events are keyed to dead ids). Drop them; live workers
+        // re-create their rows on the next progress event. This is the counter
+        // that showed the founder "12 agents running" while nothing ran.
+        dropUnfinishedSubagentsOnReconnect()
         // Resync state that may have moved on the backend while we were asleep.
         await callbacksRef.current.refreshHermesConfig().catch(() => undefined)
         await callbacksRef.current.refreshSessions().catch(() => undefined)

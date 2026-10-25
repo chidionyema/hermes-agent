@@ -16,6 +16,8 @@ import {
   $subagentsBySession,
   allSubagents,
   buildSubagentTree,
+  dropStaleSubagents,
+  isStaleSubagent,
   type SubagentNode,
   type SubagentStatus,
   type SubagentStreamEntry
@@ -82,10 +84,29 @@ export function AgentsView({ onClose }: AgentsViewProps) {
   const { t } = useI18n()
   const subagentsBySession = useStore($subagentsBySession)
 
-  // Aggregate every session, matching the status-bar indicator — a subagent
-  // running in a background session must still be visible here, or the two
-  // desync ("Agents N running" vs an empty tree).
-  const tree = useMemo(() => buildSubagentTree(allSubagents(subagentsBySession)), [subagentsBySession])
+  // Staleness bound, display half: a row silent past RUNNING_STALE_MS is not
+  // proven alive, so it must not render (and must not be counted — the header
+  // once read "12 agents" from rows whose completion events were lost). The
+  // store-level sweep drops those rows outright; this filter keeps the tree
+  // truthful between sweeps even if the timer is starved (backgrounded window).
+  const tree = useMemo(
+    () => buildSubagentTree(allSubagents(subagentsBySession).filter(item => !isStaleSubagent(item))),
+    [subagentsBySession]
+  )
+
+  // Sweep while the panel is open so dropped rows disappear without waiting
+  // for the next store write.
+  useEffect(() => {
+    dropStaleSubagents()
+
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const id = window.setInterval(() => dropStaleSubagents(), 30_000)
+
+    return () => window.clearInterval(id)
+  }, [])
 
   return (
     <Panel closeLabel={t.agents.close} onClose={onClose}>

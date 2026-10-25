@@ -396,6 +396,14 @@ async function reconnectSecondary(entry: Secondary): Promise<void> {
     void import('@/store/session-states')
       .then(({ reconcileBusyStatesOnReconnect }) => reconcileBusyStatesOnReconnect(entry.scope))
       .catch(() => undefined)
+    // Same staleness, subagents: unfinished rows keyed to this socket's
+    // pre-drop events can never receive their terminal publishes after a
+    // respawn — drop them so the agents counter and panel stay truthful.
+    // Live workers re-assert via their next progress event. Lazy import for
+    // the same module-cycle reason as above; best-effort for the same reason.
+    void import('@/store/subagents')
+      .then(({ dropUnfinishedSubagentsOnReconnect }) => dropUnfinishedSubagentsOnReconnect())
+      .catch(() => undefined)
   } catch (error) {
     // The registry no longer knows this connection (removed while we were
     // backing off), or Electron's deletion guard reports the profile itself
