@@ -48,7 +48,6 @@ import {
   setCurrentCwd,
   setSessionsLoading
 } from '@/store/session'
-import { dropUnfinishedSubagentsOnReconnect } from '@/store/subagents'
 import {
   $attentionSessionIds,
   $workingSessionIds,
@@ -57,6 +56,7 @@ import {
   recordSessionEventScope,
   resetTileRuntimeBindings
 } from '@/store/session-states'
+import { dropUnfinishedSubagentsOnReconnect } from '@/store/subagents'
 import { windowProfileOverride } from '@/store/windows'
 import type { RpcEvent } from '@/types/hermes'
 
