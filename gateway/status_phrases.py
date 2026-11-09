@@ -45,8 +45,8 @@ _MAX_PHRASE_CHARS = 160
 _CONVENTIONAL_RELATIVE_PATHS = ("status_phrases.yaml", "status_phrases")
 
 _FALLBACK_PHRASES: dict[str, list[str]] = {
-    "status": ["still on it", "still working through it", "waiting for the result"],
-    "generic": ["on it", "one sec", "checking that now"],
+    "status": ["No verified result yet.", "Waiting for an outcome to report."],
+    "generic": ["Checking the request.", "The result is pending."],
 }
 
 
