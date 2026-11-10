@@ -67,9 +67,10 @@ class FounderWidgetUiTests(unittest.TestCase):
 
     def test_interaction_is_read_only_and_works_without_backend(self):
         ids = {attrs["id"] for _tag, attrs in self.parsed.attributes if "id" in attrs}
-        for item in ("refresh", "detailBtn", "details", "notice", "delivered", "active", "issues", "proof"):
+        for item in ("refresh", "detailBtn", "details", "notice", "delivered", "active", "issues", "proof", "copyProof"):
             self.assertIn(item, ids)
         self.assertIn("aria-expanded", self.source)
+        self.assertIn("W.copyText(", self.source)
         self.assertIn("addEventListener('click'", self.source)
         self.assertIn("Invalid evidence packet", self.source)
         self.assertIn("STALE SNAPSHOT", self.source)
