@@ -8,13 +8,13 @@
 :root{--bg:#102521;--panel:#18342c;--ink:#f4f1e8;--soft:#c2d4c7;--muted:#a5bcae;--gold:#dac69e;--line:rgba(225,231,207,.19)}
 *{box-sizing:border-box}
 html,body{margin:0;padding:0}
-body{background:var(--bg);color:var(--ink);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+body{background:var(--bg);color:var(--ink);font:14px/1.5 system-ui,sans-serif}
 button{font:inherit;cursor:pointer}
 button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
 .office{padding:19px 20px 16px;background:radial-gradient(ellipse at 92% 10%,#2b5441 0%,transparent 55%),var(--bg);border:1px solid #486457}
 .top{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .brand{display:flex;align-items:center;gap:10px}
-.seal{display:grid;place-items:center;width:34px;height:34px;border:1px solid #d5dbbd75;border-radius:50%;font:italic 23px Georgia,serif;color:var(--gold)}
+.seal{display:grid;place-items:center;width:34px;height:34px;border:1px solid #d5dbbd75;border-radius:50%;font:italic 23px ui-serif,serif;color:var(--gold)}
 .word{display:flex;flex-direction:column;line-height:1.1}
 .word b{font-size:13px;letter-spacing:.25em;font-weight:720}
 .word small{font-size:8px;letter-spacing:.17em;color:var(--muted);margin-top:5px}
@@ -22,20 +22,20 @@ button:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
 .dot{width:6px;height:6px;flex:none;border-radius:50%;background:#b89a74}
 .live.current .dot{background:#a8dfba}
 .kicker{margin:25px 0 8px;color:var(--gold);font-size:9px;letter-spacing:.17em;font-weight:650}
-h1{font:normal 30px/1.08 Georgia,serif;letter-spacing:-.045em;margin:0 0 10px}
+h1{font:normal 30px/1.08 ui-serif,serif;letter-spacing:-.045em;margin:0 0 10px}
 h1 em{color:#c3dfc8}
-.lead{margin:0;color:var(--soft);font-size:11px;line-height:1.65;min-height:35px;overflow-wrap:anywhere}
+.lead{margin:0;color:var(--soft);font-size:11px;line-height:1.65;min-height:35px;max-height:72px;overflow:hidden;overflow-wrap:anywhere}
 .rule{height:1px;background:var(--line);margin:20px 0 18px}
 .metrics{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .metric{min-width:0;padding:13px 9px 11px;border:1px solid var(--line);background:#f4e8be06}
 .metric span{display:block;font-size:9px;letter-spacing:.03em;color:var(--muted);white-space:nowrap}
-.metric strong{display:block;margin:5px 0 1px;font:normal 32px/1.15 Georgia,serif;letter-spacing:-.035em}
+.metric strong{display:block;margin:5px 0 1px;font:normal 32px/1.15 ui-serif,serif;letter-spacing:-.035em}
 .metric small{display:block;color:#9fb6a8;font-size:8px}
 .attention{border-color:#c9ae804d}
 .attention strong{color:#e7c18e}
 .signal{margin-top:16px;padding:12px 13px;background:#244137a0;border-left:2px solid var(--gold)}
 .signal small{display:block;color:var(--gold);font-size:9px;letter-spacing:.12em}
-.signal p{font-size:12px;line-height:1.55;margin:5px 0 0;color:#e8f1e6;overflow-wrap:anywhere}
+.signal p{font-size:12px;line-height:1.55;margin:5px 0 0;color:#e8f1e6;max-height:72px;overflow:hidden;overflow-wrap:anywhere}
 .details{display:none;padding:10px 13px 0;color:var(--soft);font-size:10px;line-height:1.65;overflow-wrap:anywhere}
 .details.open{display:block}
 .details b{color:#e5decb;font-weight:600}
@@ -97,12 +97,12 @@ button:disabled{opacity:.48;cursor:not-allowed}
     var isCurrent=exists&&fresh&&isBot;
     el('presence').className='live'+(isCurrent?' current':'');
     text('presenceText',isCurrent?'RECENT BOT EVIDENCE':exists?(fresh?'PREVIEW / SNAPSHOT':'STALE SNAPSHOT'):'AWAITING EVIDENCE');
-    text('headline',exists&&typeof data.headline==='string'&&data.headline.trim()?data.headline.slice(0,180):'No verified estate briefing has been received. Nothing here is simulated.');
+    text('headline',exists&&typeof data.headline==='string'&&data.headline.trim()?data.headline.slice(0,110):'No verified estate briefing has been received. Nothing here is simulated.');
     text('delivered',exists?number(data.delivered):'—');
     text('active',exists?number(data.active):'—');
     text('issues',exists?number(data.issues):'—');
     text('signalLabel',exists?'CURRENT PRIORITY':'MOST IMPORTANT SIGNAL');
-    text('signalText',exists&&typeof data.priority==='string'&&data.priority.trim()?data.priority.slice(0,220):'The bot has not supplied a source-backed priority.');
+    text('signalText',exists&&typeof data.priority==='string'&&data.priority.trim()?data.priority.slice(0,125):'The bot has not supplied a source-backed priority.');
     text('instruction',exists&&typeof data.id==='string'?data.id.slice(0,100):'Not supplied');
     text('proof',exists&&typeof data.proof==='string'?data.proof.slice(0,130):'Not supplied');
     text('asof',time?new Date(time).toISOString().slice(0,16).replace('T',' ')+' UTC · '+(fresh?'RECENT':'STALE'):'NO VERIFIED TIMESTAMP');
