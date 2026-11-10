@@ -5,7 +5,6 @@ passing does not mean a widget can be sent, so protect the actual source size.
 """
 from html.parser import HTMLParser
 from pathlib import Path
-import re
 import unittest
 import zlib
 
