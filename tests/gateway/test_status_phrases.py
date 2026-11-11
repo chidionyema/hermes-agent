@@ -68,3 +68,15 @@ def test_builtin_telegram_status_never_claims_unverified_progress(tmp_path, monk
         for phrase in catalog[surface]:
             assert not any(term in phrase.lower() for term in forbidden), phrase
             assert len(phrase) <= 160
+
+def test_emergency_fallbacks_do_not_claim_progress_without_evidence():
+    """When the YAML catalog is unavailable, built-in fallbacks remain truthful."""
+    from gateway.status_phrases import _FALLBACK_PHRASES
+
+    for phrases in _FALLBACK_PHRASES.values():
+        assert phrases
+        for phrase in phrases:
+            assert "still working" not in phrase.lower()
+            assert "on it" not in phrase.lower()
+            assert "making progress" not in phrase.lower()
+            assert "completed" not in phrase.lower()
