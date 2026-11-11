@@ -156,6 +156,7 @@ async def test_real_gateway_dispatch_consumes_widget_without_model_turn(api, mon
         await client.aclose()
 
 
+@pytest.mark.live_system_guard_bypass  # Read-only Python -c; real SDK must not be replaced by test mocks.
 def test_sdk_must_preserve_new_104_widget_query_on_real_update_object():
     # Some legacy gateway tests install fake Telegram modules in sys.modules.
     # A fresh interpreter is required to prove the installed SDK contract.
