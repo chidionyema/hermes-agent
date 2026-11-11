@@ -4069,12 +4069,12 @@ class TelegramAdapter(BasePlatformAdapter):
         # a founder-private-chat allowlist and explicit destination both exist.
         raw_fields = getattr(update, "api_kwargs", {})
         if hasattr(raw_fields, "get") and raw_fields.get("widget_query") is not None:
-            widget = self._founder_widget_transport()
-            if widget is not None:
-                try:
+            try:
+                widget = self._founder_widget_transport()
+                if widget is not None:
                     await widget.handle_update(update)
-                except Exception:
-                    logger.warning("OTTO widget query could not be answered")
+            except Exception:
+                logger.warning("OTTO widget query was NOT answered")
             return
 
         handler: Optional[Callable[[Dict[str, Any], Any], Awaitable[None]]] = getattr(
@@ -4251,34 +4251,14 @@ class TelegramAdapter(BasePlatformAdapter):
         }
 
     def _configure_otto_widget(self) -> None:
-        """Opt-in: bind one founder private chat to this existing bot connection."""
+        """Reuse the existing founder-only Telegram gateway transport."""
         self._otto_widget = None
         if _scoped_gate_env("OTTO_WIDGET_ENABLED") != "1":
             return
-        from plugins.platforms.telegram.widgets.otto_widget_service import OttoWidgetService
-
-        chat_id = _scoped_gate_env("OTTO_FOUNDER_CHAT_ID")
-        allow = _coerce_allow_set(_scoped_gate_env("TELEGRAM_ALLOWED_USERS"))
-        root = _Path(_scoped_gate_env("HERMES_HOME") or "~/.hermes").expanduser()
-        self._otto_widget = OttoWidgetService(
-            token=self.config.token,
-            founder_chat_id=chat_id,
-            allowed_users=allow,
-            state_file=root / "state" / "otto-telegram-widget.json",
-            evidence_url=_scoped_gate_env("OTTO_EVIDENCE_URL"),
-            evidence_token=_scoped_gate_env("OTTO_EVIDENCE_TOKEN"),
-        )
-
-    async def _handle_otto_widget_query(self, update, _context) -> None:
-        """Read PTB 22.8's forward-compatible Update.api_kwargs widget_query."""
-        widget = getattr(self, "_otto_widget", None)
+        widget = self._founder_widget_transport()
         if widget is None:
-            return
-        try:
-            await widget.handle_update(update)
-        except Exception:
-            # Never log untrusted widget payloads or exceptions containing tokens.
-            logger.warning("[%s] OTTO widget query response failed", self.name)
+            raise ValueError("Founder bot allowlist and private destination required")
+        self._otto_widget = widget
 
     async def _publish_otto_widget(self) -> None:
         widget = getattr(self, "_otto_widget", None)
@@ -4317,7 +4297,6 @@ class TelegramAdapter(BasePlatformAdapter):
         # Handle inline keyboard button callbacks (update prompts)
         app.add_handler(CallbackQueryHandler(self._handle_callback_query))
         # New Bot API fields are preserved in PTB 22.8 Update.api_kwargs.
-        app.add_handler(TypeHandler(Update, self._handle_otto_widget_query), group=1)
         # gateway_platform_event observer (see _on_platform_update); group 99 so
         # it observes alongside, never displaces, the core handlers.
         app.add_handler(TypeHandler(Update, self._on_platform_update), group=99)
