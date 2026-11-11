@@ -4038,13 +4038,17 @@ class TelegramAdapter(BasePlatformAdapter):
         if not founder or founder not in allowed:
             return None
         current = getattr(self, "_otto_widget_transport", None)
-        if current is not None and getattr(current, "_founder", None) == founder:
+        if current is not None and getattr(current, "_chat_id", None) == founder:
             return current
-        from plugins.platforms.telegram.founder_widget import OttoWidgetTransport
-        current = OttoWidgetTransport(
+        from hermes_constants import get_hermes_home
+        from plugins.platforms.telegram.widgets.otto_widget_service import OttoWidgetService
+        current = OttoWidgetService(
             token=self.config.token,
             founder_chat_id=founder,
-            snapshot_provider=getattr(self, "_verified_founder_brief_provider", None),
+            allowed_users=allowed,
+            state_file=get_hermes_home() / "state" / "otto-founder-widget.json",
+            evidence_url=_scoped_gate_env("OTTO_GENESIS_EVIDENCE_URL"),
+            evidence_token=_scoped_gate_env("OTTO_GENESIS_EVIDENCE_TOKEN"),
         )
         self._otto_widget_transport = current
         return current
@@ -4062,13 +4066,12 @@ class TelegramAdapter(BasePlatformAdapter):
         # carried through Update.api_kwargs, so use the trusted, raw API
         # transport on the existing catch-all update door. Fail closed unless
         # a founder-private-chat allowlist and explicit destination both exist.
-        from plugins.platforms.telegram.founder_widget import widget_query_from_update
-        widget_query = widget_query_from_update(update)
-        if widget_query is not None:
+        raw_fields = getattr(update, "api_kwargs", {})
+        if hasattr(raw_fields, "get") and raw_fields.get("widget_query") is not None:
             widget = self._founder_widget_transport()
             if widget is not None:
                 try:
-                    await widget.handle_query(widget_query)
+                    await widget.handle_update(update)
                 except Exception:
                     logger.warning("OTTO widget query could not be answered")
             return
@@ -9601,11 +9604,11 @@ class TelegramAdapter(BasePlatformAdapter):
             widget = self._founder_widget_transport()
             if (
                 widget is not None
-                and str(getattr(getattr(msg, "chat", None), "id", "")) == widget._founder
+                and str(getattr(getattr(msg, "chat", None), "id", "")) == widget._chat_id
                 and getattr(getattr(msg, "chat", None), "type", None) == "private"
             ):
                 try:
-                    await widget.send()
+                    await widget.publish_once()
                 except Exception:
                     logger.warning("OTTO founder widget send was refused")
             return
