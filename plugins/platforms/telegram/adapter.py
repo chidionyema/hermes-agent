@@ -2639,7 +2639,7 @@ class TelegramAdapter(BasePlatformAdapter):
             # caller recovery will dispose/rebuild the whole adapter.
             await _await_with_thread_deadline(
                 app.updater.start_polling(
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=[*Update.ALL_TYPES, "widget_query"],
                     drop_pending_updates=drop_pending_updates,
                     error_callback=_generation_error_callback,
                 ),
@@ -4031,6 +4031,24 @@ class TelegramAdapter(BasePlatformAdapter):
             if self._post_connect_task is asyncio.current_task():
                 self._post_connect_task = None
 
+    def _founder_widget_transport(self):
+        """Use the existing scoped Telegram allowlist; never infer a founder DM."""
+        founder = _scoped_gate_env("TELEGRAM_FOUNDER_CHAT_ID")
+        allowed = _coerce_allow_set(_scoped_gate_env("TELEGRAM_ALLOWED_USERS"))
+        if not founder or founder not in allowed:
+            return None
+        current = getattr(self, "_otto_widget_transport", None)
+        if current is not None and getattr(current, "_founder", None) == founder:
+            return current
+        from plugins.platforms.telegram.founder_widget import OttoWidgetTransport
+        current = OttoWidgetTransport(
+            token=self.config.token,
+            founder_chat_id=founder,
+            snapshot_provider=getattr(self, "_verified_founder_brief_provider", None),
+        )
+        self._otto_widget_transport = current
+        return current
+
     async def _on_platform_update(self, update, context) -> None:
         """Catch-all PTB handler firing ``gateway_platform_event`` per inbound update.
 
@@ -4040,6 +4058,21 @@ class TelegramAdapter(BasePlatformAdapter):
         alongside, never displaces, the core handlers. Malformed updates and
         dispatch errors cannot raise into PTB's update loop.
         """
+        # PTB 22.8 predates Bot API 10.4. Unknown widget_query fields are
+        # carried through Update.api_kwargs, so use the trusted, raw API
+        # transport on the existing catch-all update door. Fail closed unless
+        # a founder-private-chat allowlist and explicit destination both exist.
+        from plugins.platforms.telegram.founder_widget import widget_query_from_update
+        widget_query = widget_query_from_update(update)
+        if widget_query is not None:
+            widget = self._founder_widget_transport()
+            if widget is not None:
+                try:
+                    await widget.handle_query(widget_query)
+                except Exception:
+                    logger.warning("OTTO widget query could not be answered")
+            return
+
         handler: Optional[Callable[[Dict[str, Any], Any], Awaitable[None]]] = getattr(
             self, "_platform_event_handler", None
         )
@@ -4672,7 +4705,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     url_path=webhook_path,
                     webhook_url=webhook_url,
                     secret_token=webhook_secret,
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=[*Update.ALL_TYPES, "widget_query"],
                     # Webhooks are push-based — Telegram does not hold a
                     # server-side getUpdates queue, so this flag is a no-op
                     # in practice. Mirror the polling path's reconnect
@@ -9560,6 +9593,21 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(msg, "from_user", None), "id", None),
                 getattr(getattr(msg, "chat", None), "id", None),
             )
+            return
+        # /office is a real Telegram app operation, not a model reply.
+        # Existing message authorization is completed above; the widget path
+        # additionally requires the explicit founder-private-chat allowlist.
+        if msg.text.split()[0].split("@")[0].lower() == "/office":
+            widget = self._founder_widget_transport()
+            if (
+                widget is not None
+                and str(getattr(getattr(msg, "chat", None), "id", "")) == widget._founder
+                and getattr(getattr(msg, "chat", None), "type", None) == "private"
+            ):
+                try:
+                    await widget.send()
+                except Exception:
+                    logger.warning("OTTO founder widget send was refused")
             return
         await self._ensure_forum_commands(msg)
 
