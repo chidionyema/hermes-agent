@@ -50,6 +50,9 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         auth_type="virtual",
         base_url_override="moa://local",
     ),
+    # models.dev exposes CMD_API_KEY; keep the plugin-supported canonical
+    # COMMANDCODE_API_KEY available to /model resolution as well.
+    "commandcode": HermesOverlay(extra_env_vars=("COMMANDCODE_API_KEY",)),
     "openrouter": HermesOverlay(
         transport="openai_chat",
         is_aggregator=True,
