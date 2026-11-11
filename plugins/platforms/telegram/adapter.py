@@ -4068,7 +4068,7 @@ class TelegramAdapter(BasePlatformAdapter):
         # transport on the existing catch-all update door. Fail closed unless
         # a founder-private-chat allowlist and explicit destination both exist.
         raw_fields = getattr(update, "api_kwargs", {})
-        if hasattr(raw_fields, "get") and raw_fields.get("widget_query") is not None:
+        if isinstance(raw_fields, dict) and isinstance(raw_fields.get("widget_query"), dict):
             try:
                 widget = self._founder_widget_transport()
                 if widget is not None:
