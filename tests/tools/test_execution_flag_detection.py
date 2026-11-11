@@ -58,7 +58,7 @@ def test_real_binaries_execute_leading_dash_program_payload(
     input_file.write_text("needle\n")
     resolved_args = [arg.format(input=str(input_file)) for arg in args]
     input_text = (
-        "\n".join(str(number) for number in range(10_000, 0, -1)) + "\n"
+        "\n".join(str(number) for number in range(100_000, 0, -1)) + "\n"
         if stdin == "{bulk}"
         else stdin
     )
@@ -72,8 +72,14 @@ def test_real_binaries_execute_leading_dash_program_payload(
     if needs_tty:
         argv = ["script", "-qec", shlex.join(argv), "/dev/null"]
 
-    subprocess.run(argv, input=input_text, text=True, capture_output=True, env=env, timeout=20)
+    completed = subprocess.run(
+        argv, input=input_text, text=True, capture_output=True, env=env, timeout=20
+    )
 
+    assert marker.exists(), (
+        f"{argv!r} did not execute payload: exit={completed.returncode}; "
+        f"stderr={completed.stderr[:500]!r}"
+    )
     assert marker.read_text() == "executed"
 
 
