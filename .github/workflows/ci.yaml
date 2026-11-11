@@ -16,8 +16,8 @@ name: CI
 
 on:
   pull_request:
+  # Every pushed commit gets a cloud CI verdict, including non-main worker lanes.
   push:
-    branches: [main]
 
 permissions:
   contents: read
@@ -26,7 +26,8 @@ permissions:
   security-events: write # needed by osv-scanner (SARIF upload)
 
 concurrency:
-  group: ci-${{ github.ref }}
+  # Preserve one independently testable run per pushed SHA; PRs may supersede stale runs.
+  group: ci-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
