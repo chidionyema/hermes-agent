@@ -4042,12 +4042,13 @@ class TelegramAdapter(BasePlatformAdapter):
         if current is not None and getattr(current, "_chat_id", None) == founder:
             return current
         from hermes_constants import get_hermes_home
+        from hashlib import sha256
         from plugins.platforms.telegram.widgets.otto_widget_service import OttoWidgetService
         current = OttoWidgetService(
             token=self.config.token,
             founder_chat_id=founder,
             allowed_users=allowed,
-            state_file=get_hermes_home() / "state" / "otto-founder-widget.json",
+            state_file=get_hermes_home() / "state" / ("otto-founder-widget-" + sha256(self.config.token.encode("utf-8")).hexdigest()[:16] + ".json"),
             evidence_url=_scoped_gate_env("OTTO_GENESIS_EVIDENCE_URL"),
             evidence_token=_scoped_gate_env("OTTO_GENESIS_EVIDENCE_TOKEN"),
         )
@@ -4253,11 +4254,13 @@ class TelegramAdapter(BasePlatformAdapter):
     def _configure_otto_widget(self) -> None:
         """Reuse the existing founder-only Telegram gateway transport."""
         self._otto_widget = None
-        if _scoped_gate_env("OTTO_WIDGET_ENABLED") != "1":
+        # A configured private founder chat already expresses opt-in. Deliver
+        # autonomously, unless an operator has explicitly disabled widgets.
+        if _scoped_gate_env("OTTO_WIDGET_ENABLED").lower() in ("0", "false", "off"):
             return
         widget = self._founder_widget_transport()
         if widget is None:
-            raise ValueError("Founder bot allowlist and private destination required")
+            return
         self._otto_widget = widget
 
     async def _publish_otto_widget(self) -> None:
