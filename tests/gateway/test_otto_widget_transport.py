@@ -164,6 +164,11 @@ def test_sdk_must_preserve_new_104_widget_query_on_real_update_object():
     import sys
     check = """
 import json
+import importlib.util
+# PTB is an optional messaging extra; validate its actual SDK only where installed.
+# Exit 77 in a clean interpreter so test-process Telegram mocks cannot mask absence.
+if importlib.util.find_spec("telegram") is None:
+    raise SystemExit(77)
 from telegram import Update
 query = {"id":"sdk-q","from":{"id":101},"chat":{"id":101,"type":"private"},
          "message_id":713,"type":{"type":"data"},"data":"brief"}
@@ -173,6 +178,8 @@ assert parsed.api_kwargs.get("widget_query") == query, parsed.api_kwargs
 """
     p = subprocess.run([sys.executable, "-c", check], capture_output=True,
                        text=True, timeout=20)
+    if p.returncode == 77:
+        pytest.skip("python-telegram-bot messaging extra is not installed in this CI slice")
     assert p.returncode == 0, p.stderr
 
 
