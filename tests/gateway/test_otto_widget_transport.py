@@ -157,10 +157,22 @@ async def test_real_gateway_dispatch_consumes_widget_without_model_turn(api, mon
 
 
 def test_sdk_must_preserve_new_104_widget_query_on_real_update_object():
-    from telegram import Update
-    raw = _query("sdk-q").api_kwargs
-    u = Update.de_json({"update_id": 200, **raw})
-    assert u.api_kwargs.get("widget_query") == raw["widget_query"]
+    # Some legacy gateway tests install fake Telegram modules in sys.modules.
+    # A fresh interpreter is required to prove the installed SDK contract.
+    import subprocess
+    import sys
+    check = """
+import json
+from telegram import Update
+query = {"id":"sdk-q","from":{"id":101},"chat":{"id":101,"type":"private"},
+         "message_id":713,"type":{"type":"data"},"data":"brief"}
+parsed = Update.de_json({"update_id":200,"widget_query":query})
+assert isinstance(parsed.api_kwargs, dict), type(parsed.api_kwargs)
+assert parsed.api_kwargs.get("widget_query") == query, parsed.api_kwargs
+"""
+    p = subprocess.run([sys.executable, "-c", check], capture_output=True,
+                       text=True, timeout=20)
+    assert p.returncode == 0, p.stderr
 
 
 def test_both_inbound_pipelines_request_104_widget_updates():
