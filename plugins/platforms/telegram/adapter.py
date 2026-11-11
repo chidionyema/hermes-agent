@@ -729,6 +729,7 @@ class TelegramAdapter(BasePlatformAdapter):
         self._app: Optional[Application] = None
         self._bot: Optional[Bot] = None
         self._webhook_mode: bool = False
+        self._otto_widget = None  # founder-only widget; set only on valid config
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
         self._disable_link_previews: bool = self._coerce_bool_extra("disable_link_previews", False)
@@ -4249,6 +4250,46 @@ class TelegramAdapter(BasePlatformAdapter):
             },
         }
 
+    def _configure_otto_widget(self) -> None:
+        """Opt-in: bind one founder private chat to this existing bot connection."""
+        self._otto_widget = None
+        if _scoped_gate_env("OTTO_WIDGET_ENABLED") != "1":
+            return
+        from plugins.platforms.telegram.widgets.otto_widget_service import OttoWidgetService
+
+        chat_id = _scoped_gate_env("OTTO_FOUNDER_CHAT_ID")
+        allow = _coerce_allow_set(_scoped_gate_env("TELEGRAM_ALLOWED_USERS"))
+        root = _Path(_scoped_gate_env("HERMES_HOME") or "~/.hermes").expanduser()
+        self._otto_widget = OttoWidgetService(
+            token=self.config.token,
+            founder_chat_id=chat_id,
+            allowed_users=allow,
+            state_file=root / "state" / "otto-telegram-widget.json",
+            evidence_url=_scoped_gate_env("OTTO_EVIDENCE_URL"),
+            evidence_token=_scoped_gate_env("OTTO_EVIDENCE_TOKEN"),
+        )
+
+    async def _handle_otto_widget_query(self, update, _context) -> None:
+        """Read PTB 22.8's forward-compatible Update.api_kwargs widget_query."""
+        widget = getattr(self, "_otto_widget", None)
+        if widget is None:
+            return
+        try:
+            await widget.handle_update(update)
+        except Exception:
+            # Never log untrusted widget payloads or exceptions containing tokens.
+            logger.warning("[%s] OTTO widget query response failed", self.name)
+
+    async def _publish_otto_widget(self) -> None:
+        widget = getattr(self, "_otto_widget", None)
+        if widget is None:
+            return
+        try:
+            message_id = await widget.publish_once()
+            logger.info("[%s] OTTO widget bound to message_id=%s", self.name, message_id)
+        except Exception:
+            logger.warning("[%s] OTTO widget was NOT delivered", self.name)
+
     def _register_handlers(self, app) -> None:
         """Register every PTB handler on ``app``.
 
@@ -4275,6 +4316,8 @@ class TelegramAdapter(BasePlatformAdapter):
         ))
         # Handle inline keyboard button callbacks (update prompts)
         app.add_handler(CallbackQueryHandler(self._handle_callback_query))
+        # New Bot API fields are preserved in PTB 22.8 Update.api_kwargs.
+        app.add_handler(TypeHandler(Update, self._handle_otto_widget_query), group=1)
         # gateway_platform_event observer (see _on_platform_update); group 99 so
         # it observes alongside, never displaces, the core handlers.
         app.add_handler(TypeHandler(Update, self._on_platform_update), group=99)
@@ -4782,6 +4825,11 @@ class TelegramAdapter(BasePlatformAdapter):
                     )
             
             self._mark_connected()
+            try:
+                self._configure_otto_widget()
+            except (ValueError, OSError):
+                logger.warning("[%s] OTTO widget disabled: founder binding invalid", self.name)
+                self._otto_widget = None
             mode = "webhook" if self._webhook_mode else "polling"
             logger.info("[%s] Connected to Telegram (%s mode)", self.name, mode)
 
@@ -4819,6 +4867,10 @@ class TelegramAdapter(BasePlatformAdapter):
             # cancellable background task so connect() returns as soon as the
             # transport is up.
             self._start_post_connect_housekeeping()
+            if self._otto_widget is not None:
+                task = asyncio.ensure_future(self._publish_otto_widget())
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
 
             return True
             
