@@ -6,6 +6,7 @@ The PTB Update 22.8 `api_kwargs` compatibility path is bound by adapter tests.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -121,7 +122,7 @@ class OttoWidgetTransport:
                     )
                     response.raise_for_status()
                     result = response.json()
-            except Exception as exc:
+            except Exception:
                 raise WidgetUnavailable("Telegram Bot API request failed") from None
         if not isinstance(result, dict) or result.get("ok") is not True:
             raise WidgetUnavailable("Telegram Bot API refused the operation")
@@ -170,7 +171,8 @@ class OttoWidgetTransport:
             and isinstance(chat, Mapping)
             and str(chat.get("id")) == self._founder
             and chat.get("type") == "private"
-            and isinstance(query.get("message_id"), int)
+            and type(query.get("message_id")) is int
+            and query["message_id"] > 0
             and not query.get("inline_message_id")
             and not query.get("widget_id")
             and (not isinstance(q_type, Mapping) or q_type.get("type") == "data")
@@ -189,7 +191,7 @@ class OttoWidgetTransport:
             self._processed = {query_id}
 
         allowed = self._authorized(query)
-        snapshot = await self._snapshot() if allowed else None
+        snapshot = await asyncio.wait_for(self._snapshot(), timeout=3.0) if allowed else None
         reply = _json_blob(snapshot if snapshot is not None else {"error": "not_authorized"})
         # Answer first: Telegram rejects widget queries older than 15 seconds.
         await self._api("answerWidgetQuery", {"widget_query_id": query_id, "data": reply})
