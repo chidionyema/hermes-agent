@@ -168,3 +168,28 @@ def test_both_inbound_pipelines_request_104_widget_updates():
     source = (Path(__file__).resolve().parents[2] /
               "plugins/platforms/telegram/adapter.py").read_text("utf-8")
     assert source.count('allowed_updates=[*Update.ALL_TYPES, "widget_query"]') == 2
+
+
+@pytest.mark.asyncio
+async def test_office_command_uses_real_telegram_http_not_an_agent_turn(api, monkeypatch):
+    """User sends /office -> adapter sends a widget, with no model call."""
+    service, requests, client = api
+    try:
+        adapter = TelegramAdapter(PlatformConfig(enabled=True, token="123:TEST-ONLY"))
+        message = SimpleNamespace(
+            text="/office", chat=SimpleNamespace(id=101, type="private"),
+            from_user=SimpleNamespace(id=101),
+        )
+        monkeypatch.setattr(adapter, "_effective_update_message", lambda update: message)
+        monkeypatch.setattr(adapter, "_should_process_message", lambda msg, is_command=False: True)
+        monkeypatch.setattr(adapter, "_is_user_authorized_from_message", lambda msg: True)
+        monkeypatch.setattr(adapter, "_founder_widget_transport", lambda: service)
+        async def no_agent_turn(*args, **kwargs):
+            raise AssertionError("/office must be handled as an app, not as a model prompt")
+        monkeypatch.setattr(adapter, "handle_message", no_agent_turn)
+        await adapter._handle_command(SimpleNamespace(update_id=333), None)
+        assert [name for name, _ in requests] == ["sendWidget"]
+        assert requests[0][1]["chat_id"] == 101
+        assert requests[0][1]["allow_queries"] is True
+    finally:
+        await client.aclose()
