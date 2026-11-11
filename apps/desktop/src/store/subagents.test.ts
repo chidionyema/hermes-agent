@@ -370,11 +370,13 @@ describe('subagent store', () => {
       expect(allSubagents($subagentsBySession.get())).toHaveLength(12)
 
       const fresh = Date.now()
+
       // Every projection that renders "N running" must agree: stale rows are
       // not live agents.
       for (const list of Object.values($subagentsBySession.get())) {
         expect(activeSubagentCount(list, fresh)).toBe(0)
       }
+
       expect(isStaleSubagent(listFor('stale-session-0')[0], fresh)).toBe(true)
     })
 

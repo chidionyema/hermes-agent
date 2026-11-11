@@ -384,6 +384,7 @@ export function dropStaleSubagents(now = Date.now()): number {
     const kept = list.filter(item => {
       if (isStaleSubagent(item, now)) {
         dropped += 1
+
         return false
       }
 
@@ -422,6 +423,7 @@ export function dropUnfinishedSubagentsOnReconnect(): number {
     const kept = list.filter(item => {
       if (!TERMINAL.has(item.status)) {
         dropped += 1
+
         return false
       }
 
