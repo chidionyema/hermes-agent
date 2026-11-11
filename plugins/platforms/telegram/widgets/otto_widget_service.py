@@ -10,6 +10,7 @@ or no persistent message binding means no fabricated delivery claims.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -116,6 +117,7 @@ class OttoWidgetService:
         if founder_chat_id not in allowed_users:
             raise ValueError("founder chat must be explicitly present in allowed users")
         self._token = token
+        self._token_fingerprint = hashlib.sha256(token.encode('utf-8')).hexdigest()
         self._chat_id = founder_chat_id
         self._allowed_users = frozenset(allowed_users)
         self._state_file = Path(state_file)
@@ -130,6 +132,7 @@ class OttoWidgetService:
         try:
             value = json.loads(self._state_file.read_text(encoding="utf-8"))
             if (isinstance(value, dict) and value.get("chat_id") == self._chat_id
+                and value.get("bot_fingerprint") == self._token_fingerprint
                 and type(value.get("message_id")) is int and value["message_id"] > 0
                 and type(value.get("revision")) is int and value["revision"] >= 0):
                 return value
@@ -139,6 +142,7 @@ class OttoWidgetService:
 
     def _persist(self) -> None:
         self._state_file.parent.mkdir(parents=True, exist_ok=True)
+        self._state["bot_fingerprint"] = self._token_fingerprint
         fd, name = tempfile.mkstemp(prefix=".otto-widget-", dir=str(self._state_file.parent))
         try:
             os.fchmod(fd, 0o600)
