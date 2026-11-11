@@ -54,3 +54,29 @@ def test_choose_status_phrase_uses_custom_catalog_without_leaking_args():
 
     assert msg == "custom safe status text"
     assert "SECRET" not in msg
+
+
+def test_builtin_telegram_status_never_claims_unverified_progress(tmp_path, monkeypatch):
+    """A status update is not evidence of progress or a successful operation."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    catalog = resolve_status_phrase_catalog({}, "telegram")
+    assert catalog["status"] and catalog["generic"]
+    forbidden = ("not stuck", "not frozen", "still alive", "still making progress",
+                 "still moving", "still running", "on it", "sorting it", "successful",
+                 "completed", "all done", "healthy")
+    for surface in ("status", "generic"):
+        for phrase in catalog[surface]:
+            assert not any(term in phrase.lower() for term in forbidden), phrase
+            assert len(phrase) <= 160
+
+def test_emergency_fallbacks_do_not_claim_progress_without_evidence():
+    """When the YAML catalog is unavailable, built-in fallbacks remain truthful."""
+    from gateway.status_phrases import _FALLBACK_PHRASES
+
+    for phrases in _FALLBACK_PHRASES.values():
+        assert phrases
+        for phrase in phrases:
+            assert "still working" not in phrase.lower()
+            assert "on it" not in phrase.lower()
+            assert "making progress" not in phrase.lower()
+            assert "completed" not in phrase.lower()
