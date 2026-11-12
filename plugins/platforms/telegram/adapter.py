@@ -729,6 +729,7 @@ class TelegramAdapter(BasePlatformAdapter):
         self._app: Optional[Application] = None
         self._bot: Optional[Bot] = None
         self._webhook_mode: bool = False
+        self._otto_widget = None  # founder-only widget; set only on valid config
         self._mention_patterns = self._compile_mention_patterns()
         self._reply_to_mode: str = getattr(config, 'reply_to_mode', 'first') or 'first'
         self._disable_link_previews: bool = self._coerce_bool_extra("disable_link_previews", False)
@@ -2639,7 +2640,7 @@ class TelegramAdapter(BasePlatformAdapter):
             # caller recovery will dispose/rebuild the whole adapter.
             await _await_with_thread_deadline(
                 app.updater.start_polling(
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=[*Update.ALL_TYPES, "widget_query"],
                     drop_pending_updates=drop_pending_updates,
                     error_callback=_generation_error_callback,
                 ),
@@ -4031,6 +4032,29 @@ class TelegramAdapter(BasePlatformAdapter):
             if self._post_connect_task is asyncio.current_task():
                 self._post_connect_task = None
 
+    def _founder_widget_transport(self):
+        """Use the existing scoped Telegram allowlist; never infer a founder DM."""
+        founder = _scoped_gate_env("TELEGRAM_FOUNDER_CHAT_ID")
+        allowed = _coerce_allow_set(_scoped_gate_env("TELEGRAM_ALLOWED_USERS"))
+        if not founder or founder not in allowed:
+            return None
+        current = getattr(self, "_otto_widget_transport", None)
+        if current is not None and getattr(current, "_chat_id", None) == founder:
+            return current
+        from hermes_constants import get_hermes_home
+        from hashlib import sha256
+        from plugins.platforms.telegram.widgets.otto_widget_service import OttoWidgetService
+        current = OttoWidgetService(
+            token=self.config.token,
+            founder_chat_id=founder,
+            allowed_users=allowed,
+            state_file=get_hermes_home() / "state" / ("otto-founder-widget-" + sha256(self.config.token.encode("utf-8")).hexdigest()[:16] + ".json"),
+            evidence_url=_scoped_gate_env("OTTO_GENESIS_EVIDENCE_URL"),
+            evidence_token=_scoped_gate_env("OTTO_GENESIS_EVIDENCE_TOKEN"),
+        )
+        self._otto_widget_transport = current
+        return current
+
     async def _on_platform_update(self, update, context) -> None:
         """Catch-all PTB handler firing ``gateway_platform_event`` per inbound update.
 
@@ -4040,6 +4064,20 @@ class TelegramAdapter(BasePlatformAdapter):
         alongside, never displaces, the core handlers. Malformed updates and
         dispatch errors cannot raise into PTB's update loop.
         """
+        # PTB 22.8 predates Bot API 10.4. Unknown widget_query fields are
+        # carried through Update.api_kwargs, so use the trusted, raw API
+        # transport on the existing catch-all update door. Fail closed unless
+        # a founder-private-chat allowlist and explicit destination both exist.
+        raw_fields = getattr(update, "api_kwargs", {})
+        if isinstance(raw_fields, dict) and isinstance(raw_fields.get("widget_query"), dict):
+            try:
+                widget = self._founder_widget_transport()
+                if widget is not None:
+                    await widget.handle_update(update)
+            except Exception:
+                logger.warning("OTTO widget query was NOT answered")
+            return
+
         handler: Optional[Callable[[Dict[str, Any], Any], Awaitable[None]]] = getattr(
             self, "_platform_event_handler", None
         )
@@ -4213,6 +4251,28 @@ class TelegramAdapter(BasePlatformAdapter):
             },
         }
 
+    def _configure_otto_widget(self) -> None:
+        """Reuse the existing founder-only Telegram gateway transport."""
+        self._otto_widget = None
+        # A configured private founder chat already expresses opt-in. Deliver
+        # autonomously, unless an operator has explicitly disabled widgets.
+        if _scoped_gate_env("OTTO_WIDGET_ENABLED").lower() in ("0", "false", "off"):
+            return
+        widget = self._founder_widget_transport()
+        if widget is None:
+            return
+        self._otto_widget = widget
+
+    async def _publish_otto_widget(self) -> None:
+        widget = getattr(self, "_otto_widget", None)
+        if widget is None:
+            return
+        try:
+            message_id = await widget.publish_once()
+            logger.info("[%s] OTTO widget bound to message_id=%s", self.name, message_id)
+        except Exception:
+            logger.warning("[%s] OTTO widget was NOT delivered", self.name)
+
     def _register_handlers(self, app) -> None:
         """Register every PTB handler on ``app``.
 
@@ -4239,6 +4299,7 @@ class TelegramAdapter(BasePlatformAdapter):
         ))
         # Handle inline keyboard button callbacks (update prompts)
         app.add_handler(CallbackQueryHandler(self._handle_callback_query))
+        # New Bot API fields are preserved in PTB 22.8 Update.api_kwargs.
         # gateway_platform_event observer (see _on_platform_update); group 99 so
         # it observes alongside, never displaces, the core handlers.
         app.add_handler(TypeHandler(Update, self._on_platform_update), group=99)
@@ -4672,7 +4733,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     url_path=webhook_path,
                     webhook_url=webhook_url,
                     secret_token=webhook_secret,
-                    allowed_updates=Update.ALL_TYPES,
+                    allowed_updates=[*Update.ALL_TYPES, "widget_query"],
                     # Webhooks are push-based — Telegram does not hold a
                     # server-side getUpdates queue, so this flag is a no-op
                     # in practice. Mirror the polling path's reconnect
@@ -4746,6 +4807,11 @@ class TelegramAdapter(BasePlatformAdapter):
                     )
             
             self._mark_connected()
+            try:
+                self._configure_otto_widget()
+            except (ValueError, OSError):
+                logger.warning("[%s] OTTO widget disabled: founder binding invalid", self.name)
+                self._otto_widget = None
             mode = "webhook" if self._webhook_mode else "polling"
             logger.info("[%s] Connected to Telegram (%s mode)", self.name, mode)
 
@@ -4783,6 +4849,10 @@ class TelegramAdapter(BasePlatformAdapter):
             # cancellable background task so connect() returns as soon as the
             # transport is up.
             self._start_post_connect_housekeeping()
+            if self._otto_widget is not None:
+                task = asyncio.ensure_future(self._publish_otto_widget())
+                self._background_tasks.add(task)
+                task.add_done_callback(self._background_tasks.discard)
 
             return True
             
@@ -9560,6 +9630,21 @@ class TelegramAdapter(BasePlatformAdapter):
                 getattr(getattr(msg, "from_user", None), "id", None),
                 getattr(getattr(msg, "chat", None), "id", None),
             )
+            return
+        # /office is a real Telegram app operation, not a model reply.
+        # Existing message authorization is completed above; the widget path
+        # additionally requires the explicit founder-private-chat allowlist.
+        if msg.text.split()[0].split("@")[0].lower() == "/office":
+            widget = self._founder_widget_transport()
+            if (
+                widget is not None
+                and str(getattr(getattr(msg, "chat", None), "id", "")) == widget._chat_id
+                and getattr(getattr(msg, "chat", None), "type", None) == "private"
+            ):
+                try:
+                    await widget.publish_once()
+                except Exception:
+                    logger.warning("OTTO founder widget send was refused")
             return
         await self._ensure_forum_commands(msg)
 
