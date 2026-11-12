@@ -26,7 +26,8 @@ if not hasattr(_mcp_server_mod, "MCPServer"):
     )
 
 
-def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
+@pytest.mark.parametrize("startup_delay", [0, 3])
+def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path, startup_delay):
     profile_home = tmp_path / "profile-home"
     profile_home.mkdir()
     marker = "profile-local-61922"
@@ -35,6 +36,8 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
         textwrap.dedent(
             f"""
             from mcp.server import MCPServer
+            import time
+            time.sleep({startup_delay})
 
             mcp = MCPServer("profileprobe")
 
@@ -49,17 +52,15 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
         encoding="utf-8",
     )
     (profile_home / "config.yaml").write_text(
-        yaml.safe_dump(
-            {
-                "mcp_servers": {
-                    "profileprobe": {
-                        "enabled": True,
-                        "command": sys.executable,
-                        "args": [str(server)],
-                    }
+        yaml.safe_dump({
+            "mcp_servers": {
+                "profileprobe": {
+                    "enabled": True,
+                    "command": sys.executable,
+                    "args": [str(server)],
                 }
             }
-        ),
+        }),
         encoding="utf-8",
     )
 
@@ -99,9 +100,9 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
         proc.stdin.write(json.dumps({"id": 1, "command": "/tools"}) + "\n")
         proc.stdin.flush()
         try:
-            line = output.get(timeout=10)
+            line = output.get(timeout=15)
         except queue.Empty:
-            pytest.fail("slash worker produced no /tools response within 10 seconds")
+            pytest.fail("slash worker produced no /tools response within 15 seconds")
         response = json.loads(line)
         assert response["ok"] is True
         assert "mcp__profileprobe__hermes_61922_profile_probe" in response["output"]
@@ -112,3 +113,13 @@ def test_profile_local_mcp_tool_is_visible_in_slash_worker(tmp_path):
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+
+
+def test_tools_reports_pending_discovery_instead_of_false_complete_inventory(
+    monkeypatch,
+):
+    from hermes_cli import mcp_startup
+    from tui_gateway.slash_worker import _run
+
+    monkeypatch.setattr(mcp_startup, "join_mcp_discovery", lambda timeout: False)
+    assert "inventory is incomplete" in _run(object(), "/tools")
